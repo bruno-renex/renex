@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>RENEX – Inbox</title>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/colors.css" />
+
+<style>
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    margin: 24px;
+  }
+
+  /* ============================= */
+  /* HEADER */
+  /* ============================= */
+
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 32px;
+  }
+
+  .brand {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+    user-select: none;
+  }
+
+  .brand .x {
+    color: var(--accent-voice);
+    text-shadow:
+      0 0 10px rgba(56, 189, 248, 0.7),
+      0 0 22px rgba(56, 189, 248, 0.35);
+  }
+
+  /* ============================= */
+  /* CHAT LINK */
+  /* ============================= */
+
+  a.chat-link {
+    color: var(--accent-voice);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    transition: opacity 0.15s ease;
+  }
+
+  a.chat-link:hover {
+    opacity: 0.75;
+  }
+
+  .profile-wrapper {
+    position: relative;
+  }
+
+  #profile-circle {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+  }
+
+  #profile-circle:hover {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+
+  .dropdown {
+    position: absolute;
+    top: 48px;
+    right: 0;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-panel);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 160px;
+    padding: 8px 0;
+    display: none;
+    z-index: 100;
+  }
+
+  .dropdown.show {
+    display: block;
+  }
+
+  .dropdown-item {
+    padding: 10px 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .dropdown-item:hover {
+    background: var(--bg-panel-alt);
+  }
+
+  .dropdown-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 6px 0;
+  }
+
+  .logout {
+    color: var(--status-error);
+  }
+
+  /* Sub-Dropdown (zweite Ebene) */
+  .dropdown-item.has-sub {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .dropdown-item.has-sub::after {
+    content: "›";
+    font-size: 16px;
+    opacity: 0.5;
+    margin-left: 8px;
+  }
+
+  #account-submenu {
+    position: absolute;
+    top: 0;
+    right: calc(100% + 6px);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-panel);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 160px;
+    padding: 8px 0;
+    display: none;
+    z-index: 101;
+  }
+
+  #account-submenu.show {
+    display: block;
+  }
+
+  /* Bestätigungsdialog */
+  #delete-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.65);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #delete-overlay.show {
+    display: flex;
+  }
+
+  #delete-dialog {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-panel);
+    border-radius: 14px;
+    padding: 28px 24px;
+    width: 320px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+  }
+
+  #delete-dialog h3 {
+    margin: 0 0 10px 0;
+    font-size: 17px;
+    color: var(--text-primary);
+  }
+
+  #delete-dialog p {
+    margin: 0 0 20px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  #delete-dialog input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    font-size: 14px;
+    background: var(--bg-input, var(--bg-panel-alt));
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+  }
+
+  #delete-handle-error {
+    font-size: 12px;
+    color: var(--status-error);
+    min-height: 18px;
+    margin-bottom: 16px;
+  }
+
+  .dialog-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+
+  .dialog-actions button {
+    padding: 9px 18px;
+    border-radius: 8px;
+    border: none;
+    font-size: 14px;
+    cursor: pointer;
+    margin: 0;
+  }
+
+  #btn-cancel-delete {
+    background: var(--bg-panel-alt);
+    color: var(--text-primary);
+  }
+
+  #btn-confirm-delete {
+    background: var(--status-error);
+    color: #fff;
+    opacity: 0.4;
+    pointer-events: none;
+    transition: opacity 0.15s;
+  }
+
+  #btn-confirm-delete.enabled {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* ============================= */
+  /* CONTENT */
+  /* ============================= */
+
+  h2 {
+    margin-top: 32px;
+  }
+
+  ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  li {
+    margin: 6px 0;
+  }
+
+  button {
+    margin-left: 8px;
+  }
+
+  #add-handle {
+    margin-right: 8px;
+  }
+</style>
+</head>
+
+<body>
+
+<div class="header">
+  <div class="brand">RENE<span class="x">X</span></div>
+
+  <div class="profile-wrapper">
+    <div id="profile-circle"></div>
+
+    <div id="profile-dropdown" class="dropdown">
+      <div id="dropdown-handle" class="dropdown-item has-sub">
+        <span id="dropdown-handle-label"></span>
+        <div id="account-submenu" class="dropdown">
+          <div id="dropdown-delete" class="dropdown-item logout">Account löschen</div>
+        </div>
+      </div>
+      <div class="dropdown-divider"></div>
+      <div id="dropdown-logout" class="dropdown-item logout">
+        Logout
+      </div>
+    </div>
+  </div>
+</div>
+
+  <hr />
+
+  <h2>Kontakt hinzufügen</h2>
+
+  <input
+    id="add-handle"
+    type="text"
+    placeholder="Handle (z. B. bob)"
+    autocomplete="off"
+  />
+  <button id="add-btn">Anfrage senden</button>
+
+  <hr />
+
+  <h2>Offene Anfragen</h2>
+  <ul id="pending"></ul>
+
+  <h2>Kontakte</h2>
+  <ul id="accepted"></ul>
+
+<!-- Bestätigungsdialog Account löschen -->
+<div id="delete-overlay">
+  <div id="delete-dialog">
+    <h3>Account löschen</h3>
+    <p>Diese Aktion ist unwiderruflich. Alle Nachrichten und Kontakte werden gelöscht.<br><br>Gib deinen Handle zur Bestätigung ein:</p>
+    <input id="delete-confirm-input" type="text" placeholder="Dein Handle" autocomplete="off" />
+    <div id="delete-handle-error"></div>
+    <div class="dialog-actions">
+      <button id="btn-cancel-delete">Abbrechen</button>
+      <button id="btn-confirm-delete">Account löschen</button>
+    </div>
+  </div>
+</div>
+
+  <!-- 🔥 WICHTIG: Script GANZ UNTEN + type="module" -->
+<script type="module" src="/js/inbox.js"></script>
+<script type="module">
+  import { bootApp } from "./js/appBoot.js";
+  bootApp();
+</script>
+
+</body>
+</html>

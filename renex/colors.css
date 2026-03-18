@@ -1,0 +1,63 @@
+/* ============================================================
+   RENEX — Design Token System
+   Einbinden in alle HTML-Files via:
+   <link rel="stylesheet" href="/colors.css" />
+   ============================================================ */
+
+:root {
+
+  /* ── Backgrounds ──────────────────────────────────────── */
+  --bg-body:        #07070A;   /* Haupt-Hintergrund           */
+  --bg-panel:       #0D0D11;   /* HUD / Panels                */
+  --bg-panel-alt:   #121218;   /* Leichte Abstufung           */
+
+  /* ── Borders ──────────────────────────────────────────── */
+  --border-subtle:  #1C1C24;   /* Trennlinien                 */
+  --border-input:   #23232D;   /* Input-Rahmen                */
+  --border-panel:   rgba(255, 255, 255, 0.06); /* Panel-Tiefe */
+
+  /* ── Text ─────────────────────────────────────────────── */
+  --text-primary:   #E6E6EB;   /* Namen, Haupttext            */
+  --text-secondary: #9A9AA3;   /* Systemmeldungen             */
+  --text-muted:     #6F6F78;   /* Disabled / Placeholder      */
+
+  /* ── Accent (Push-to-Talk / Voice) ───────────────────── */
+  --accent-voice:      #38BDF8;             /* Sky Blue — wärmer als Cyan    */
+  --accent-voice-glow: rgba(56, 189, 248, 0.35);
+
+  /* ── Status ───────────────────────────────────────────── */
+  --status-speaking: #3CE47A;
+  --status-idle:     #7A7A85;
+  --status-warn:     #D97706;
+  --status-error:    #F87171;              /* Soft Coral — kein hartes Rot  */
+
+  /* ── Inputs ───────────────────────────────────────────── */
+  --input-bg:          #0A0A0E;
+  --input-text:        #E6E6EB;
+  --input-placeholder: #6F6F78;
+  --input-caret:       #38BDF8;
+
+  /* ── Chat Bubbles ─────────────────────────────────────── */
+  --chat-self-bg:     #0C2030;              /* Eigene Nachricht: Ozean-Blau  */
+  --chat-self-text:   #E6E6EB;
+  --chat-self-border: rgba(56, 189, 248, 0.22);
+
+  --chat-peer-bg:     #1B1B28;              /* Empfangen: Indigo-Neutral     */
+  --chat-peer-text:   #E6E6EB;
+  --chat-peer-border: rgba(255, 255, 255, 0.05);
+
+  /* ── Logo ─────────────────────────────────────────────── */
+  --logo-text:   #E6E6EB;
+  --logo-accent: #38BDF8;                   /* Nur für X                     */
+
+  /* ── New-Message Indicator ────────────────────────────── */
+  --indicator-bg:   #38BDF8;
+  --indicator-text: #07070A;
+
+}
+
+/* ── Globale Basis ────────────────────────────────────────── */
+body {
+  background: var(--bg-body);
+  color: var(--text-primary);
+}

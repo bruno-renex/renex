@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>RENEX</title>
+  <link rel="stylesheet" href="/colors.css" />
+  <style>
+    .renex-logo {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 36px;
+      font-weight: 800;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--text-primary);
+      user-select: none;
+      margin: 0;
+    }
+
+    .renex-logo .x {
+      color: var(--accent-voice);
+      text-shadow:
+        0 0 12px rgba(56, 189, 248, 0.7),
+        0 0 28px rgba(56, 189, 248, 0.35);
+    }
+
+    .renex-slogan {
+      font-size: 11px;
+      font-weight: 400;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin: 6px 0 0 0;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+
+  <h1 class="renex-logo">RENE<span class="x">X</span></h1>
+  <p class="renex-slogan">Connect. Alive. Private.</p>
+
+<input 
+  id="handle"
+  type="text"
+  placeholder="Name"
+  autocomplete="username"
+  spellcheck="false"
+/>
+  <button id="loginBtn">Login mit Passkey</button>
+<span id="loginStatus" style="margin-left:10px;"></span>
+
+<script type="module">
+import { loginWithPasskey } from "./js/auth.js";
+import { apiFetch } from "./js/api.js";
+
+// =========================================
+// 🔐 SICHERER AUTO-LOGIN CHECK
+// =========================================
+async function checkExistingSession() {
+  const token = localStorage.getItem("session_token");
+  if (!token) return;
+
+  try {
+    // Backend entscheidet
+    await apiFetch("/users/me");
+
+    // ✅ Session gültig → Inbox
+    window.location.replace("./inbox.html");
+  } catch (e) {
+    // ❌ Session ungültig / abgelaufen
+    console.warn("Session ungültig – Login erforderlich");
+
+    localStorage.removeItem("session_token");
+localStorage.removeItem("my_user");
+  }
+}
+
+// 🔥 SOFORT BEIM LADEN AUSFÜHREN
+window.addEventListener("DOMContentLoaded", checkExistingSession);
+
+// =========================================
+// 🔐 LOGIN BUTTON
+// =========================================
+const loginBtn = document.getElementById("loginBtn");
+const loginStatus = document.getElementById("loginStatus");
+
+let loginInProgress = false;
+
+loginBtn.onclick = async () => {
+
+  if (loginInProgress) return; // 🔒 verhindert Doppelklick
+
+  loginInProgress = true;
+  loginBtn.disabled = true;
+  loginBtn.textContent = "Authentifiziere…";
+  loginStatus.textContent = "";
+
+  const handle = document.getElementById("handle").value.trim();
+
+if (!handle) {
+  alert("Bitte Namen eingeben");
+  loginInProgress = false;
+  loginBtn.disabled = false;
+  loginBtn.textContent = "Login mit Passkey";
+  return;
+}
+
+  try {
+    await loginWithPasskey(handle);
+  } catch (e) {
+    loginStatus.textContent = "Login fehlgeschlagen";
+    loginBtn.disabled = false;
+    loginBtn.textContent = "Login mit Passkey";
+    loginInProgress = false;
+  }
+};
+</script>
+
+</body>
+</html>

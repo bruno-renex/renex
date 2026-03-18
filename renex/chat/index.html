@@ -1,0 +1,158 @@
+<!-- force deploy -->
+<!-- chat.html version v2 -->
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chat</title>
+  <link rel="stylesheet" href="/colors.css" />
+  <style>
+    body { font-family: sans-serif; }
+
+#new-indicator {
+  display: none;
+  position: sticky;
+  bottom: 60px;
+  margin: 0 auto;
+  padding: 10px 14px;
+  background: var(--indicator-bg);
+  color: var(--indicator-text);
+  text-align: center;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+  z-index: 10;
+
+  opacity: 0;
+  pointer-events: none;
+}
+
+#new-indicator.visible {
+  display: block;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+    #messages {
+  border: 1px solid var(--border-subtle);
+  padding: 10px;
+  height: 300px;
+  overflow-y: auto;
+  background: var(--bg-body);
+  position: relative;
+  }
+
+  /* Basis für jede Nachricht */
+    #messages div {
+  max-width: 70%;
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  word-wrap: break-word;
+  }
+      .me {
+      margin-left: auto;
+      background: var(--chat-self-bg);
+      color: var(--chat-self-text);
+      border: 1px solid var(--chat-self-border);
+      text-align: right;
+    }
+
+    .other {
+      margin-right: auto;
+      background: var(--chat-peer-bg);
+      color: var(--chat-peer-text);
+      text-align: left;
+    }
+#length-warning {
+  font-size: 12px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+#length-warning.warn {
+  color: var(--status-warn);
+  font-weight: bold;
+}
+
+#length-warning.error {
+  color: var(--status-error);
+  font-weight: bold;
+}
+/* Timestamp unter jeder Nachricht */
+.timestamp {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-top: 4px;
+}
+
+/* Timestamp rechts bei eigenen Nachrichten */
+.me .timestamp {
+  text-align: right;
+}
+
+/* Timestamp links bei anderen Nachrichten */
+.other .timestamp {
+  text-align: left;
+}
+
+/* =========================
+   Pending Message (Bootstrap / Retry)
+   ========================= */
+
+.me.pending {
+  opacity: 0.6;
+}
+
+.me.pending::after {
+  content: " ⏳";
+  font-size: 0.9em;
+  opacity: 0.7;
+}
+
+/* =========================
+   Input
+   ========================= */
+
+textarea {
+  background: var(--input-bg);
+  color: var(--input-text);
+  border-color: var(--border-input);
+  caret-color: var(--input-caret);
+}
+
+textarea::placeholder {
+  color: var(--input-placeholder);
+}
+
+  </style>
+</head>
+<body>
+
+
+<h2 id="chat-with">Chat</h2>
+
+<div id="messages"></div>
+
+<div id="new-indicator">
+  <span id="unread-count">0</span> neue Nachrichten ↓
+</div>
+
+<textarea
+  id="msg-input"
+  placeholder="Nachricht…"
+  rows="2"
+  style="width:100%; resize:none;"
+></textarea>
+
+<!-- 👇 DAS HINZUFÜGEN -->
+<div id="length-warning"></div>
+
+<button id="send-btn">Senden</button>
+
+<script type="module" src="/js/controlPoller.js"></script>
+<script type="module" src="/js/chat.js?v=99"></script>
+
+</body>
+</html>

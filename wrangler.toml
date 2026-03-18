@@ -1,0 +1,24 @@
+name = "renex-backend"
+main = "backend.js"
+compatibility_date = "2025-01-01"
+
+routes = [
+  { pattern = "api.renex.id", custom_domain = true }
+]
+
+[[kv_namespaces]]
+binding = "RENEX_KV"
+id = "abfb6fb7ffd6433097e9b4ea9c7f1225"
+
+[[d1_databases]]
+binding = "RENEX_DB"
+database_name = "renex-db"
+database_id = "ab5fe365-29d0-4bb8-bfee-db20ec6e84b8"
+
+[[durable_objects.bindings]]
+name = "USER_SESSION_DO"
+class_name = "UserSessionDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["UserSessionDO"]

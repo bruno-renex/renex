@@ -1,0 +1,1481 @@
+import { bootApp } from "./appBoot.js";
+bootApp();
+
+import {
+  initE2EKeys,
+  debugPrintMyPublicKey,
+  loadPublicKey,
+  idbSet,
+  dmSessionId,
+  deriveMessageKey
+} from "./e2e.js";
+
+import {
+  ensureConversationReady,
+  bootConversation,
+  fetchAndStoreCMK,
+  fallbackBootstrap
+} from "./sessionManager.js";
+
+import { apiFetch } from "./api.js";
+// ======================================================
+// CONFIG
+// ======================================================
+const API = "https://api.renex.id";
+const MAX_MESSAGE_LENGTH = 1000;
+const SEND_COOLDOWN_MS = 2000;
+const deferredInboundMessages = [];
+const deferredInboundIds = new Set();
+
+// ======================================================
+// CMK v2 – Epoch Definition (GLOBAL)
+// ======================================================
+
+// ⏱️ 1 Stunde pro Epoch (stabil, push-freundlich, group-fähig)
+const EPOCH_MS = 3_600_000;
+
+// ======================================================
+// DOM ELEMENTS
+// ======================================================
+let messagesEl;
+let indicatorEl;
+let unreadCountEl;
+let sendBtn;
+let inputEl;
+let warningEl;
+let titleEl;
+let withUser = null;
+
+// ======================================================
+// STATE
+// ======================================================
+let firstLoad = true;
+let unreadCount = 0;
+let lastSendTime = 0;
+let cooldownTimer = null;
+let sendFailsafeTimer = null;
+let e2eReady = false;
+let lastSendBtnState = null;
+let sessionKeyBytes = null; // Uint8Array(32)
+let hasInboxKeys = false;
+
+// ======================================================
+// DEFERRED SEND QUEUE (First message before CMK)
+// ======================================================
+let deferredQueue = []; 
+// 🔁 Flush Guards
+let isFlushingDeferred = false;
+let deferredBackoff = 1000;          // Start 1s
+const MAX_DEFERRED_BACKOFF = 15000;  // Max 15s
+
+// ======================================================
+// SEND-BUTTON LOGIK (zentral)
+// ======================================================
+// ======================================================
+// FIX 3 — canSend ist REIN UI
+// ======================================================
+function canSend() {
+  return true; // UI blockiert nicht mehr wegen pending
+}
+
+function updateSendButton() {
+  if (!sendBtn) return;
+  sendBtn.disabled = !canSend();
+}
+
+// ======================================================
+// 🔁 AUTO-RETRY für pending Messages nach Cooldown
+// ======================================================
+async function retryPendingIfPossible() {
+  // nichts zu tun
+  if (!e2eReady) return;
+  if (pendingByTempId.size !== 1) return;
+
+  const [tempId, div] = pendingByTempId.entries().next().value;
+  if (!div || !div.textContent) return;
+
+  const now = Date.now();
+  if (now - lastSendTime < SEND_COOLDOWN_MS) return;
+
+  console.log("🔁 Retry pending message nach Cooldown");
+
+  // Text aus DOM holen (minimal & robust)
+  const text = div.querySelector("div")?.textContent;
+  if (!text) return;
+
+  // pending entfernen, wir senden neu
+  pendingByTempId.delete(tempId);
+  div.remove();
+
+// 🔒 DOM Guard
+if (!inputEl || !sendBtn) {
+  console.warn("Retry abgebrochen – DOM nicht bereit");
+  return;
+}
+
+inputEl.value = text;
+sendBtn.click();  
+}
+
+// ======================================================
+// URL PARAMS
+// ======================================================
+const params = new URLSearchParams(window.location.search);
+withUser = params.get("with");
+console.log("withUser =", withUser);
+
+if (!withUser) {
+  alert("Kein Chat-Partner gewählt");
+  throw new Error("withUser fehlt");
+}
+
+// ======================================================
+// 🔔 GLOBAL CONTROL → CMK_READY Listener (Lifecycle-safe)
+// ======================================================
+const bc = ("BroadcastChannel" in window)
+  ? new BroadcastChannel("renex-control")
+  : null;
+
+  // 🔁 Fallback für Tabs ohne BroadcastChannel Event
+window.addEventListener("storage", (e) => {
+
+  if (e.key !== "renex-control-event") return;
+
+  try {
+    const event = JSON.parse(e.newValue || "{}");
+
+    if (event?.type !== "DELIVERED") return;
+
+    console.log("📬 Storage delivery event", event);
+
+    document.querySelectorAll(".me[data-id]").forEach(el => {
+
+      const id = el.dataset.id;
+      if (!id) return;
+
+      if (el.dataset.status === "delivered") return;
+
+      updateRenderedMessageStatus(id, "delivered");
+
+    });
+
+  } catch {}
+});
+
+if (bc) {
+  bc.onmessage = async (e) => {
+
+    const event = e.data;
+
+// 🔔 LIVE DELIVERY STATUS
+if (event?.type === "DELIVERED") {
+
+  console.log("📬 Live delivery update", event);
+
+  // alle eigenen Nachrichten im Chat prüfen
+  document.querySelectorAll(".me[data-id]").forEach(el => {
+
+    const id = el.dataset.id;
+    if (!id) return;
+
+    // Status nur upgraden
+    if (el.dataset.status === "delivered") return;
+
+    updateRenderedMessageStatus(id, "delivered");
+
+  });
+
+  return;
+}
+
+// 🔔 LIVE NEW MESSAGE
+if (event?.type === "NEW_MESSAGE") {
+  const msg = event.message;
+  const isForThisChat = msg &&
+    ((msg.from === withUser && msg.to === localStorage.getItem("my_user")) ||
+     (msg.from === localStorage.getItem("my_user") && msg.to === withUser));
+  if (isForThisChat && e2eReady) {
+    if (!isLoadingMessages) loadMessages().catch(() => {});
+  }
+  return;
+}
+
+    if (e.data?.type !== "CMK_READY") return;
+    if (e.data.peer !== withUser) return;
+
+    // 🔒 Bereits bereit? → nichts tun
+    if (e2eReady) return;
+
+    console.log("🔄 CMK_READY empfangen → Lifecycle recheck");
+
+    try {
+
+      // 1️⃣ Bootstrap / Lifecycle prüfen
+      await ensureConversationReady(
+        localStorage.getItem("my_user"),
+        withUser,
+        fetchInboxKeys,
+        apiFetch
+      );
+
+      // 2️⃣ Lokal booten (CMK → SessionKey)
+      const entry = await bootConversation(
+  localStorage.getItem("my_user"),
+  withUser
+);
+
+if (!entry || !entry.ready) return;
+
+// 🔐 SessionKey aktivieren
+sessionKeyBytes = entry.skBytes;
+e2eReady = true;
+
+// 3️⃣ Direkt neue Messages vom Server holen
+await loadMessages();
+
+// 4️⃣ Deferred flushen (falls noch was drin ist)
+await flushDeferredQueue();
+await flushDeferredInboundMessages();
+
+// 5️⃣ Deferred flush (WebSocket liefert neue Messages)
+
+    } catch (err) {
+      console.error("CMK_READY handling failed", err);
+    }
+  };
+}
+
+const renderedMessageIds = new Set();   // echte Server-IDs
+const pendingByTempId = new Map();      // tempId -> div
+// 🔥 Status Tracking (verhindert verlorene Updates)
+const renderedMessageStatus = new Map(); // messageId -> status
+// 🔐 Decrypt Cache: verhindert doppelte Crypto + doppelte Logs
+const decryptedCache = new Map(); // msg.id -> plaintext
+const MAX_DECRYPT_CACHE = 2000;
+
+
+// ======================================================
+// 🔐 SESSION HANDSHAKE (Ephemeral Key Exchange)
+// ======================================================
+
+function loadPeerPublicKeyJwk(peerHandle) {
+  const raw = localStorage.getItem(`e2e-peer-${peerHandle}-jwk`);
+  if (!raw) return null;
+  return JSON.parse(raw);
+}
+
+// ======================================================
+// 🔐 E2E STEP 3.2: Peer Public Key laden & speichern
+// ======================================================
+async function fetchAndStorePeerPublicKey(peerHandle) {
+  try {
+    // 1️⃣ Erst normale Chat-Keys
+    const res = await apiFetch(`/chat/keys/get?user=${peerHandle}`);
+    console.log("🔍 /chat/keys/get raw:", res);
+
+    let devices = Array.isArray(res.devices) ? res.devices : [];
+
+    // 2️⃣ Fallback → Inbox-Key
+    if (devices.length === 0) {
+      console.warn("ℹ️ Keine Chat-Keys – versuche Inbox-Key:", peerHandle);
+
+      const inbox = await apiFetch(`/e2e/inbox/get?user=${peerHandle}`);
+
+      if (!inbox || !Array.isArray(inbox.devices) || inbox.devices.length === 0) {
+        console.warn("⛔ Peer hat auch keinen Inbox-Key:", peerHandle);
+        return false;
+      }
+
+      devices = inbox.devices;
+      console.log("📮 Inbox-Key(s) geladen:", devices.length);
+    }
+
+    // 3️⃣ EINHEITLICH speichern (egal woher)
+    await idbSet(`peer-devices:${peerHandle}`, devices);
+
+hasInboxKeys = devices.length > 0;
+
+console.log(
+  "✅ Peer Devices verfügbar:",
+  peerHandle,
+  devices.length,
+  "| hasInboxKeys =",
+  hasInboxKeys
+);
+
+return true;
+
+  } catch (err) {
+    console.warn("ℹ️ Peer Key fetch fehlgeschlagen", err);
+    return false;
+  }
+}
+
+// ======================================================
+// 🔐 INBOX KEYS LADEN (für First Message Bootstrap)
+// ======================================================
+async function fetchInboxKeys(peerHandle) {
+  try {
+    const res = await apiFetch(`/e2e/inbox/get?user=${peerHandle}`);
+    const devices = Array.isArray(res.devices) ? res.devices : [];
+
+    if (devices.length === 0) {
+      console.warn("ℹ️ Keine Inbox-Keys für", peerHandle);
+      return [];
+    }
+
+    console.log("📮 Inbox-Keys geladen:", peerHandle, devices.length);
+    return devices;
+  } catch (e) {
+    console.warn("Inbox-Key fetch failed", e);
+    return [];
+  }
+}
+
+// ======================================================
+// E2E: Message entschlüsseln (robust & sicher)
+// ======================================================
+async function decryptMessageIfNeeded(msg, otherHandle) {
+
+    // ✅ Wenn wir diese Message schon mal erfolgreich entschlüsselt haben:
+  if (msg?.id && decryptedCache.has(msg.id)) {
+    return decryptedCache.get(msg.id);
+  }
+
+  // ✅ Wenn E2E noch nicht ready → NICHT decrypten, NICHT warnen
+if (!e2eReady || !(sessionKeyBytes instanceof Uint8Array)) {
+  return null;
+}
+
+  // --------------------------------------------------
+  // Control Messages → niemals decrypten
+  // --------------------------------------------------
+  
+  // Eigene v1 Nachrichten
+  if (msg.from === getMyUser() && msg.v !== 2) {
+    if (typeof msg.message === "string") return msg.message;
+  }
+
+  // Kein Ciphertext
+  if (typeof msg.ivB64 !== "string" || typeof msg.ctB64 !== "string") {
+    return null;
+  }
+
+  try {
+
+    const sessionId =
+      msg.sid || dmSessionId(getMyUser(), otherHandle);
+
+    const baseEpoch =
+      typeof msg.epoch === "number"
+        ? msg.epoch
+        : Math.floor(msg.ts / EPOCH_MS);
+
+    const epochsToTry = [
+      baseEpoch,
+      baseEpoch - 1,
+      baseEpoch + 1
+    ];
+
+    for (const ep of epochsToTry) {
+      try {
+        const mk = await deriveMessageKey(
+          sessionKeyBytes,
+          sessionId,
+          ep
+        );
+
+        const decrypted = await e2eDecrypt(
+          mk,
+          msg.ivB64,
+          msg.ctB64
+        );
+
+if (typeof decrypted === "string") {
+
+  // ✅ Cache setzen (vor return)
+  if (msg?.id) {
+    decryptedCache.set(msg.id, decrypted);
+
+    // simple cap
+    if (decryptedCache.size > MAX_DECRYPT_CACHE) {
+      decryptedCache.clear();
+    }
+  }
+
+  console.log("🔐 MK-DECRYPT success", {
+    id: msg.id,
+    epoch: ep
+  });
+
+  return decrypted;   // "" ist hier erlaubt!
+}
+
+      } catch {
+        // try next epoch
+      }
+    }
+
+    console.warn("❌ MK decrypt failed (all epochs)", msg.id);
+
+    return null;   // 🔥 WICHTIG: NICHT Error-String zurückgeben!
+
+  } catch (e) {
+    console.warn("❌ decrypt crash", e);
+    return null;
+  }
+}
+
+// ======================================================
+// E2E: BASE64 HELPERS (für iv/ciphertext)
+// ======================================================
+function abToB64(ab) {
+  const bytes = new Uint8Array(ab);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+function b64ToAb(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+// ======================================================
+// E2E: Encrypt / Decrypt (AES-GCM)
+// ======================================================
+async function e2eEncrypt(aesKey, plaintext) {
+  const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV empfohlen
+  const data = new TextEncoder().encode(plaintext);
+
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    aesKey,
+    data
+  );
+
+  return {
+    ivB64: abToB64(iv.buffer),
+    ctB64: abToB64(ciphertext)
+  };
+}
+
+async function e2eDecrypt(aesKey, ivB64, ctB64) {
+  const iv = new Uint8Array(b64ToAb(ivB64));
+  const ciphertext = b64ToAb(ctB64);
+
+  const plaintextBuf = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    aesKey,
+    ciphertext
+  );
+
+  return new TextDecoder().decode(plaintextBuf);
+}
+
+// ======================================================
+// E2E: PUBLIC KEY UPLOAD (NUR HIER)
+// ======================================================
+async function uploadMyPublicKeyIfNeeded() {
+  const deviceId = getDeviceId();
+
+  const pub = await loadPublicKey();
+  if (!pub) {
+    console.warn("❌ Kein Public Key vorhanden");
+    return false;
+  }
+
+  const jwk = await crypto.subtle.exportKey("jwk", pub);
+
+  await apiFetch("/chat/keys/upload", {
+    method: "POST",
+    body: JSON.stringify({ jwk, deviceId })
+  });
+
+  console.log("✅ Public Key hochgeladen:", deviceId);
+  return true;
+}
+
+// ======================================================
+// SESSION HELPERS
+// ======================================================
+function getMyUser() {
+  return localStorage.getItem("my_user");
+}
+// ======================================================
+// DEVICE ID (STABIL PRO GERÄT)
+// ======================================================
+function getDeviceId() {
+  let id = localStorage.getItem("device_id");
+  if (!id) {
+    id = "dev_" + crypto.randomUUID();
+    localStorage.setItem("device_id", id);
+  }
+  return id;
+}
+
+// ======================================================
+// FLUSH DEFERRED QUEUE (after CMK ready)
+// ======================================================
+async function flushDeferredQueue() {
+  if (!e2eReady) return;
+  if (!(sessionKeyBytes instanceof Uint8Array)) return;
+if (deferredQueue.length === 0) return;
+
+  // 🔒 Parallel-Guard
+  if (isFlushingDeferred) {
+    console.log("⏳ flushDeferredQueue läuft bereits");
+    return;
+  }
+
+  isFlushingDeferred = true;
+
+  console.log("🚀 Starte flushDeferredQueue:", deferredQueue.length);
+
+  try {
+
+    while (deferredQueue.length > 0) {
+
+      const item = deferredQueue[0]; // 🔥 IMMER erstes Element (keine Kopie!)
+
+      if (!(sessionKeyBytes instanceof Uint8Array) || sessionKeyBytes.length !== 32) {
+        throw new Error("SessionKey fehlt");
+      }
+
+      const sessionId = dmSessionId(getMyUser(), withUser);
+      const epoch = Math.floor(Date.now() / EPOCH_MS);
+
+      const mk = await deriveMessageKey(sessionKeyBytes, sessionId, epoch);
+      const { ivB64, ctB64 } = await e2eEncrypt(mk, item.text);
+
+      const res = await apiFetch("/chat/send", {
+        method: "POST",
+        body: JSON.stringify({
+          to: withUser,
+          e2e: true,
+          v: 2,
+          sid: sessionId,
+          epoch,
+          ivB64,
+          ctB64
+        })
+      });
+
+      // 🚦 Rate Limit Handling
+      if (res?.rateLimited) {
+
+        console.warn("⏸️ Rate-Limit → Backoff:", deferredBackoff, "ms");
+
+        await new Promise(r => setTimeout(r, deferredBackoff));
+
+        deferredBackoff = Math.min(
+          deferredBackoff * 2,
+          MAX_DEFERRED_BACKOFF
+        );
+
+        continue; // 🔁 Versuche gleiche Nachricht erneut
+      }
+
+      // ✅ Erfolg → Backoff reset
+      deferredBackoff = 1000;
+
+      const saved = res?.message;
+
+      if (item.tempId) {
+        const div = pendingByTempId.get(item.tempId);
+        if (div && saved?.id) {
+          div.classList.remove("pending");
+          div.dataset.id = saved.id;
+          renderedMessageIds.add(saved.id);
+        }
+        pendingByTempId.delete(item.tempId);
+      }
+
+      // 🔥 WICHTIG: Erst jetzt entfernen
+      deferredQueue.shift();
+
+      await new Promise(r => setTimeout(r, SEND_COOLDOWN_MS));
+    }
+
+  } catch (e) {
+    console.error("❌ flushDeferredQueue Fehler:", e);
+  }
+
+  isFlushingDeferred = false;
+  updateSendButton();
+}
+
+// ======================================================
+// FLUSH DEFERRED INBOUND (Messages received before CMK)
+// ======================================================
+async function flushDeferredInboundMessages() {
+if (!e2eReady) return;
+if (!(sessionKeyBytes instanceof Uint8Array)) return;
+if (deferredInboundMessages.length === 0) return;
+  console.log("📥 Flush deferred INBOUND", deferredInboundMessages.length);
+
+  const queue = [...deferredInboundMessages];
+  deferredInboundMessages.length = 0;
+
+  for (const m of queue) {
+    try {
+      const text = await decryptMessageIfNeeded(m, withUser);
+
+      if (text === null || text === "__control__") {
+        continue;
+      }
+
+      // 🔥 FINAL markieren JETZT – nicht vorher
+      if (m?.id) {
+        renderedMessageIds.add(m.id);
+        deferredInboundIds.delete(m.id);
+      }
+
+renderMessage({
+  id: m.id,
+  from: m.from,
+  message: text,
+  ts: m.ts,
+  status: m.status
+});
+
+    } catch (e) {
+      console.warn("Deferred inbound decrypt failed", e);
+    }
+  }
+
+  scrollToBottom();
+}
+
+// ======================================================
+// START
+// ======================================================
+function startChat() {
+
+// ==========================================
+// 🔄 CHAT UI STATE RESET
+// ==========================================
+console.log("🔄 Chat UI State reset");
+
+  // ------------------------------------------
+  // danach erst DOM / UI / Polling
+  // ------------------------------------------ 
+  messagesEl = document.getElementById("messages");
+  indicatorEl = document.getElementById("new-indicator");
+  unreadCountEl = document.getElementById("unread-count");
+  sendBtn = document.getElementById("send-btn");
+  updateSendButton();
+  console.log("🔒 Send initial geprüft");
+  inputEl = document.getElementById("msg-input");
+  warningEl = document.getElementById("length-warning");
+  titleEl = document.getElementById("chat-with");
+
+  if (!messagesEl || !indicatorEl || !unreadCountEl || !sendBtn || !inputEl || !titleEl) {
+    console.error("DOM nicht bereit");
+    return;
+  }
+
+  if (sendBtn.dataset.bound === "1") return;
+sendBtn.dataset.bound = "1";
+
+  titleEl.textContent = "Chat mit " + withUser;
+if (firstLoad) {
+  messagesEl.innerHTML = "";
+}
+
+  // =========================
+  // SEND BUTTON
+  // =========================
+  sendBtn.addEventListener("click", async () => {
+    const text = inputEl.value.trim();
+
+    if (!text) return;
+
+// ==========================================
+// E2E NOT READY → DEFERRED SEND
+// ==========================================
+if (!e2eReady) {
+
+  const tempId = `bootstrap-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+
+  const div = renderMessage({
+    from: getMyUser(),
+    message: text,
+    ts: Date.now(),
+    tempId,
+    status: "pending"
+  });
+
+  if (div) pendingByTempId.set(tempId, div);
+
+  deferredQueue.push({ text, tempId });
+
+  inputEl.value = "";
+  scrollToBottom();
+  updateSendButton();
+
+  console.log("🟡 Nachricht deferred – E2E noch nicht bereit");
+
+  return;
+}
+
+if (!(sessionKeyBytes instanceof Uint8Array)) {
+  console.warn("⚠️ SessionKey fehlt trotz e2eReady");
+  return;
+}
+
+    // Rate limit
+    const now = Date.now();
+if (now - lastSendTime < SEND_COOLDOWN_MS) {
+  console.log("⏸️ Cooldown aktiv – Send blockiert");
+  showCooldownWarning();
+  return;
+}
+    lastSendTime = now;
+
+    // 🧯 Notfall-Failsafe: Button niemals dauerhaft blockieren
+    if (sendFailsafeTimer) clearTimeout(sendFailsafeTimer);
+    sendFailsafeTimer = setTimeout(() => {
+    console.warn("🧯 Send-Failsafe ausgelöst");
+    pendingByTempId.clear();
+    updateSendButton(); // ✅ NUR freigeben wenn E2E ready
+    }, 8000);
+    
+    // Optimistic UI
+    const tempId = `tmp-${now}-${Math.random().toString(16).slice(2)}`;
+    const pendingDiv = renderMessage({
+      from: getMyUser(),
+      message: text,
+      tempId,
+      status: "pending"
+    });
+    if (pendingDiv) pendingByTempId.set(tempId, pendingDiv);
+
+    inputEl.value = "";
+    scrollToBottom();
+
+    // 🔐 SAFETY: merkt, ob der Send-Vorgang sauber beendet wurde
+
+try {
+
+// ======================================================
+// CMK v2 – SEND PATH (MK statt CMK)
+// ======================================================
+
+// 1️⃣ Session-ID (deterministisch)
+const sessionId = dmSessionId(getMyUser(), withUser);
+
+// 2️⃣ Epoch bestimmen (z. B. 1 Stunde)
+const epoch = Math.floor(Date.now() / EPOCH_MS);
+
+// 3️⃣ Message Key aus Session Key ableiten
+const mk = await deriveMessageKey(
+  sessionKeyBytes,
+  sessionId,
+  epoch
+);
+
+// 4️⃣ Mit MK verschlüsseln
+const { ivB64, ctB64 } = await e2eEncrypt(mk, text);
+
+const res = await apiFetch("/chat/send", {
+  method: "POST",
+body: JSON.stringify({
+  to: withUser,
+  message: "",
+  e2e: true,
+  v: 2,
+
+  // 🔑 CMK v2 Metadaten
+  sid: sessionId,
+  epoch,
+
+  ivB64,
+  ctB64,
+})
+});
+
+// 🔧 FIX SCHRITT 3 — 429 = warten, NICHT fehlschlagen
+if (res?.rateLimited) {
+  console.warn("⏸️ Rate-Limit aktiv – Nachricht bleibt pending");
+
+  // ⏱️ lastSendTime zurücksetzen, damit Cooldown korrekt ist
+  lastSendTime = Date.now();
+
+  showCooldownWarning();
+
+  // 🔴 WICHTIG:
+  // - NICHT pending löschen
+  // - NICHT failed setzen
+  // - NICHT aus deferredQueue entfernen
+  updateSendButton();
+  return;
+}
+
+// ✅ Erfolg
+const saved = res.message;
+
+if (saved?.id) {
+  cacheSentMessage(saved.id, text);
+}
+
+// 🔓 pending → sent auflösen
+const div = pendingByTempId.get(tempId);
+if (div) {
+  div.classList.remove("pending");
+  div.dataset.id = saved.id;          // echte Server-ID
+  renderedMessageIds.add(saved.id);   // gegen Duplikate beim Polling
+  pendingByTempId.delete(tempId);     // ⬅️ DAS IST DER SCHLÜSSEL
+}
+
+// 🕒 Timestamp nachträglich setzen
+if (div && saved?.ts) {
+  const timeEl = div.querySelector(".timestamp");
+  if (timeEl) {
+    timeEl.textContent = formatTimestamp(saved.ts);
+  }
+}
+
+
+} catch (err) {
+  // 🔴 echter Fehler (500 etc.)
+  const div = pendingByTempId.get(tempId);
+  if (div) {
+    div.classList.remove("pending");
+    div.classList.add("failed");
+  }
+
+  pendingByTempId.delete(tempId);
+
+  alert("Nachricht konnte nicht gesendet werden");
+  console.error(err);
+} finally {
+  // 🧹 Failsafe sauber beenden
+  if (sendFailsafeTimer) {
+    clearTimeout(sendFailsafeTimer);
+    sendFailsafeTimer = null;
+  }
+
+// Nur löschen wenn wirklich erledigt
+// (success oder echter Fehler)
+
+updateSendButton();
+}
+});
+
+  // =========================
+  // ENTER / SHIFT+ENTER
+  // =========================
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+
+    sendBtn.click();
+  }
+});
+// =========================
+// MESSAGE LENGTH CHECK
+// =========================
+inputEl.addEventListener("input", () => {
+  const len = inputEl.value.length;
+
+  // ❌ Zu lang → immer blockieren
+  if (len >= MAX_MESSAGE_LENGTH) {
+    warningEl.textContent = `Maximal ${MAX_MESSAGE_LENGTH} Zeichen erreicht`;
+    warningEl.className = "error";
+    return;
+  }
+
+  // ⚠️ Warnbereich
+  if (len >= MAX_MESSAGE_LENGTH - 100) {
+    warningEl.textContent = `${len} / ${MAX_MESSAGE_LENGTH} Zeichen`;
+    warningEl.className = "warn";
+  } else {
+    warningEl.textContent = "";
+    warningEl.className = "";
+  }
+
+  // 🔐 ENTSCHEIDUNG ZENTRAL
+updateSendButton();
+});  
+
+  // =========================
+  // INDICATOR CLICK
+  // =========================
+  indicatorEl.addEventListener("click", () => {
+    scrollToBottom();
+    unreadCount = 0;
+    updateUnreadIndicator();
+  });
+
+  // =========================
+  // SCROLL
+  // =========================
+  messagesEl.addEventListener("scroll", () => {
+    if (isUserAtBottom()) {
+      unreadCount = 0;
+      updateUnreadIndicator();
+    }
+  });
+
+  console.log("DOM OK");
+  
+  if (!messagesEl) {
+  console.warn("⛔ Polling blockiert – DOM nicht bereit");
+  return;
+}
+}
+
+// ======================================================
+// HELPERS
+// ======================================================
+function showSystemMessage(text) {
+  if (!messagesEl) return;
+
+  const div = document.createElement("div");
+  div.className = "system";
+  div.textContent = text;
+
+  messagesEl.appendChild(div);
+  scrollToBottom();
+}
+
+function isUserAtBottom() {
+  if (!messagesEl) return true; // ⬅️ WICHTIG
+  const threshold = 80;
+  const distance =
+    messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+  return distance <= threshold;
+}
+
+function scrollToBottom() {
+  if (!messagesEl) return;
+  requestAnimationFrame(() => {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  });
+}
+
+function updateUnreadIndicator() {
+  if (!unreadCountEl || !indicatorEl) return;
+
+  if (unreadCount > 0) {
+    unreadCountEl.textContent = unreadCount;
+    indicatorEl.classList.add("visible");
+  } else {
+    unreadCountEl.textContent = "";
+    indicatorEl.classList.remove("visible");
+  }
+}
+
+function showCooldownWarning() {
+  if (!warningEl) return;
+
+  warningEl.textContent = "Bitte kurz warten…";
+  warningEl.className = "warn";
+
+  if (cooldownTimer) clearTimeout(cooldownTimer);
+cooldownTimer = setTimeout(() => {
+  warningEl.textContent = "";
+  warningEl.className = "";
+  cooldownTimer = null;
+
+  // 🔁 FIX SCHRITT 4: Retry pending nach Cooldown
+  retryPendingIfPossible();
+}, SEND_COOLDOWN_MS);
+}
+function formatTimestamp(ts) {
+  if (!ts) return "";
+
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString("de-DE", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  const date = d.toLocaleDateString("de-DE");
+
+  return `${time} · ${date}`;
+}
+
+// ======================================================
+// OUTBOX CACHE (für eigene gesendete E2E-Nachrichten)
+// ======================================================
+function cacheSentMessage(id, text) {
+  try {
+    localStorage.setItem(`outbox:${id}`, text);
+
+    // optional: simple cap (nicht perfekt, aber ok)
+    // wenn du willst, machen wir das später sauber mit IndexedDB + Limit 500
+  } catch (e) {
+    console.warn("outbox cache failed", e);
+  }
+}
+
+function getCachedSentMessage(id) {
+  try {
+    return localStorage.getItem(`outbox:${id}`);
+  } catch {
+    return null;
+  }
+}
+
+// ======================================================
+// RENDER
+// ======================================================
+function renderMessage({ id, from, message, ts, tempId = null, status = "sent" }) {
+
+  if (!messagesEl) return null;
+
+  // 🛡️ HARD GUARD: Pending darf nur lokal sein
+if (status === "pending" && from !== getMyUser()) {
+  status = "sent";
+}
+
+  if (!message || message.length > MAX_MESSAGE_LENGTH) return null;
+
+const div = document.createElement("div");
+div.className =
+  from?.toLowerCase() === withUser?.toLowerCase()
+    ? "other"
+    : "me";
+
+const textEl = document.createElement("div");
+textEl.textContent = message;
+
+div.appendChild(textEl);
+
+const timeEl = document.createElement("div");
+timeEl.className = "timestamp";
+
+let meta = formatTimestamp(ts);
+
+// Status nur für eigene Nachrichten anzeigen
+if (from === getMyUser()) {
+  if (status === "delivered") {
+    meta += " · Zugestellt";
+  } else if (status === "sent") {
+    meta += " · Gesendet";
+  } else if (status === "pending") {
+    meta += " · Sende…";
+  }
+}
+
+timeEl.textContent = meta;
+div.appendChild(timeEl);
+
+if (id) div.dataset.id = id;
+if (tempId) div.dataset.tempId = tempId;
+
+if (status) {
+  div.dataset.status = status;
+}
+
+if (id && status) {
+  renderedMessageStatus.set(id, status);
+}
+
+if (status === "pending" && from === getMyUser()) {
+  div.classList.add("pending");
+  }
+  if (status === "failed") div.classList.add("failed");
+
+  messagesEl.appendChild(div);
+  return div;
+}
+
+// ======================================================
+// UPDATE MESSAGE STATUS (ohne Re-Render)
+// ======================================================
+function updateRenderedMessageStatus(messageId, status) {
+
+  if (!status) return;
+
+  const el = document.querySelector(`[data-id="${messageId}"]`);
+  if (!el) return;
+
+  // Status nur für eigene Nachrichten
+  if (!el.classList.contains("me")) return;
+
+  const currentStatus = el.dataset.status;
+if (currentStatus === "delivered") return;
+
+  const timeEl = el.querySelector(".timestamp");
+  if (!timeEl) return;
+
+  // Timestamp extrahieren (vor dem ersten " · ")
+  const ts = timeEl.textContent.split(" · ")[0];
+
+  let meta = ts;
+
+if (status === "delivered") {
+  meta += " · Zugestellt";
+} else if (status === "sent") {
+  meta += " · Gesendet";
+}
+
+el.dataset.status = status;  
+timeEl.textContent = meta;
+
+renderedMessageStatus.set(messageId, status);
+}
+
+// ======================================================
+// LOAD MESSAGES (FINAL CLEAN VERSION)
+// ======================================================
+async function loadMessages() {
+  try {
+    const url = "/chat/list?with=" + withUser;
+    const { messages = [] } = await apiFetch(url);
+    console.log("📥 SERVER MESSAGES:", messages);
+    const wasAtBottom = isUserAtBottom();
+
+    let added = false;
+
+for (const m of messages) {
+
+  if (!m?.id || !m?.from) continue;
+
+  const messageId = m.id;
+
+if (renderedMessageIds.has(messageId)) {
+
+  const prevStatus = renderedMessageStatus.get(messageId);
+
+  // nur wenn Status wirklich geändert wurde
+  if (m.status && m.status !== prevStatus) {
+
+    updateRenderedMessageStatus(messageId, m.status);
+
+    renderedMessageStatus.set(messageId, m.status);
+  }
+
+  continue;
+}
+
+  if (deferredInboundIds.has(messageId) && !e2eReady) continue;
+
+  let text;
+
+  try {
+    text = await decryptMessageIfNeeded(m, withUser);
+  } catch {
+    text = "🔒 Verschlüsselte Nachricht (Fehler)";
+  }
+
+  // 🔒 Noch kein Key → Placeholder
+  if (text === null) {
+
+    deferredInboundMessages.push(m);
+    deferredInboundIds.add(messageId);
+
+    renderMessage({
+      id: messageId,
+      from: m.from,
+      message: "🔒 Verschlüsselte Nachricht (warte auf Schlüssel)…",
+      ts: m.ts
+    });
+
+    renderedMessageIds.add(messageId);
+    continue;
+  }
+
+  // ✅ NORMALER FALL (DAS HATTE GEFEHLT)
+renderedMessageIds.add(messageId);
+deferredInboundIds.delete(messageId);
+
+renderMessage({
+  id: messageId,
+  from: m.from,
+  message: text,
+  ts: m.ts,
+  status: m.status
+});
+
+
+  if (m.from === getMyUser()) {
+    const pending = document.querySelector(".me.pending");
+    if (pending) pending.classList.remove("pending");
+  }
+
+  added = true;
+  if (m.from === withUser && !wasAtBottom) unreadCount++;
+}
+
+    // ==================================================
+    // SCROLL LOGIC
+    // ==================================================
+    if (firstLoad) {
+      scrollToBottom();
+      firstLoad = false;
+      unreadCount = 0;
+    }
+    else if (added && wasAtBottom) {
+      scrollToBottom();
+      unreadCount = 0;
+    }
+
+updateUnreadIndicator();
+
+// ==================================================
+// DELIVERED STATUS MELDEN
+// ==================================================
+if (messages.some(m =>
+  m &&
+  m.from === withUser &&
+  m.to === getMyUser() &&
+  m.type !== "cmk" &&
+  m.type !== "cmk_req"
+)) {
+  try {
+    await apiFetch("/chat/delivered", {
+      method: "POST",
+      body: JSON.stringify({
+        with: withUser
+      })
+    });
+  } catch (e) {
+    console.warn("Delivered update failed", e);
+  }
+}
+
+} catch (e) {
+  console.error("Load messages failed:", e);
+}
+}
+
+// ======================================================
+// POLLING (Lifecycle-Safe)
+// ======================================================
+
+let poller = null;
+let pollingActive = false;
+let isLoadingMessages = false;
+let pollScheduled = false; // 🔒 verhindert Doppel-Timer
+
+let pollDelay = 3000;
+const MAX_POLL_DELAY = 15000;
+
+async function pollLoop() {
+  if (!pollingActive) return;
+  
+  if (isLoadingMessages) {
+    scheduleNextPoll();
+    return;
+  }
+
+  isLoadingMessages = true;
+
+  try {
+    await loadMessages();
+    pollDelay = 3000; // Erfolg → Reset
+  } catch (e) {
+    console.error("Polling error", e);
+    pollDelay = Math.min(pollDelay * 2, MAX_POLL_DELAY);
+    console.log("⏳ Poll Backoff aktiv:", pollDelay, "ms");
+  }
+
+  isLoadingMessages = false;
+  scheduleNextPoll();
+}
+
+function scheduleNextPoll() {
+  if (!pollingActive) return;
+  if (pollScheduled) return;
+
+  pollScheduled = true;
+
+  poller = setTimeout(() => {
+    pollScheduled = false;
+    pollLoop();
+  }, pollDelay);
+}
+
+function startPolling() {
+
+  if (!messagesEl) {
+    console.warn("⛔ Polling nicht gestartet – DOM fehlt");
+    return;
+  }
+
+  if (pollingActive) return;
+
+  pollingActive = true;
+  pollDelay = 3000;
+  pollScheduled = false;
+
+  pollLoop();
+}
+
+function stopPolling() {
+  pollingActive = false;
+  pollScheduled = false;
+
+  if (poller) {
+    clearTimeout(poller);
+    poller = null;
+  }
+}
+
+document.addEventListener("visibilitychange", async () => {
+  if (document.hidden) {
+    stopPolling();
+    return;
+  }
+
+if (!e2eReady) {
+  stopPolling();
+  return;
+}
+
+  if (!isLoadingMessages) {
+    try {
+      await loadMessages(); // sofort synchronisieren
+    } catch (e) {
+      console.warn("Reload on focus failed", e);
+    }
+  }
+
+});
+
+// ======================================================
+// STARTUP (FIXED ORDER)
+// ======================================================
+
+(async () => {
+
+  // 🔒 Startup Guard – verhindert Doppel-Init
+if (window.__chatStartupDone) {
+  console.warn("⚠️ Chat Startup wurde bereits ausgeführt");
+  return;
+}
+window.__chatStartupDone = true;
+
+  console.log("💬 Chat Startup läuft");
+  
+  // 1️⃣ Eigene E2E-Keys
+  getDeviceId(); // ✅ Device-ID sicher setzen
+  await initE2EKeys();
+  await debugPrintMyPublicKey();
+  await uploadMyPublicKeyIfNeeded();
+
+  // 2️⃣ Peer Public Key
+  const peerOk = await fetchAndStorePeerPublicKey(withUser);
+  if (!peerOk) {
+    e2eReady = false;
+    alert("🔐 Peer hat noch keinen Public Key");
+    return;
+  }
+  console.log("📦 hasInboxKeys nach Fetch:", hasInboxKeys);
+  
+// 3️⃣ Conversation Lifecycle sicherstellen
+const ok = await ensureConversationReady(
+  localStorage.getItem("my_user"),
+  withUser,
+  fetchInboxKeys,
+  apiFetch
+);
+
+console.log("🧪 ensureConversationReady() returned:", ok, {
+  me: localStorage.getItem("my_user"),
+  peer: withUser
+});
+
+// 4️⃣ Conversation lokal booten (CMK → SessionKey → e2eReady)
+const entry = await bootConversation(
+  localStorage.getItem("my_user"),
+  withUser
+);
+
+if (entry && entry.ready) {
+  sessionKeyBytes = entry.skBytes;
+  e2eReady = true;
+}
+
+// 5️⃣ UI starten
+startChat();
+updateSendButton();
+
+// 6️⃣ Initial Messages nur laden wenn E2E bereit —
+// sonst ruft der KV-Fetch / Fallback-Bootstrap loadMessages danach auf
+if (e2eReady) {
+  try {
+    await loadMessages();
+  } catch (e) {
+    console.warn("Initial loadMessages failed", e);
+  }
+}
+
+// 7️⃣ Flush nur wenn ready
+if (e2eReady) {
+
+  console.log("🟢 Chat gestartet (E2E bereit)");
+
+  await flushDeferredQueue();
+  await flushDeferredInboundMessages();
+
+} else {
+
+  console.log("🟡 Chat gestartet – warte auf CMK", {
+    withUser,
+    hasInboxKeys,
+    e2eReady,
+  });
+
+  const me = localStorage.getItem("my_user");
+
+  // 🔑 Schritt 1: CMK aus KV holen (Authority hat früher bootstrapped)
+  const kvFetched = await fetchAndStoreCMK(me, withUser, apiFetch);
+  if (kvFetched) {
+    const entry = await bootConversation(me, withUser);
+    if (entry?.skBytes) {
+      sessionKeyBytes = entry.skBytes;
+      e2eReady = true;
+      console.log("✅ CMK aus KV geladen – E2E bereit");
+      await loadMessages();
+      await flushDeferredQueue();
+      await flushDeferredInboundMessages();
+    }
+  }
+
+  // 🔑 Schritt 2: Fallback Bootstrap — Non-Authority erstellt CMK wenn Authority offline war
+  if (!e2eReady) {
+    const fallbacked = await fallbackBootstrap(me, withUser, fetchInboxKeys, apiFetch);
+    if (fallbacked) {
+      const entry = await bootConversation(me, withUser);
+      if (entry?.skBytes) {
+        sessionKeyBytes = entry.skBytes;
+        e2eReady = true;
+        console.log("✅ Fallback Bootstrap: E2E bereit");
+        await loadMessages();
+        await flushDeferredQueue();
+        await flushDeferredInboundMessages();
+      }
+    }
+  }
+
+  // 🔁 Schritt 3: Letzter Ausweg — alle 30s cmk_req senden bis CMK ankommt
+  if (!e2eReady) {
+    const cmkRetryInterval = setInterval(async () => {
+      if (e2eReady) {
+        clearInterval(cmkRetryInterval);
+        return;
+      }
+      console.log("🔁 CMK-Retry: sende neuen cmk_req...");
+      await ensureConversationReady(
+        localStorage.getItem("my_user"),
+        withUser,
+        fetchInboxKeys,
+        apiFetch
+      );
+    }, 30_000);
+  }
+}
+
+// WebSocket liefert neue Messages via NEW_MESSAGE Event
+})();
+
+
+

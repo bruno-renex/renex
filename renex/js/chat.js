@@ -7,14 +7,19 @@ import {
   loadPublicKey,
   idbSet,
   dmSessionId,
-  deriveMessageKey
+  deriveMessageKey,
+  deriveSessionKeyBytesForRotation,
+  getLastRotationTime,
+  setLastRotationTime
 } from "./e2e.js";
 
 import {
   ensureConversationReady,
   bootConversation,
   fetchAndStoreCMK,
-  fallbackBootstrap
+  fallbackBootstrap,
+  isAuthority,
+  rotateEpoch
 } from "./sessionManager.js";
 
 import { apiFetch } from "./api.js";
@@ -56,7 +61,14 @@ let cooldownTimer = null;
 let sendFailsafeTimer = null;
 let e2eReady = false;
 let lastSendBtnState = null;
-let sessionKeyBytes = null; // Uint8Array(32)
+let sessionKeyBytes = null;   // Uint8Array(32) — current SK
+let sessionCmkBytes = null;   // Uint8Array(32) — CMK (für Re-Derivation alter Epochs)
+let sessionRotationIndex = 0; // aktueller Rotation-Index
+let sentMessageCount = 0;     // Zähler für Rotation-Trigger
+const ROTATION_THRESHOLD = 50;
+const ROTATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
+let timeRotationTimer = null;
+const skCache = new Map();    // "sid:rotationIndex" → Uint8Array(32)
 let hasInboxKeys = false;
 
 // ======================================================
@@ -203,41 +215,36 @@ if (event?.type === "NEW_MESSAGE") {
     if (e.data?.type !== "CMK_READY") return;
     if (e.data.peer !== withUser) return;
 
-    // 🔒 Bereits bereit? → nichts tun
-    if (e2eReady) return;
-
-    console.log("🔄 CMK_READY empfangen → Lifecycle recheck");
+    console.log("🔄 CMK_READY empfangen → SessionKey aktualisieren", { wasReady: e2eReady });
 
     try {
 
-      // 1️⃣ Bootstrap / Lifecycle prüfen
-      await ensureConversationReady(
+      // CMK aus IDB laden (kann neuer CMK sein der Fallback überschrieben hat)
+      const entry = await bootConversation(
         localStorage.getItem("my_user"),
-        withUser,
-        fetchInboxKeys,
-        apiFetch
+        withUser
       );
 
-      // 2️⃣ Lokal booten (CMK → SessionKey)
-      const entry = await bootConversation(
-  localStorage.getItem("my_user"),
-  withUser
-);
+      if (!entry?.skBytes) return;
 
-if (!entry || !entry.ready) return;
+      const wasReady = e2eReady;
+      sessionKeyBytes = entry.skBytes; // 🔑 immer aktualisieren
+      sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+      sessionRotationIndex = entry.rotationIndex ?? 0;
+      skCache.set(`${dmSessionId(getMyUser(), withUser)}:${sessionRotationIndex}`, sessionKeyBytes);
+      e2eReady = true;
 
-// 🔐 SessionKey aktivieren
-sessionKeyBytes = entry.skBytes;
-e2eReady = true;
-
-// 3️⃣ Direkt neue Messages vom Server holen
-await loadMessages();
-
-// 4️⃣ Deferred flushen (falls noch was drin ist)
-await flushDeferredQueue();
-await flushDeferredInboundMessages();
-
-// 5️⃣ Deferred flush (WebSocket liefert neue Messages)
+      if (!wasReady) {
+        // Erstmals bereit: alles flushen
+        await loadMessages();
+        await flushDeferredQueue();
+        await flushDeferredInboundMessages();
+      } else {
+        // CMK ausgetauscht (Fallback → Authority CMK):
+        // Nachrichten neu laden damit evtl. noch nicht entschlüsselte gerendert werden
+        await loadMessages();
+        await flushDeferredInboundMessages();
+      }
 
     } catch (err) {
       console.error("CMK_READY handling failed", err);
@@ -366,6 +373,23 @@ if (!e2eReady || !(sessionKeyBytes instanceof Uint8Array)) {
     const sessionId =
       msg.sid || dmSessionId(getMyUser(), otherHandle);
 
+    // 🔄 Rotation-aware: richtigen SK für diesen Rotation-Index holen
+    const msgRotationIndex = typeof msg.rotationIndex === "number" ? msg.rotationIndex : 0;
+    let skForDecrypt = sessionKeyBytes; // default: current SK
+
+    if (msgRotationIndex !== sessionRotationIndex) {
+      const cacheKey = `${sessionId}:${msgRotationIndex}`;
+      if (skCache.has(cacheKey) && skCache.get(cacheKey)) {
+        skForDecrypt = skCache.get(cacheKey);
+      } else if (sessionCmkBytes) {
+        // Re-deriven aus CMK (backward-compat für ältere Epochen)
+        skForDecrypt = await deriveSessionKeyBytesForRotation(sessionCmkBytes, sessionId, msgRotationIndex);
+        skCache.set(cacheKey, skForDecrypt);
+      }
+    }
+
+    if (!(skForDecrypt instanceof Uint8Array)) return null;
+
     const baseEpoch =
       typeof msg.epoch === "number"
         ? msg.epoch
@@ -380,7 +404,7 @@ if (!e2eReady || !(sessionKeyBytes instanceof Uint8Array)) {
     for (const ep of epochsToTry) {
       try {
         const mk = await deriveMessageKey(
-          sessionKeyBytes,
+          skForDecrypt,
           sessionId,
           ep
         );
@@ -793,6 +817,7 @@ body: JSON.stringify({
   // 🔑 CMK v2 Metadaten
   sid: sessionId,
   epoch,
+  rotationIndex: sessionRotationIndex,
 
   ivB64,
   ctB64,
@@ -821,6 +846,13 @@ const saved = res.message;
 
 if (saved?.id) {
   cacheSentMessage(saved.id, text);
+
+  // 🔄 Rotation-Trigger (nur Authority, alle ROTATION_THRESHOLD Nachrichten)
+  sentMessageCount++;
+  if (isAuthority(getMyUser(), withUser) && sentMessageCount >= ROTATION_THRESHOLD) {
+    sentMessageCount = 0;
+    doRotationAndRefresh().catch(e => console.warn("⚠️ rotateEpoch failed", e));
+  }
 }
 
 // 🔓 pending → sent auflösen
@@ -1247,6 +1279,46 @@ if (messages.some(m =>
 }
 
 // ======================================================
+// ZEITBASIERTE ROTATION
+// ======================================================
+
+async function doRotationAndRefresh() {
+  const ok = await rotateEpoch(getMyUser(), withUser, apiFetch);
+  if (ok) {
+    const entry = await bootConversation(getMyUser(), withUser);
+    if (entry?.skBytes) {
+      sessionKeyBytes = entry.skBytes;
+      sessionRotationIndex = entry.rotationIndex ?? sessionRotationIndex;
+      sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+      skCache.set(`${dmSessionId(getMyUser(), withUser)}:${sessionRotationIndex}`, sessionKeyBytes);
+      console.log("🔄 Lokaler SK nach Rotation aktualisiert:", { rotationIndex: sessionRotationIndex });
+    }
+  }
+}
+
+async function startTimeBasedRotation() {
+  if (!isAuthority(getMyUser(), withUser)) return;
+  if (timeRotationTimer) return;
+
+  const sid = dmSessionId(getMyUser(), withUser);
+
+  // Initialisierung: falls noch nie rotiert, jetzt als Startzeit speichern
+  const lastRotation = await getLastRotationTime(sid);
+  if (lastRotation === 0) {
+    await setLastRotationTime(sid, Date.now());
+  }
+
+  // Stündlich prüfen ob 24h seit letzter Rotation vergangen sind
+  timeRotationTimer = setInterval(async () => {
+    if (!e2eReady || !sessionCmkBytes) return;
+    const last = await getLastRotationTime(sid);
+    if (Date.now() - last < ROTATION_INTERVAL_MS) return;
+    console.log("⏰ Zeitbasierte Rotation ausgelöst");
+    doRotationAndRefresh().catch(e => console.warn("⚠️ Zeitbasierte Rotation fehlgeschlagen", e));
+  }, 60 * 60 * 1000); // stündlich prüfen ob 24h vergangen
+}
+
+// ======================================================
 // POLLING (Lifecycle-Safe)
 // ======================================================
 
@@ -1325,10 +1397,13 @@ document.addEventListener("visibilitychange", async () => {
     return;
   }
 
-if (!e2eReady) {
-  stopPolling();
-  return;
-}
+  if (!e2eReady) {
+    stopPolling();
+    return;
+  }
+
+  // Polling neu starten (war gestoppt während Tab hidden)
+  startPolling();
 
   if (!isLoadingMessages) {
     try {
@@ -1391,6 +1466,8 @@ const entry = await bootConversation(
 
 if (entry && entry.ready) {
   sessionKeyBytes = entry.skBytes;
+  sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+  sessionRotationIndex = entry.rotationIndex ?? 0;
   e2eReady = true;
 }
 
@@ -1415,6 +1492,7 @@ if (e2eReady) {
 
   await flushDeferredQueue();
   await flushDeferredInboundMessages();
+  startTimeBasedRotation();
 
 } else {
 
@@ -1432,11 +1510,14 @@ if (e2eReady) {
     const entry = await bootConversation(me, withUser);
     if (entry?.skBytes) {
       sessionKeyBytes = entry.skBytes;
+      sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+      sessionRotationIndex = entry.rotationIndex ?? 0;
       e2eReady = true;
       console.log("✅ CMK aus KV geladen – E2E bereit");
       await loadMessages();
       await flushDeferredQueue();
       await flushDeferredInboundMessages();
+      startTimeBasedRotation();
     }
   }
 
@@ -1447,11 +1528,14 @@ if (e2eReady) {
       const entry = await bootConversation(me, withUser);
       if (entry?.skBytes) {
         sessionKeyBytes = entry.skBytes;
+        sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+        sessionRotationIndex = entry.rotationIndex ?? 0;
         e2eReady = true;
         console.log("✅ Fallback Bootstrap: E2E bereit");
         await loadMessages();
         await flushDeferredQueue();
         await flushDeferredInboundMessages();
+        startTimeBasedRotation();
       }
     }
   }

@@ -4,7 +4,7 @@
 
 import { apiFetch } from "./api.js";
 import { getDeviceId, idbGet, dmSessionId } from "./e2e.js";
-import { isAuthority, ensureBootstrapped, receiveCMK } from "./sessionManager.js";
+import { isAuthority, ensureBootstrapped, receiveCMK, handleEpochRotate } from "./sessionManager.js";
 
 // ── State ────────────────────────────────────────────────
 let ws = null;
@@ -76,7 +76,14 @@ async function processControlMessage(m) {
     return;
   }
 
-  // 3) DELIVERY EVENT
+  // 3) EPOCH ROTATE
+  if (m.type === "epoch_rotate" && typeof m.rotationIndex === "number") {
+    const ok = await handleEpochRotate(me, m.from, m.rotationIndex);
+    if (ok) notify({ type: "EPOCH_ROTATED", peer: m.from, rotationIndex: m.rotationIndex });
+    return;
+  }
+
+  // 4) DELIVERY EVENT
   if (m.type === "delivered") {
     console.log("📬 CONTROL delivered event:", m);
     notify({ type: "DELIVERED", from: m.from, sid: m.sid, ts: m.ts });

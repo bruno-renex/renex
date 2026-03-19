@@ -492,3 +492,42 @@ export async function uploadInboxKeyIfNeeded() {
 
   console.log("📮 Inbox-Key hochgeladen:", deviceId);
 }
+
+// ======================================================
+// EPOCH ROTATION — SK pro Rotation-Index
+// ======================================================
+
+// SK ableiten mit Rotation-Index (index=0 → alte Formel, backward-compat)
+export async function deriveSessionKeyBytesForRotation(cmkBytes, sessionId, rotationIndex) {
+  if (rotationIndex === 0) return deriveSessionKeyBytes(cmkBytes, sessionId);
+
+  const cmkKey = await crypto.subtle.importKey(
+    "raw", cmkBytes, "HKDF", false, ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits({
+    name: "HKDF",
+    hash: "SHA-256",
+    salt: new TextEncoder().encode("renex/cmk-v2"),
+    info: new TextEncoder().encode(`session:${sessionId}:rotation:${rotationIndex}`)
+  }, cmkKey, 256);
+  return new Uint8Array(bits);
+}
+
+// Rotation-Index aus IDB laden (default: 0)
+export async function getRotationIndex(sessionId) {
+  return (await idbGet(`rotation:${sessionId}`)) ?? 0;
+}
+
+// Rotation-Index in IDB speichern
+export async function setRotationIndex(sessionId, index) {
+  await idbSet(`rotation:${sessionId}`, index);
+}
+
+// Zeitstempel der letzten Rotation (für zeitbasierte Rotation)
+export async function getLastRotationTime(sessionId) {
+  return (await idbGet(`lastRotation:${sessionId}`)) ?? 0;
+}
+
+export async function setLastRotationTime(sessionId, ts) {
+  await idbSet(`lastRotation:${sessionId}`, ts);
+}

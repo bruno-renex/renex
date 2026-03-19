@@ -5,6 +5,10 @@ import {
   importAndStoreCMKFromPeer,
   wrapCMKForInboxDevices,
   deriveSessionKeyBytes,
+  deriveSessionKeyBytesForRotation,
+  getRotationIndex,
+  setRotationIndex,
+  setLastRotationTime,
   dmSessionId,
   loadPrivateKey,
   getDeviceId,
@@ -31,15 +35,16 @@ export async function getSession(me, peer) {
   const cmk = await getCMKIfExists(peer);
 
   if (!cmk) {
-    const entry = { ready: false, cmkBytes: null, skBytes: null };
+    const entry = { ready: false, cmkBytes: null, skBytes: null, rotationIndex: 0 };
     sessionCache.set(sid, entry);
     return { sid, ...entry };
   }
 
-  // 2) SessionKey ableiten
-  const skBytes = await deriveSessionKeyBytes(cmk, sid);
+  // 2) SessionKey ableiten (rotation-aware)
+  const rotationIndex = await getRotationIndex(sid);
+  const skBytes = await deriveSessionKeyBytesForRotation(cmk, sid, rotationIndex);
 
-  const entry = { ready: true, cmkBytes: cmk, skBytes };
+  const entry = { ready: true, cmkBytes: cmk, skBytes, rotationIndex };
   sessionCache.set(sid, entry);
 
   return { sid, ...entry };
@@ -51,79 +56,106 @@ export async function getSession(me, peer) {
 export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn) {
   const sid = dmSessionId(me, peer);
 
-  // Guard: nur 1x pro Session
+  // Guard: nur 1x pro Session — wird bei Fehler zurückgesetzt
   const onceKey = `bootstrapped:${sid}`;
   if (sessionStorage.getItem(onceKey)) return;
   sessionStorage.setItem(onceKey, "1");
 
-  // 🔑 Zuerst: Hat Non-Authority bereits ein CMK in KV hinterlegt?
   try {
-    const myDeviceId = getDeviceId();
-    const res = await apiFetchFn(`/e2e/cmk/fetch?from=${peer}&deviceId=${myDeviceId}`);
-    if (res?.payload) {
-      const { fromDeviceId, ivB64, ctB64 } = res.payload;
-      const ok = await receiveCMK({
-        from: peer,
-        myDeviceId,
-        payloads: [{ deviceId: myDeviceId, fromDeviceId, ivB64, ctB64 }],
-        findSenderDeviceJwk
-      });
-      if (ok) {
-        console.log("✅ Authority: CMK aus KV importiert (Non-Auth hatte Fallback-Bootstrap gemacht)");
-        const existingCmk = await getCMKIfExists(peer);
-        if (existingCmk) {
-          const skBytes = await deriveSessionKeyBytes(existingCmk, sid);
-          sessionCache.set(sid, { ready: true, cmkBytes: existingCmk, skBytes });
-          return; // fertig — kein neuer CMK nötig
+
+    // 🔑 Zuerst: Hat Non-Authority bereits ein CMK in KV hinterlegt?
+    let kvImportedOk = false;
+    try {
+      const myDeviceId = getDeviceId();
+      const res = await apiFetchFn(`/e2e/cmk/fetch?from=${peer}&deviceId=${myDeviceId}`);
+      if (res?.payload) {
+        const { fromDeviceId, ivB64, ctB64 } = res.payload;
+
+        // Peer-Key suchen: erst IDB, dann Inbox-API als Fallback
+        const findSenderJwkWithFallback = async (fromHandle, deviceId) => {
+          const cached = await findSenderDeviceJwk(fromHandle, deviceId);
+          if (cached) return cached;
+          try {
+            const inboxDevices = await fetchInboxKeysFn(fromHandle);
+            const d = (inboxDevices || []).find(d => d.deviceId === deviceId);
+            return d?.jwk || null;
+          } catch { return null; }
+        };
+
+        const ok = await receiveCMK({
+          from: peer,
+          myDeviceId,
+          payloads: [{ deviceId: myDeviceId, fromDeviceId, ivB64, ctB64 }],
+          findSenderDeviceJwk: findSenderJwkWithFallback
+        });
+        if (ok) {
+          console.log("✅ Authority: CMK aus KV importiert (Non-Auth hatte Fallback-Bootstrap gemacht)");
+          const existingCmk = await getCMKIfExists(peer);
+          if (existingCmk) {
+            const skBytes = await deriveSessionKeyBytes(existingCmk, sid);
+            sessionCache.set(sid, { ready: true, cmkBytes: existingCmk, skBytes });
+            return; // fertig — kein neuer CMK nötig
+          }
+        } else if (res?.payload) {
+          // KV-Payload vorhanden aber nicht importierbar — Guard zurücksetzen damit retry möglich
+          console.warn("⚠️ Authority: KV-Payload gefunden aber Import fehlgeschlagen — kein neuer CMK erstellt");
+          sessionStorage.removeItem(onceKey);
+          return;
         }
       }
+    } catch (e) {
+      console.warn("⚠️ Authority KV-Check fehlgeschlagen (non-fatal)", e);
     }
+
+    const cmk = await getOrCreateCMK(peer); // Leader erzeugt falls nicht existiert
+
+    const inboxDevices = await fetchInboxKeysFn(peer);
+    if (!Array.isArray(inboxDevices) || inboxDevices.length === 0) return;
+
+    // 🔐 Maximal 10 Geräte (neueste zuerst) — Backend-Limit beachten
+    const MAX_DEVICES = 10;
+    const limitedDevices = inboxDevices.slice(-MAX_DEVICES);
+
+    // 🔐 CMK für alle Geräte gleichzeitig verpacken
+    const payloads = await wrapCMKForInboxDevices(limitedDevices, cmk);
+
+    console.log("📦 CMK payloads prepared for devices:", limitedDevices.map(d => d.deviceId), `(${inboxDevices.length} total, capped at ${MAX_DEVICES})`);
+
+    // 📤 einmalige CMK Message senden (live via WebSocket)
+    await apiFetchFn("/chat/send", {
+      method: "POST",
+      body: JSON.stringify({
+        to: peer,
+        e2e: true,
+        v: 2,
+        type: "cmk",
+        sid,
+        message: "__cmk__",
+        payloads
+      })
+    });
+
+    // 💾 CMK persistent in KV speichern (Option C: Offline Recovery)
+    try {
+      await apiFetchFn("/e2e/cmk/store", {
+        method: "POST",
+        body: JSON.stringify({ to: peer, payloads })
+      });
+      console.log("💾 CMK in KV gespeichert für", peer);
+    } catch (e) {
+      console.warn("⚠️ CMK KV-Store fehlgeschlagen (non-fatal)", e);
+    }
+
+    // Cache aktualisieren (rotation-aware)
+    const rotationIndex = await getRotationIndex(sid);
+    const skBytes = await deriveSessionKeyBytesForRotation(cmk, sid, rotationIndex);
+    sessionCache.set(sid, { ready: true, cmkBytes: cmk, skBytes, rotationIndex });
+
   } catch (e) {
-    console.warn("⚠️ Authority KV-Check fehlgeschlagen (non-fatal)", e);
+    // Guard zurücksetzen damit retry beim nächsten Aufruf möglich ist
+    console.warn("⚠️ ensureBootstrapped fehlgeschlagen — Guard zurückgesetzt", e);
+    sessionStorage.removeItem(onceKey);
   }
-
-  const cmk = await getOrCreateCMK(peer); // Leader erzeugt falls nicht existiert
-
-  const inboxDevices = await fetchInboxKeysFn(peer);
-  if (!Array.isArray(inboxDevices) || inboxDevices.length === 0) return;
-
-// 🔐 Maximal 10 Geräte (neueste zuerst) — Backend-Limit beachten
-const MAX_DEVICES = 10;
-const limitedDevices = inboxDevices.slice(-MAX_DEVICES);
-
-// 🔐 CMK für alle Geräte gleichzeitig verpacken
-const payloads = await wrapCMKForInboxDevices(limitedDevices, cmk);
-
-console.log("📦 CMK payloads prepared for devices:", limitedDevices.map(d => d.deviceId), `(${inboxDevices.length} total, capped at ${MAX_DEVICES})`);
-
-// 📤 einmalige CMK Message senden (live via WebSocket)
-await apiFetchFn("/chat/send", {
-  method: "POST",
-  body: JSON.stringify({
-    to: peer,
-    e2e: true,
-    v: 2,
-    type: "cmk",
-    sid,
-    message: "__cmk__",
-    payloads
-  })
-});
-
-// 💾 CMK persistent in KV speichern (Option C: Offline Recovery)
-try {
-  await apiFetchFn("/e2e/cmk/store", {
-    method: "POST",
-    body: JSON.stringify({ to: peer, payloads })
-  });
-  console.log("💾 CMK in KV gespeichert für", peer);
-} catch (e) {
-  console.warn("⚠️ CMK KV-Store fehlgeschlagen (non-fatal)", e);
-}
-
-  // Cache aktualisieren
-  const skBytes = await deriveSessionKeyBytes(cmk, sid);
-  sessionCache.set(sid, { ready: true, cmkBytes: cmk, skBytes });
 }
 
 /**
@@ -200,11 +232,12 @@ const cmkBytes = new Uint8Array(cmkBuf);
 
   await importAndStoreCMKFromPeer(from, cmkBytes);
 
-  // Cache aktualisieren
-const me = localStorage.getItem("my_user");
-const sid = dmSessionId(me, from);
-  const skBytes = await deriveSessionKeyBytes(cmkBytes, sid);
-  sessionCache.set(sid, { ready: true, cmkBytes, skBytes });
+  // Cache aktualisieren (rotation-aware)
+  const me = localStorage.getItem("my_user");
+  const sid = dmSessionId(me, from);
+  const rotationIndex = await getRotationIndex(sid);
+  const skBytes = await deriveSessionKeyBytesForRotation(cmkBytes, sid, rotationIndex);
+  sessionCache.set(sid, { ready: true, cmkBytes, skBytes, rotationIndex });
 
   return true;
 }
@@ -279,13 +312,15 @@ export async function bootConversation(me, peer) {
     return null;
   }
 
-  // SessionKey ableiten
-  const skBytes = await deriveSessionKeyBytes(cmkBytes, sid);
+  // SessionKey ableiten (rotation-aware)
+  const rotationIndex = await getRotationIndex(sid);
+  const skBytes = await deriveSessionKeyBytesForRotation(cmkBytes, sid, rotationIndex);
 
   const entry = {
     ready: true,
     cmkBytes,
-    skBytes
+    skBytes,
+    rotationIndex
   };
 
   sessionCache.set(sid, entry);
@@ -329,9 +364,10 @@ export async function fallbackBootstrap(me, peer, fetchInboxKeysFn, apiFetchFn) 
     });
     console.log("💾 Fallback CMK in KV gespeichert für Authority:", peer);
 
-    // Cache aktualisieren
-    const skBytes = await deriveSessionKeyBytes(cmk, sid);
-    sessionCache.set(sid, { ready: true, cmkBytes: cmk, skBytes });
+    // Cache aktualisieren (rotation-aware)
+    const rotationIndex = await getRotationIndex(sid);
+    const skBytes = await deriveSessionKeyBytesForRotation(cmk, sid, rotationIndex);
+    sessionCache.set(sid, { ready: true, cmkBytes: cmk, skBytes, rotationIndex });
 
     console.log("✅ Fallback Bootstrap abgeschlossen:", peer);
     return true;
@@ -375,6 +411,77 @@ export async function fetchAndStoreCMK(me, peer, apiFetchFn) {
     return ok;
   } catch (e) {
     console.warn("⚠️ fetchAndStoreCMK fehlgeschlagen (non-fatal)", e);
+    return false;
+  }
+}
+// ======================================================
+// 🔄 EPOCH ROTATION
+// ======================================================
+
+/**
+ * Empfänger: neuen Rotation-Index anwenden
+ */
+export async function handleEpochRotate(me, peer, newRotationIndex) {
+  const sid = dmSessionId(me, peer);
+  const cached = sessionCache.get(sid);
+
+  if (!cached?.cmkBytes) {
+    console.warn("⚠️ handleEpochRotate: kein CMK im Cache für", peer);
+    return false;
+  }
+
+  if (newRotationIndex <= (cached.rotationIndex ?? 0)) {
+    console.warn("⚠️ handleEpochRotate: alter Index ignoriert", newRotationIndex);
+    return false;
+  }
+
+  const newSkBytes = await deriveSessionKeyBytesForRotation(cached.cmkBytes, sid, newRotationIndex);
+  await setRotationIndex(sid, newRotationIndex);
+  sessionCache.set(sid, { ...cached, skBytes: newSkBytes, rotationIndex: newRotationIndex });
+
+  console.log("🔄 Epoch rotiert (Empfänger):", { peer, newRotationIndex });
+  return true;
+}
+
+/**
+ * Authority: Rotation auslösen und Peer benachrichtigen
+ */
+export async function rotateEpoch(me, peer, apiFetchFn) {
+  if (!isAuthority(me, peer)) return false;
+
+  const sid = dmSessionId(me, peer);
+  const cached = sessionCache.get(sid);
+  if (!cached?.ready || !cached?.cmkBytes) return false;
+
+  const newRotationIndex = (cached.rotationIndex ?? 0) + 1;
+  const newSkBytes = await deriveSessionKeyBytesForRotation(cached.cmkBytes, sid, newRotationIndex);
+
+  await setRotationIndex(sid, newRotationIndex);
+  sessionCache.set(sid, { ...cached, skBytes: newSkBytes, rotationIndex: newRotationIndex });
+
+  try {
+    await apiFetchFn("/chat/send", {
+      method: "POST",
+      body: JSON.stringify({
+        to: peer,
+        type: "epoch_rotate",
+        sid,
+        rotationIndex: newRotationIndex,
+        e2e: false,
+        v: 1,
+        message: "__epoch_rotate__"
+      })
+    });
+    await setLastRotationTime(sid, Date.now());
+    console.log("🔄 Epoch rotation gesendet:", { peer, newRotationIndex });
+    return true;
+  } catch (e) {
+    // Rollback
+    const prevIndex = newRotationIndex - 1;
+    const prevSkBytes = await deriveSessionKeyBytesForRotation(cached.cmkBytes, sid, prevIndex);
+    await setRotationIndex(sid, prevIndex);
+    sessionCache.set(sid, { ...cached, skBytes: prevSkBytes, rotationIndex: prevIndex });
+    console.warn("⚠️ rotateEpoch fehlgeschlagen, zurückgesetzt", e);
     return false;
   }
 }

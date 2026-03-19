@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS messages (
   message   TEXT,                 -- NULL for E2E messages
   iv_b64    TEXT,
   ct_b64    TEXT,
-  payloads  TEXT                  -- JSON string for multi-device payloads
+  payloads        TEXT,                 -- JSON string for multi-device payloads
+  rotation_index  INTEGER DEFAULT 0     -- SK rotation epoch index
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_convo_ts

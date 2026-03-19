@@ -797,9 +797,14 @@ if (typeof type === "string" && type.length > MAX_TYPE_LEN) {
 
 console.log("📨 SEND BODY TYPE:", type);
 
+// Rotation-Index aus Body
+const rotationIndex = (typeof body.rotationIndex === "number" && Number.isInteger(body.rotationIndex) && body.rotationIndex >= 0)
+  ? body.rotationIndex
+  : 0;
+
 // 🛑 HARD SEND RATE LIMIT (global pro User)
 // ❗ GILT NICHT für Control-Messages
-if (type !== "cmk_req" && type !== "cmk") {
+if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate") {
   const ok = await rateLimit(
     env,
     `chat_send:${me}`,
@@ -815,9 +820,9 @@ if (type !== "cmk_req" && type !== "cmk") {
   }
 }
 
-// 🛑 CONTROL MESSAGE RATE LIMIT (cmk / cmk_req)
+// 🛑 CONTROL MESSAGE RATE LIMIT (cmk / cmk_req / epoch_rotate)
 // Max. 10 Key-Exchange-Messages pro Minute pro User
-if (type === "cmk_req" || type === "cmk") {
+if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate") {
   const ok = await rateLimit(
     env,
     `control_send:${me}`,
@@ -835,7 +840,7 @@ if (type === "cmk_req" || type === "cmk") {
 
 // 🔐 E2E Versions-Guard
 // ❗ gilt NUR für echte E2E-Nachrichten
-if (type !== "cmk_req" && type !== "cmk") {
+if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate") {
   if (v !== undefined && v !== 2) {
     return json(request, { error: "Unsupported E2E version" }, 400);
   }
@@ -853,7 +858,7 @@ if (v === 2 && e2e === true && type !== "cmk") {
 
 // 🔒 Darf nur an ACCEPTED Kontakte senden
 // ❗ GILT NICHT für Control-Messages
-if (type !== "cmk_req" && type !== "cmk") {
+if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate") {
   const isAllowed = await isAcceptedContact(env, me, to);
 
   if (!isAllowed) {
@@ -893,7 +898,7 @@ if (
 }
    
 // ✅ Nur echte Chat-Messages brauchen Payload
-if (!type || (type !== "cmk_req" && type !== "cmk")) {
+if (!type || (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate")) {
   if (!message && !(hasLegacyE2E || hasMultiE2E)) {
     return json(request, { error: "Missing message payload" }, 400);
   }
@@ -910,12 +915,17 @@ const msg = {
   status: "sent"
 };
 
-if (type === "cmk" || type === "cmk_req") {
+if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate") {
   msg.message = undefined;
 }
 
-if (type === "cmk" || type === "cmk_req") {
+if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate") {
   delete msg.status;
+}
+
+// 🔄 Rotation-Index für epoch_rotate
+if (type === "epoch_rotate") {
+  msg.rotationIndex = rotationIndex;
 }
 
 if (typeof sid === "string") {
@@ -992,11 +1002,11 @@ if (typeof v === "number" && type !== "cmk_req" && type !== "cmk") {
   }
   
 // 💾 D1 INSERT — only real chat messages (not control)
-if (msg.type !== "cmk" && msg.type !== "cmk_req") {
+if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate") {
   await env.RENEX_DB.prepare(
-    `INSERT INTO messages
-       (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT OR IGNORE INTO messages
+       (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     msg.id,
     cid,
@@ -1012,7 +1022,8 @@ if (msg.type !== "cmk" && msg.type !== "cmk_req") {
     msg.message ?? null,
     msg.ivB64 ?? null,
     msg.ctB64 ?? null,
-    msg.payloads ? JSON.stringify(msg.payloads) : null
+    msg.payloads ? JSON.stringify(msg.payloads) : null,
+    rotationIndex
   ).run();
 }
 
@@ -1020,7 +1031,7 @@ if (msg.type !== "cmk" && msg.type !== "cmk_req") {
 // ======================================================
 // 🌍 CONTROL INDEX (für /chat/control)
 // ======================================================
-if (msg.type === "cmk" || msg.type === "cmk_req" || msg.type === undefined) {
+if (msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "epoch_rotate" || msg.type === undefined) {
 
 if (!to || typeof to !== "string") {
     console.error("❌ CONTROL: invalid 'to'", to);
@@ -1034,7 +1045,7 @@ if (!to || typeof to !== "string") {
 // ======================================================
 // 🔔 UNREAD COUNTER
 // ======================================================
-if (msg.type !== "cmk" && msg.type !== "cmk_req") {
+if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate") {
 
 const unreadKey = `unread:${other}:${me}`;
 
@@ -1156,6 +1167,7 @@ sliced = (rows.results || []).reverse().map(r => {
   if (r.payloads) {
     try { m.payloads = JSON.parse(r.payloads); } catch {}
   }
+  if (r.rotation_index) m.rotationIndex = r.rotation_index;
   return m;
 });
 

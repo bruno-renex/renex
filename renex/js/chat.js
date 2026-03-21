@@ -23,6 +23,7 @@ import {
 } from "./sessionManager.js";
 
 import { apiFetch } from "./api.js";
+import lang from "./i18n.js";
 // ======================================================
 // CONFIG
 // ======================================================
@@ -137,7 +138,7 @@ withUser = params.get("with");
 console.log("withUser =", withUser);
 
 if (!withUser) {
-  alert("Kein Chat-Partner gewählt");
+  alert(lang.noChatPartner);
   throw new Error("withUser fehlt");
 }
 
@@ -203,11 +204,25 @@ if (event?.type === "DELIVERED") {
 // 🔔 LIVE NEW MESSAGE
 if (event?.type === "NEW_MESSAGE") {
   const msg = event.message;
-  const isForThisChat = msg &&
-    ((msg.from === withUser && msg.to === localStorage.getItem("my_user")) ||
-     (msg.from === localStorage.getItem("my_user") && msg.to === withUser));
+  if (!msg) return;
+  const me = getMyUser();
+  const isForThisChat =
+    (msg.from === withUser && msg.to === me) ||
+    (msg.from === me && msg.to === withUser);
   if (isForThisChat && e2eReady) {
-    if (!isLoadingMessages) loadMessages().catch(() => {});
+    const wasAtBottom = isUserAtBottom();
+    processMessage(msg).then(isNew => {
+      if (!isNew) return;
+      if (wasAtBottom) { scrollToBottom(); unreadCount = 0; }
+      else { unreadCount++; }
+      updateUnreadIndicator();
+      if (msg.from === withUser) {
+        apiFetch("/chat/delivered", {
+          method: "POST",
+          body: JSON.stringify({ with: withUser })
+        }).catch(() => {});
+      }
+    }).catch(() => {});
   }
   return;
 }
@@ -704,7 +719,7 @@ console.log("🔄 Chat UI State reset");
   if (sendBtn.dataset.bound === "1") return;
 sendBtn.dataset.bound = "1";
 
-  titleEl.textContent = "Chat mit " + withUser;
+  titleEl.textContent = lang.chatWith(withUser);
 if (firstLoad) {
   messagesEl.innerHTML = "";
 }
@@ -883,7 +898,7 @@ if (div && saved?.ts) {
 
   pendingByTempId.delete(tempId);
 
-  alert("Nachricht konnte nicht gesendet werden");
+  alert(lang.sendFailed);
   console.error(err);
 } finally {
   // 🧹 Failsafe sauber beenden
@@ -917,14 +932,14 @@ inputEl.addEventListener("input", () => {
 
   // ❌ Zu lang → immer blockieren
   if (len >= MAX_MESSAGE_LENGTH) {
-    warningEl.textContent = `Maximal ${MAX_MESSAGE_LENGTH} Zeichen erreicht`;
+    warningEl.textContent = lang.maxLengthReached(MAX_MESSAGE_LENGTH);
     warningEl.className = "error";
     return;
   }
 
   // ⚠️ Warnbereich
   if (len >= MAX_MESSAGE_LENGTH - 100) {
-    warningEl.textContent = `${len} / ${MAX_MESSAGE_LENGTH} Zeichen`;
+    warningEl.textContent = lang.charCounter(len, MAX_MESSAGE_LENGTH);
     warningEl.className = "warn";
   } else {
     warningEl.textContent = "";
@@ -1006,7 +1021,7 @@ function updateUnreadIndicator() {
 function showCooldownWarning() {
   if (!warningEl) return;
 
-  warningEl.textContent = "Bitte kurz warten…";
+  warningEl.textContent = lang.pleaseWait;
   warningEl.className = "warn";
 
   if (cooldownTimer) clearTimeout(cooldownTimer);
@@ -1023,11 +1038,11 @@ function formatTimestamp(ts) {
   if (!ts) return "";
 
   const d = new Date(ts);
-  const time = d.toLocaleTimeString("de-DE", {
+  const time = d.toLocaleTimeString(lang.locale, {
     hour: "2-digit",
     minute: "2-digit"
   });
-  const date = d.toLocaleDateString("de-DE");
+  const date = d.toLocaleDateString(lang.locale);
 
   return `${time} · ${date}`;
 }
@@ -1157,84 +1172,82 @@ renderedMessageStatus.set(messageId, status);
 // ======================================================
 // LOAD MESSAGES (FINAL CLEAN VERSION)
 // ======================================================
-async function loadMessages() {
-  try {
-    const url = "/chat/list?with=" + withUser;
-    const { messages = [] } = await apiFetch(url);
-    console.log("📥 SERVER MESSAGES:", messages);
-    const wasAtBottom = isUserAtBottom();
-
-    let added = false;
-
-for (const m of messages) {
-
-  if (!m?.id || !m?.from) continue;
-
+// ======================================================
+// processMessage: einzelne Nachricht decrypt + render
+// Gibt true zurück wenn die Nachricht NEU war
+// ======================================================
+async function processMessage(m) {
+  if (!m?.id || !m?.from) return false;
   const messageId = m.id;
 
-if (renderedMessageIds.has(messageId)) {
-
-  const prevStatus = renderedMessageStatus.get(messageId);
-
-  // nur wenn Status wirklich geändert wurde
-  if (m.status && m.status !== prevStatus) {
-
-    updateRenderedMessageStatus(messageId, m.status);
-
-    renderedMessageStatus.set(messageId, m.status);
+  // Bereits gerendert → nur Status updaten
+  if (renderedMessageIds.has(messageId)) {
+    const prevStatus = renderedMessageStatus.get(messageId);
+    if (m.status && m.status !== prevStatus) {
+      updateRenderedMessageStatus(messageId, m.status);
+      renderedMessageStatus.set(messageId, m.status);
+    }
+    return false;
   }
 
-  continue;
-}
-
-  if (deferredInboundIds.has(messageId) && !e2eReady) continue;
+  if (deferredInboundIds.has(messageId) && !e2eReady) return false;
 
   let text;
-
   try {
     text = await decryptMessageIfNeeded(m, withUser);
   } catch {
     text = "🔒 Verschlüsselte Nachricht (Fehler)";
   }
 
-  // 🔒 Noch kein Key → Placeholder
+  // Noch kein Key → Placeholder
   if (text === null) {
-
     deferredInboundMessages.push(m);
     deferredInboundIds.add(messageId);
-
     renderMessage({
       id: messageId,
       from: m.from,
       message: "🔒 Verschlüsselte Nachricht (warte auf Schlüssel)…",
       ts: m.ts
     });
-
     renderedMessageIds.add(messageId);
-    continue;
+    return false;
   }
 
-  // ✅ NORMALER FALL (DAS HATTE GEFEHLT)
-renderedMessageIds.add(messageId);
-deferredInboundIds.delete(messageId);
-
-renderMessage({
-  id: messageId,
-  from: m.from,
-  message: text,
-  ts: m.ts,
-  status: m.status
-});
-
+  // Normale Nachricht rendern
+  renderedMessageIds.add(messageId);
+  deferredInboundIds.delete(messageId);
+  renderMessage({
+    id: messageId,
+    from: m.from,
+    message: text,
+    ts: m.ts,
+    status: m.status
+  });
 
   if (m.from === getMyUser()) {
     const pending = document.querySelector(".me.pending");
     if (pending) pending.classList.remove("pending");
   }
 
-  added = true;
-  if (m.from === withUser && !wasAtBottom) unreadCount++;
+  return true;
 }
+
+async function loadMessages() {
+  try {
+    const url = "/chat/list?with=" + withUser;
+    const { messages = [] } = await apiFetch(url);
+    console.log("📥 SERVER MESSAGES:", messages.length);
+    const wasAtBottom = isUserAtBottom();
+
+    let added = false;
+
+    for (const m of messages) {
+      const isNew = await processMessage(m);
+      if (isNew) {
+        added = true;
+        if (m.from === withUser && !wasAtBottom) unreadCount++;
+      }
+    }
 
     // ==================================================
     // SCROLL LOGIC
@@ -1327,8 +1340,8 @@ let pollingActive = false;
 let isLoadingMessages = false;
 let pollScheduled = false; // 🔒 verhindert Doppel-Timer
 
-let pollDelay = 3000;
-const MAX_POLL_DELAY = 15000;
+let pollDelay = 30000;       // WebSocket liefert live — Poll nur als Fallback
+const MAX_POLL_DELAY = 60000;
 
 async function pollLoop() {
   if (!pollingActive) return;
@@ -1342,7 +1355,7 @@ async function pollLoop() {
 
   try {
     await loadMessages();
-    pollDelay = 3000; // Erfolg → Reset
+    pollDelay = 30000; // Erfolg → Reset auf Fallback-Interval
   } catch (e) {
     console.error("Polling error", e);
     pollDelay = Math.min(pollDelay * 2, MAX_POLL_DELAY);
@@ -1375,7 +1388,7 @@ function startPolling() {
   if (pollingActive) return;
 
   pollingActive = true;
-  pollDelay = 3000;
+  pollDelay = 30000;
   pollScheduled = false;
 
   pollLoop();

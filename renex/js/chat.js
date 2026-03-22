@@ -10,7 +10,9 @@ import {
   deriveMessageKey,
   deriveSessionKeyBytesForRotation,
   getLastRotationTime,
-  setLastRotationTime
+  setLastRotationTime,
+  getRotationMap,
+  findCmkForRotationIndex
 } from "./e2e.js";
 
 import {
@@ -19,7 +21,8 @@ import {
   fetchAndStoreCMK,
   fallbackBootstrap,
   isAuthority,
-  rotateEpoch
+  rotateEpoch,
+  rotateCMK
 } from "./sessionManager.js";
 
 import { apiFetch } from "./api.js";
@@ -227,6 +230,52 @@ if (event?.type === "NEW_MESSAGE") {
   return;
 }
 
+  // 🔑 CMK_ROTATED: Non-Authority hat neuen CMK empfangen → SK aktualisieren
+  if (event?.type === "CMK_ROTATED" && event.peer === withUser) {
+    console.log("🔑 CMK_ROTATED empfangen → SK aktualisieren", event);
+    try {
+      const entry = await bootConversation(getMyUser(), withUser);
+      if (entry?.skBytes) {
+        sessionKeyBytes = entry.skBytes;
+        sessionRotationIndex = entry.rotationIndex ?? sessionRotationIndex;
+        sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+        skCache.set(`${dmSessionId(getMyUser(), withUser)}:${sessionRotationIndex}`, sessionKeyBytes);
+        console.log("🔑 SK nach CMK-Rotation aktualisiert:", { rotationIndex: sessionRotationIndex });
+      }
+    } catch (err) {
+      console.error("CMK_ROTATED handling failed", err);
+    }
+    return;
+  }
+
+  // 🔑 DEVICE_ADDED: Authority soll CMK rotieren (mit Cooldown 30s)
+  if (event?.type === "DEVICE_ADDED" && event.peer === withUser) {
+    console.log("🔑 DEVICE_ADDED → CMK rotieren für:", event.peer);
+    const cooldownKey = `cmkRotateCooldown:${withUser}`;
+    const lastRotate = Number(sessionStorage.getItem(cooldownKey) || 0);
+    if (Date.now() - lastRotate < 30_000) {
+      console.log("⏸️ CMK Rotation Cooldown aktiv — übersprungen");
+      return;
+    }
+    sessionStorage.setItem(cooldownKey, String(Date.now()));
+    if (isAuthority(getMyUser(), withUser) && e2eReady && sessionCmkBytes) {
+      rotateCMK(getMyUser(), withUser, apiFetch, fetchInboxKeys)
+        .then(async ok => {
+          if (ok) {
+            const entry = await bootConversation(getMyUser(), withUser);
+            if (entry?.skBytes) {
+              sessionKeyBytes = entry.skBytes;
+              sessionRotationIndex = entry.rotationIndex ?? sessionRotationIndex;
+              sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+              skCache.set(`${dmSessionId(getMyUser(), withUser)}:${sessionRotationIndex}`, sessionKeyBytes);
+              console.log("🔑 CMK rotiert nach Device-Event:", { rotationIndex: sessionRotationIndex });
+            }
+          }
+        }).catch(e => console.warn("⚠️ rotateCMK nach Device-Event fehlgeschlagen", e));
+    }
+    return;
+  }
+
     if (e.data?.type !== "CMK_READY") return;
     if (e.data.peer !== withUser) return;
 
@@ -396,10 +445,18 @@ if (!e2eReady || !(sessionKeyBytes instanceof Uint8Array)) {
       const cacheKey = `${sessionId}:${msgRotationIndex}`;
       if (skCache.has(cacheKey) && skCache.get(cacheKey)) {
         skForDecrypt = skCache.get(cacheKey);
-      } else if (sessionCmkBytes) {
-        // Re-deriven aus CMK (backward-compat für ältere Epochen)
-        skForDecrypt = await deriveSessionKeyBytesForRotation(sessionCmkBytes, sessionId, msgRotationIndex);
-        skCache.set(cacheKey, skForDecrypt);
+      } else {
+        // Rotation-Map: richtigen CMK für diesen rotationIndex finden (CMK-Rotation-aware)
+        const rotationMap = await getRotationMap(sessionId);
+        const historicCmk = findCmkForRotationIndex(rotationMap, msgRotationIndex);
+        if (historicCmk) {
+          skForDecrypt = await deriveSessionKeyBytesForRotation(historicCmk, sessionId, msgRotationIndex);
+          skCache.set(cacheKey, skForDecrypt);
+        } else if (sessionCmkBytes) {
+          // Fallback: aktueller CMK (backward-compat vor Rotation-Map)
+          skForDecrypt = await deriveSessionKeyBytesForRotation(sessionCmkBytes, sessionId, msgRotationIndex);
+          skCache.set(cacheKey, skForDecrypt);
+        }
       }
     }
 

@@ -48,6 +48,26 @@ function json(request, body, status = 200) {
 }
 
 // =========================
+// TURNSTILE VERIFY
+// =========================
+async function verifyTurnstile(token, ip, env) {
+  try {
+    const form = new FormData();
+    form.append("secret", env.TURNSTILE_SECRET);
+    form.append("response", token);
+    if (ip) form.append("remoteip", ip);
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      body: form,
+    });
+    const data = await res.json();
+    return data.success === true;
+  } catch {
+    return false;
+  }
+}
+
+// =========================
 // SESSION + CHAT HELPERS
 // =========================
 function getToken(request) {
@@ -582,6 +602,27 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
   await env.RENEX_KV.put(idxKey, JSON.stringify(idx));
 
+  // 🔑 device_added → Authority-Kontakte benachrichtigen (CMK Rotation triggern)
+  // Authority = alphabetisch kleinster Handle. Wir suchen Kontakte wo contact_handle < handle.
+  try {
+    const authContacts = await env.RENEX_DB.prepare(
+      "SELECT contact_handle FROM contacts WHERE user_handle = ? AND status = 'accepted' AND contact_handle < ?"
+    ).bind(handle, handle).all();
+
+    for (const row of (authContacts.results || [])) {
+      await pushToUserDO(env, row.contact_handle, {
+        id: crypto.randomUUID(),
+        type: "device_added",
+        from: handle,
+        to: row.contact_handle,
+        ts: Date.now()
+      });
+    }
+  } catch (e) {
+    // non-fatal
+    console.warn("device_added push fehlgeschlagen (non-fatal):", e.message);
+  }
+
   return json(request, { ok: true });
 }
 
@@ -804,7 +845,7 @@ const rotationIndex = (typeof body.rotationIndex === "number" && Number.isIntege
 
 // 🛑 HARD SEND RATE LIMIT (global pro User)
 // ❗ GILT NICHT für Control-Messages
-if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate") {
+if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate") {
   const ok = await rateLimit(
     env,
     `chat_send:${me}`,
@@ -822,7 +863,7 @@ if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate") {
 
 // 🛑 CONTROL MESSAGE RATE LIMIT (cmk / cmk_req / epoch_rotate)
 // Max. 10 Key-Exchange-Messages pro Minute pro User
-if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate") {
+if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate") {
   const ok = await rateLimit(
     env,
     `control_send:${me}`,
@@ -840,7 +881,7 @@ if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate") {
 
 // 🔐 E2E Versions-Guard
 // ❗ gilt NUR für echte E2E-Nachrichten
-if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate") {
+if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate") {
   if (v !== undefined && v !== 2) {
     return json(request, { error: "Unsupported E2E version" }, 400);
   }
@@ -858,7 +899,7 @@ if (v === 2 && e2e === true && type !== "cmk") {
 
 // 🔒 Darf nur an ACCEPTED Kontakte senden
 // ❗ GILT NICHT für Control-Messages
-if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate") {
+if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate") {
   const isAllowed = await isAcceptedContact(env, me, to);
 
   if (!isAllowed) {
@@ -898,7 +939,7 @@ if (
 }
    
 // ✅ Nur echte Chat-Messages brauchen Payload
-if (!type || (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate")) {
+if (!type || (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate")) {
   if (!message && !(hasLegacyE2E || hasMultiE2E)) {
     return json(request, { error: "Missing message payload" }, 400);
   }
@@ -915,11 +956,11 @@ const msg = {
   status: "sent"
 };
 
-if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate") {
+if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate" || type === "cmk_rotate") {
   msg.message = undefined;
 }
 
-if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate") {
+if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate" || type === "cmk_rotate") {
   delete msg.status;
 }
 
@@ -1002,7 +1043,7 @@ if (typeof v === "number" && type !== "cmk_req" && type !== "cmk") {
   }
   
 // 💾 D1 INSERT — only real chat messages (not control)
-if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate") {
+if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate") {
   await env.RENEX_DB.prepare(
     `INSERT OR IGNORE INTO messages
        (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index)
@@ -1031,7 +1072,7 @@ if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate")
 // ======================================================
 // 🌍 CONTROL INDEX (für /chat/control)
 // ======================================================
-if (msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "epoch_rotate" || msg.type === undefined) {
+if (msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "epoch_rotate" || msg.type === "cmk_rotate" || msg.type === undefined) {
 
 if (!to || typeof to !== "string") {
     console.error("❌ CONTROL: invalid 'to'", to);
@@ -1045,7 +1086,7 @@ if (!to || typeof to !== "string") {
 // ======================================================
 // 🔔 UNREAD COUNTER
 // ======================================================
-if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate") {
+if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate") {
 
 const unreadKey = `unread:${other}:${me}`;
 

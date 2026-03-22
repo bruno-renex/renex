@@ -12,7 +12,10 @@ import {
   dmSessionId,
   loadPrivateKey,
   getDeviceId,
-  findSenderDeviceJwk
+  findSenderDeviceJwk,
+  getRotationMap,
+  appendToRotationMap,
+  createAndStoreCMK
 } from "./e2e.js";
 
 const sessionCache = new Map(); // sid -> { cmkBytes, skBytes, ready }
@@ -44,6 +47,12 @@ export async function getSession(me, peer) {
   const rotationIndex = await getRotationIndex(sid);
   const skBytes = await deriveSessionKeyBytesForRotation(cmk, sid, rotationIndex);
 
+  // 3) Rotation-Map initialisieren falls noch leer (backward-compat für bestehende Sessions)
+  const existingMap = await getRotationMap(sid);
+  if (existingMap.length === 0) {
+    await appendToRotationMap(sid, 0, cmk);
+  }
+
   const entry = { ready: true, cmkBytes: cmk, skBytes, rotationIndex };
   sessionCache.set(sid, entry);
 
@@ -63,8 +72,33 @@ export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn)
 
   try {
 
-    // 🔑 Zuerst: Hat Non-Authority bereits ein CMK in KV hinterlegt?
-    let kvImportedOk = false;
+    // 🔑 ZUERST: IDB prüfen — Authority ist Source of Truth
+    // Wenn CMK bereits in IDB → direkt senden, KV-Import überspringen
+    // (verhindert dass Fallback-CMK von Non-Authority den richtigen CMK überschreibt)
+    const existingLocalCmk = await getCMKIfExists(peer);
+    if (existingLocalCmk) {
+      const inboxDevices = await fetchInboxKeysFn(peer);
+      if (Array.isArray(inboxDevices) && inboxDevices.length > 0) {
+        const payloads = await wrapCMKForInboxDevices(inboxDevices.slice(-10), existingLocalCmk);
+        await apiFetchFn("/chat/send", {
+          method: "POST",
+          body: JSON.stringify({ to: peer, e2e: true, v: 2, type: "cmk", sid, message: "__cmk__", payloads })
+        });
+        try {
+          await apiFetchFn("/e2e/cmk/store", {
+            method: "POST",
+            body: JSON.stringify({ to: peer, payloads })
+          });
+        } catch {}
+        const rotationIndex = await getRotationIndex(sid);
+        const skBytes = await deriveSessionKeyBytesForRotation(existingLocalCmk, sid, rotationIndex);
+        sessionCache.set(sid, { ready: true, cmkBytes: existingLocalCmk, skBytes, rotationIndex });
+        console.log("✅ Authority: bestehender CMK aus IDB gesendet (kein KV-Import)");
+      }
+      return;
+    }
+
+    // 🔑 Kein CMK in IDB: Hat Non-Authority einen Fallback-CMK in KV hinterlegt?
     try {
       const myDeviceId = getDeviceId();
       const res = await apiFetchFn(`/e2e/cmk/fetch?from=${peer}&deviceId=${myDeviceId}`);
@@ -89,15 +123,15 @@ export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn)
           findSenderDeviceJwk: findSenderJwkWithFallback
         });
         if (ok) {
-          console.log("✅ Authority: CMK aus KV importiert (Non-Auth hatte Fallback-Bootstrap gemacht)");
-          const existingCmk = await getCMKIfExists(peer);
-          if (existingCmk) {
-            const skBytes = await deriveSessionKeyBytes(existingCmk, sid);
-            sessionCache.set(sid, { ready: true, cmkBytes: existingCmk, skBytes });
-            return; // fertig — kein neuer CMK nötig
+          console.log("✅ Authority: Fallback-CMK aus KV importiert (erster Bootstrap)");
+          const importedCmk = await getCMKIfExists(peer);
+          if (importedCmk) {
+            const rotationIndex = await getRotationIndex(sid);
+            const skBytes = await deriveSessionKeyBytesForRotation(importedCmk, sid, rotationIndex);
+            sessionCache.set(sid, { ready: true, cmkBytes: importedCmk, skBytes, rotationIndex });
+            return;
           }
         } else if (res?.payload) {
-          // KV-Payload vorhanden aber nicht importierbar — Guard zurücksetzen damit retry möglich
           console.warn("⚠️ Authority: KV-Payload gefunden aber Import fehlgeschlagen — kein neuer CMK erstellt");
           sessionStorage.removeItem(onceKey);
           return;
@@ -484,4 +518,114 @@ export async function rotateEpoch(me, peer, apiFetchFn) {
     console.warn("⚠️ rotateEpoch fehlgeschlagen, zurückgesetzt", e);
     return false;
   }
+}
+
+// ======================================================
+// 🔑 CMK ROTATION (Event-basiert: Device Add/Remove)
+// ======================================================
+
+/**
+ * Authority: neuen CMK generieren, für alle Peer-Devices wrappen, senden.
+ * rotationIndex wird NICHT zurückgesetzt — neuer CMK gilt ab currentIndex+1.
+ */
+export async function rotateCMK(me, peer, apiFetchFn, fetchInboxKeysFn) {
+  if (!isAuthority(me, peer)) return false;
+
+  const sid = dmSessionId(me, peer);
+  const cached = sessionCache.get(sid);
+  if (!cached?.ready) return false;
+
+  const currentRotationIndex = cached.rotationIndex ?? 0;
+  const fromRotationIndex = currentRotationIndex + 1;
+
+  try {
+    // Neuen CMK generieren und speichern
+    const newCmkBytes = await createAndStoreCMK(peer);
+
+    // Rotation-Map updaten (alter CMK 0..current, neuer CMK fromIndex+)
+    await appendToRotationMap(sid, fromRotationIndex, newCmkBytes);
+
+    // Neuen SK ableiten
+    const newSkBytes = await deriveSessionKeyBytesForRotation(newCmkBytes, sid, fromRotationIndex);
+    await setRotationIndex(sid, fromRotationIndex);
+    sessionCache.set(sid, { ...cached, cmkBytes: newCmkBytes, skBytes: newSkBytes, rotationIndex: fromRotationIndex });
+
+    // Peer-Devices laden und CMK wrappen
+    const inboxDevices = await fetchInboxKeysFn(peer);
+    if (!Array.isArray(inboxDevices) || inboxDevices.length === 0) {
+      console.warn("⚠️ rotateCMK: keine Peer-Devices gefunden");
+      return false;
+    }
+    const payloads = await wrapCMKForInboxDevices(inboxDevices.slice(-10), newCmkBytes);
+
+    // cmk_rotate Control-Message senden
+    await apiFetchFn("/chat/send", {
+      method: "POST",
+      body: JSON.stringify({
+        to: peer,
+        type: "cmk_rotate",
+        sid,
+        fromRotationIndex,
+        payloads,
+        e2e: false,
+        v: 1,
+        message: "__cmk_rotate__"
+      })
+    });
+
+    // KV-Backup für Offline-Recovery
+    try {
+      await apiFetchFn("/e2e/cmk/store", {
+        method: "POST",
+        body: JSON.stringify({ to: peer, payloads })
+      });
+    } catch (e) {
+      console.warn("⚠️ CMK KV-Backup fehlgeschlagen (non-fatal)", e);
+    }
+
+    console.log("🔑 CMK rotiert (Device-Event):", { peer, fromRotationIndex });
+    return true;
+  } catch (e) {
+    console.warn("⚠️ rotateCMK fehlgeschlagen", e);
+    return false;
+  }
+}
+
+/**
+ * Non-Authority: neuen CMK aus cmk_rotate Message empfangen und speichern.
+ */
+export async function receiveCMKRotation({ me, from, myDeviceId, fromRotationIndex, payloads }) {
+  const sid = dmSessionId(me, from);
+
+  // CMK entschlüsseln + in IDB speichern (nutzt bestehende receiveCMK-Logik)
+  const ok = await receiveCMK({
+    from,
+    myDeviceId,
+    payloads,
+    findSenderDeviceJwk
+  });
+  if (!ok) return false;
+
+  // Neu gespeicherten CMK laden
+  const newCmkBytes = await getCMKIfExists(from);
+  if (!newCmkBytes) return false;
+
+  // Rotation-Map updaten
+  await appendToRotationMap(sid, fromRotationIndex, newCmkBytes);
+
+  // Neuen SK ableiten und Cache updaten
+  const newSkBytes = await deriveSessionKeyBytesForRotation(newCmkBytes, sid, fromRotationIndex);
+  await setRotationIndex(sid, fromRotationIndex);
+
+  const cached = sessionCache.get(sid) || {};
+  sessionCache.set(sid, {
+    ...cached,
+    cmkBytes: newCmkBytes,
+    skBytes: newSkBytes,
+    rotationIndex: fromRotationIndex,
+    ready: true
+  });
+
+  console.log("🔑 CMK Rotation empfangen:", { from, fromRotationIndex });
+  return true;
 }

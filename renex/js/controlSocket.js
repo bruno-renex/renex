@@ -4,7 +4,7 @@
 
 import { apiFetch } from "./api.js";
 import { getDeviceId, idbGet, dmSessionId } from "./e2e.js";
-import { isAuthority, ensureBootstrapped, receiveCMK, handleEpochRotate } from "./sessionManager.js";
+import { isAuthority, ensureBootstrapped, receiveCMK, handleEpochRotate, rotateCMK, receiveCMKRotation } from "./sessionManager.js";
 
 // ── State ────────────────────────────────────────────────
 let ws = null;
@@ -83,7 +83,29 @@ async function processControlMessage(m) {
     return;
   }
 
-  // 4) DELIVERY EVENT
+  // 4) CMK ROTATE: Non-Authority empfängt neuen CMK
+  if (m.type === "cmk_rotate" && Array.isArray(m.payloads) && typeof m.fromRotationIndex === "number") {
+    const ok = await receiveCMKRotation({
+      me,
+      from: m.from,
+      myDeviceId: getDeviceId(),
+      fromRotationIndex: m.fromRotationIndex,
+      payloads: m.payloads
+    });
+    if (ok) notify({ type: "CMK_ROTATED", peer: m.from, fromRotationIndex: m.fromRotationIndex });
+    return;
+  }
+
+  // 5) DEVICE ADDED: Authority soll CMK rotieren
+  if (m.type === "device_added" && m.from) {
+    if (isAuthority(me, m.from)) {
+      console.log("🔑 Device hinzugefügt → CMK Rotation für:", m.from);
+      notify({ type: "DEVICE_ADDED", peer: m.from });
+    }
+    return;
+  }
+
+  // 6) DELIVERY EVENT
   if (m.type === "delivered") {
     console.log("📬 CONTROL delivered event:", m);
     notify({ type: "DELIVERED", from: m.from, sid: m.sid, ts: m.ts });

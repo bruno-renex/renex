@@ -531,3 +531,39 @@ export async function getLastRotationTime(sessionId) {
 export async function setLastRotationTime(sessionId, ts) {
   await idbSet(`lastRotation:${sessionId}`, ts);
 }
+
+// ======================================================
+// 🔑 CMK ROTATION MAP
+// Speichert welcher CMK ab welchem rotationIndex gilt.
+// Format: [{ fromIndex: 0, cmkBytes: [...] }, { fromIndex: 50, cmkBytes: [...] }, ...]
+// rotationIndex wird NIE zurückgesetzt — CMK-Wechsel = neuer Eintrag ab Index N
+// ======================================================
+
+export async function getRotationMap(sessionId) {
+  return (await idbGet(`cmk:rotation-map:${sessionId}`)) || [];
+}
+
+export async function appendToRotationMap(sessionId, fromIndex, cmkBytes) {
+  const map = await getRotationMap(sessionId);
+  const filtered = map.filter(e => e.fromIndex < fromIndex);
+  filtered.push({ fromIndex, cmkBytes: Array.from(cmkBytes) });
+  await idbSet(`cmk:rotation-map:${sessionId}`, filtered);
+}
+
+export function findCmkForRotationIndex(rotationMap, rotationIndex) {
+  if (!rotationMap || rotationMap.length === 0) return null;
+  const applicable = rotationMap.filter(e => e.fromIndex <= rotationIndex);
+  if (applicable.length === 0) {
+    const first = rotationMap[0];
+    return first?.cmkBytes ? new Uint8Array(first.cmkBytes) : null;
+  }
+  const entry = applicable[applicable.length - 1];
+  return entry?.cmkBytes ? new Uint8Array(entry.cmkBytes) : null;
+}
+
+// Erstellt einen NEUEN CMK (zufällig), speichert ihn in IDB, gibt ihn zurück
+export async function createAndStoreCMK(peerHandle) {
+  const newCmkBytes = crypto.getRandomValues(new Uint8Array(32));
+  await importAndStoreCMKFromPeer(peerHandle, newCmkBytes);
+  return newCmkBytes;
+}

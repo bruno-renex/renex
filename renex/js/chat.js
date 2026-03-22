@@ -248,30 +248,36 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
-  // 🔑 DEVICE_ADDED: Authority soll CMK rotieren (mit Cooldown 30s)
+  // 🔑 DEVICE_ADDED: Authority sendet bestehenden CMK an alle Devices (inkl. neues)
+  // KEIN CMK-Rotate! Neues Device soll alte Nachrichten lesen können.
+  // CMK-Rotation nur bei Device-Revoke (noch nicht implementiert).
   if (event?.type === "DEVICE_ADDED" && event.peer === withUser) {
-    console.log("🔑 DEVICE_ADDED → CMK rotieren für:", event.peer);
-    const cooldownKey = `cmkRotateCooldown:${withUser}`;
-    const lastRotate = Number(sessionStorage.getItem(cooldownKey) || 0);
-    if (Date.now() - lastRotate < 30_000) {
-      console.log("⏸️ CMK Rotation Cooldown aktiv — übersprungen");
+    console.log("🔑 DEVICE_ADDED → CMK re-wrap für alle Devices:", event.peer);
+    const cooldownKey = `cmkRewrapCooldown:${withUser}`;
+    const lastRewrap = Number(sessionStorage.getItem(cooldownKey) || 0);
+    if (Date.now() - lastRewrap < 30_000) {
+      console.log("⏸️ CMK Re-wrap Cooldown aktiv — übersprungen");
       return;
     }
     sessionStorage.setItem(cooldownKey, String(Date.now()));
     if (isAuthority(getMyUser(), withUser) && e2eReady && sessionCmkBytes) {
-      rotateCMK(getMyUser(), withUser, apiFetch, fetchInboxKeys)
-        .then(async ok => {
-          if (ok) {
-            const entry = await bootConversation(getMyUser(), withUser);
-            if (entry?.skBytes) {
-              sessionKeyBytes = entry.skBytes;
-              sessionRotationIndex = entry.rotationIndex ?? sessionRotationIndex;
-              sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
-              skCache.set(`${dmSessionId(getMyUser(), withUser)}:${sessionRotationIndex}`, sessionKeyBytes);
-              console.log("🔑 CMK rotiert nach Device-Event:", { rotationIndex: sessionRotationIndex });
-            }
-          }
-        }).catch(e => console.warn("⚠️ rotateCMK nach Device-Event fehlgeschlagen", e));
+      // Bestehenden CMK für alle Devices (inkl. neues) neu wrappen und senden
+      const sid = dmSessionId(getMyUser(), withUser);
+      fetchInboxKeys(withUser).then(async inboxDevices => {
+        if (!Array.isArray(inboxDevices) || inboxDevices.length === 0) return;
+        const { wrapCMKForInboxDevices } = await import("./e2e.js");
+        const payloads = await wrapCMKForInboxDevices(inboxDevices.slice(-10), sessionCmkBytes);
+        await apiFetch("/chat/send", {
+          method: "POST",
+          body: JSON.stringify({ to: withUser, e2e: true, v: 2, type: "cmk", sid, message: "__cmk__", payloads })
+        });
+        // KV updaten damit Offline-Devices den CMK auch finden
+        await apiFetch("/e2e/cmk/store", {
+          method: "POST",
+          body: JSON.stringify({ to: withUser, payloads })
+        }).catch(() => {});
+        console.log("🔑 CMK re-wrapped für alle Devices inkl. neues:", inboxDevices.length);
+      }).catch(e => console.warn("⚠️ CMK re-wrap nach Device-Event fehlgeschlagen", e));
     }
     return;
   }

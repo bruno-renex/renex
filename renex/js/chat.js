@@ -371,6 +371,7 @@ if (event?.type === "NEW_MESSAGE") {
     } else if (event.action === "accept") {
       showAutoDeleteBanner(`✅ Auto-Delete aktiv: ${autoDeleteLabel(event.days)}`, "success");
     } else if (event.action === "decline" || event.action === "cancel") {
+      updateAutoDeleteHeaderLabel(null);
       showAutoDeleteBanner("❌ Auto-Delete abgelehnt / deaktiviert", "info");
     }
     return;

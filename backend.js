@@ -964,7 +964,7 @@ const rotationIndex = (typeof body.rotationIndex === "number" && Number.isIntege
 
 // 🛑 HARD SEND RATE LIMIT (global pro User)
 // ❗ GILT NICHT für Control-Messages
-if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate") {
+if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set") {
   const ok = await rateLimit(
     env,
     `chat_send:${me}`,
@@ -983,7 +983,7 @@ if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== 
 
 // 🛑 CONTROL MESSAGE RATE LIMIT (cmk / cmk_req / epoch_rotate)
 // Max. 10 Key-Exchange-Messages pro Minute pro User
-if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate") {
+if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set") {
   const ok = await rateLimit(
     env,
     `control_send:${me}`,
@@ -1001,7 +1001,7 @@ if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === 
 
 // 🔐 E2E Versions-Guard
 // ❗ gilt NUR für echte E2E-Nachrichten
-if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate") {
+if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set") {
   if (v !== undefined && v !== 2) {
     return json(request, { error: "Unsupported E2E version" }, 400);
   }
@@ -1056,7 +1056,7 @@ if (
 }
    
 // ✅ Nur echte Chat-Messages brauchen Payload
-if (!type || (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate")) {
+if (!type || (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set")) {
   if (!message && !(hasLegacyE2E || hasMultiE2E)) {
     return json(request, { error: "Missing message payload" }, 400);
   }
@@ -1073,11 +1073,11 @@ const msg = {
   status: "sent"
 };
 
-if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate" || type === "cmk_rotate") {
+if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set") {
   msg.message = undefined;
 }
 
-if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate" || type === "cmk_rotate") {
+if (type === "cmk" || type === "cmk_req" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set") {
   delete msg.status;
 }
 
@@ -1160,7 +1160,7 @@ if (typeof v === "number" && type !== "cmk_req" && type !== "cmk") {
   }
   
 // 💾 D1 INSERT — only real chat messages (not control)
-if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate") {
+if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set") {
   await env.RENEX_DB.prepare(
     `INSERT OR IGNORE INTO messages
        (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index)
@@ -1189,7 +1189,7 @@ if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" 
 // ======================================================
 // 🌍 CONTROL INDEX (für /chat/control)
 // ======================================================
-if (msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "epoch_rotate" || msg.type === "cmk_rotate" || msg.type === undefined) {
+if (msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "epoch_rotate" || msg.type === "cmk_rotate" || msg.type === "auto_delete_set" || msg.type === undefined) {
 
 if (!to || typeof to !== "string") {
     console.error("❌ CONTROL: invalid 'to'", to);
@@ -1203,7 +1203,7 @@ if (!to || typeof to !== "string") {
 // ======================================================
 // 🔔 UNREAD COUNTER
 // ======================================================
-if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate") {
+if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set") {
 
 const unreadKey = `unread:${other}:${me}`;
 
@@ -2428,6 +2428,88 @@ break;
 // =========================
 // USER SETTINGS (Auto-Delete)
 // =========================
+// =========================
+// AUTO-DELETE PRO CONVERSATION
+// =========================
+case "/chat/auto-delete": {
+  const session = await requireSession(request, env);
+  if (!session) return json(request, { error: "Not authenticated" }, 401);
+  const me = session.handle;
+
+  // GET: aktuelles Setting für Conversation laden
+  if (request.method === "GET") {
+    const peer = url.searchParams.get("peer");
+    if (!peer) return json(request, { error: "peer required" }, 400);
+    const convoId = [me, peer].sort().join(":");
+    const row = await env.RENEX_DB.prepare(
+      "SELECT * FROM auto_delete_settings WHERE convo_id = ?"
+    ).bind(convoId).first();
+    return json(request, row ?? { convo_id: convoId, status: "off" });
+  }
+
+  if (request.method === "POST") {
+    const body = await readJson(request);
+    if (!body) return json(request, { error: "Invalid JSON" }, 400);
+    const { peer, action, days } = body;
+    if (!peer || !action) return json(request, { error: "peer + action required" }, 400);
+
+    // Contact-Check: nur akzeptierte Kontakte
+    const contact = await env.RENEX_DB.prepare(
+      "SELECT status FROM contacts WHERE user_handle = ? AND contact_handle = ?"
+    ).bind(me, peer).first();
+    if (contact?.status !== "accepted") return json(request, { error: "Not a contact" }, 403);
+
+    const ALLOWED_DAYS = new Set([1, 7, 30, 90, 365]);
+    const convoId = [me, peer].sort().join(":");
+    const now = Date.now();
+
+    if (action === "propose") {
+      if (!ALLOWED_DAYS.has(Number(days))) return json(request, { error: "Invalid days" }, 400);
+      await env.RENEX_DB.prepare(
+        `INSERT INTO auto_delete_settings (convo_id, days, proposed_by, status, updated_at)
+         VALUES (?, ?, ?, 'pending', ?)
+         ON CONFLICT(convo_id) DO UPDATE SET days = excluded.days, proposed_by = excluded.proposed_by, status = 'pending', updated_at = excluded.updated_at`
+      ).bind(convoId, Number(days), me, now).run();
+
+      // Control-Message an Peer
+      const ctrl = { id: crypto.randomUUID(), from: me, to: peer, type: "auto_delete_set", action: "propose", days: Number(days), ts: now };
+      await pushToUserDO(env, peer, ctrl);
+      return json(request, { ok: true, status: "pending", days: Number(days) });
+    }
+
+    if (action === "accept") {
+      const row = await env.RENEX_DB.prepare(
+        "SELECT * FROM auto_delete_settings WHERE convo_id = ?"
+      ).bind(convoId).first();
+      if (!row || row.status !== "pending") return json(request, { error: "No pending proposal" }, 400);
+      if (row.proposed_by === me) return json(request, { error: "Cannot accept own proposal" }, 400);
+
+      await env.RENEX_DB.prepare(
+        "UPDATE auto_delete_settings SET status = 'active', updated_at = ? WHERE convo_id = ?"
+      ).bind(now, convoId).run();
+
+      // Control-Message an Peer
+      const ctrl = { id: crypto.randomUUID(), from: me, to: peer, type: "auto_delete_set", action: "accept", days: row.days, ts: now };
+      await pushToUserDO(env, peer, ctrl);
+      return json(request, { ok: true, status: "active", days: row.days });
+    }
+
+    if (action === "decline" || action === "cancel") {
+      await env.RENEX_DB.prepare(
+        "DELETE FROM auto_delete_settings WHERE convo_id = ?"
+      ).bind(convoId).run();
+
+      // Control-Message an Peer
+      const ctrl = { id: crypto.randomUUID(), from: me, to: peer, type: "auto_delete_set", action, ts: now };
+      await pushToUserDO(env, peer, ctrl);
+      return json(request, { ok: true, status: "off" });
+    }
+
+    return json(request, { error: "Invalid action" }, 400);
+  }
+  break;
+}
+
 case "/settings":
 
 if (request.method === "GET") {
@@ -2511,6 +2593,27 @@ async scheduled(event, env) {
         }
       } catch (e) {
         console.warn("Auto-Delete Fehler für Key:", key.name, e.message);
+      }
+    }
+
+    // 2️⃣ Conversation-Level Auto-Delete (beide haben akzeptiert)
+    const activeConvos = await env.RENEX_DB.prepare(
+      "SELECT convo_id, days FROM auto_delete_settings WHERE status = 'active'"
+    ).all();
+
+    for (const row of (activeConvos.results ?? [])) {
+      try {
+        const cutoffTs = Date.now() - row.days * 86400_000;
+        const result = await env.RENEX_DB.prepare(
+          "DELETE FROM messages WHERE convo_id = ? AND ts < ? AND type IS NULL"
+        ).bind(row.convo_id, cutoffTs).run();
+        const count = result.meta?.changes ?? 0;
+        if (count > 0) {
+          console.log(`🗑️ Auto-Delete Convo: ${count} Nachrichten gelöscht für ${row.convo_id} (>${row.days}d)`);
+          deleted += count;
+        }
+      } catch (e) {
+        console.warn("Auto-Delete Convo Fehler:", row.convo_id, e.message);
       }
     }
 

@@ -363,6 +363,19 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
+  // 🗑️ AUTO-DELETE: Vorschlag / Akzeptiert / Abgelehnt
+  if (event?.type === "AUTO_DELETE_SET" && event.peer === withUser) {
+    console.log("🗑️ AUTO_DELETE_SET:", event.action, "days:", event.days);
+    if (event.action === "propose") {
+      showAutoDeleteProposal(event.days);
+    } else if (event.action === "accept") {
+      showAutoDeleteBanner(`✅ Auto-Delete aktiv: ${autoDeleteLabel(event.days)}`, "success");
+    } else if (event.action === "decline" || event.action === "cancel") {
+      showAutoDeleteBanner("❌ Auto-Delete abgelehnt / deaktiviert", "info");
+    }
+    return;
+  }
+
     if (e.data?.type !== "CMK_READY") return;
     if (e.data.peer !== withUser) return;
 
@@ -1143,6 +1156,123 @@ function isUserAtBottom() {
   return distance <= threshold;
 }
 
+// ======================================================
+// 🗑️ AUTO-DELETE UI
+// ======================================================
+function autoDeleteLabel(days) {
+  if (!days) return "Aus";
+  const map = { 1: "1 Tag", 7: "7 Tage", 30: "30 Tage", 90: "90 Tage", 365: "1 Jahr" };
+  return map[days] ?? `${days} Tage`;
+}
+
+function showAutoDeleteBanner(text, type = "info") {
+  let banner = document.getElementById("auto-delete-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "auto-delete-banner";
+    banner.style.cssText = "position:sticky;top:0;z-index:10;padding:8px 16px;font-size:13px;text-align:center;transition:opacity 0.3s;";
+    document.getElementById("messages")?.prepend(banner);
+  }
+  banner.style.background = type === "success" ? "var(--accent)" : "var(--bg-panel)";
+  banner.style.color = type === "success" ? "#fff" : "var(--text-secondary)";
+  banner.textContent = text;
+  banner.style.display = "block";
+  setTimeout(() => { banner.style.opacity = "0"; setTimeout(() => banner.remove(), 300); }, 4000);
+}
+
+function showAutoDeleteProposal(days) {
+  let bar = document.getElementById("auto-delete-proposal");
+  if (bar) bar.remove();
+  bar = document.createElement("div");
+  bar.id = "auto-delete-proposal";
+  bar.style.cssText = "position:sticky;top:0;z-index:10;padding:10px 16px;background:var(--bg-panel);border-bottom:1px solid var(--border-panel);display:flex;align-items:center;gap:10px;font-size:13px;";
+  bar.innerHTML = `
+    <span style="flex:1">🗑️ <strong>${withUser}</strong> schlägt Auto-Delete vor: <strong>${autoDeleteLabel(days)}</strong></span>
+    <button id="ad-accept" style="padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Akzeptieren</button>
+    <button id="ad-decline" style="padding:4px 12px;background:transparent;color:var(--text-secondary);border:1px solid var(--border-panel);border-radius:6px;cursor:pointer;">Ablehnen</button>
+  `;
+  document.getElementById("messages")?.prepend(bar);
+
+  bar.querySelector("#ad-accept").addEventListener("click", async () => {
+    try {
+      await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action: "accept", days }) });
+      bar.remove();
+      showAutoDeleteBanner(`✅ Auto-Delete aktiv: ${autoDeleteLabel(days)}`, "success");
+      updateAutoDeleteHeaderLabel(days);
+    } catch (e) { console.warn("Auto-Delete accept fehlgeschlagen", e); }
+  });
+
+  bar.querySelector("#ad-decline").addEventListener("click", async () => {
+    try {
+      await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action: "decline" }) });
+      bar.remove();
+      showAutoDeleteBanner("❌ Auto-Delete abgelehnt", "info");
+    } catch (e) { console.warn("Auto-Delete decline fehlgeschlagen", e); }
+  });
+}
+
+function updateAutoDeleteHeaderLabel(days) {
+  let lbl = document.getElementById("auto-delete-header-label");
+  if (!lbl) {
+    lbl = document.createElement("span");
+    lbl.id = "auto-delete-header-label";
+    lbl.style.cssText = "font-size:11px;color:var(--text-secondary);margin-left:6px;cursor:pointer;";
+    lbl.title = "Auto-Delete Einstellung ändern";
+    document.getElementById("chat-with-name")?.after(lbl);
+  }
+  lbl.textContent = days ? `🗑️ ${autoDeleteLabel(days)}` : "";
+}
+
+async function initAutoDeleteUI() {
+  try {
+    const s = await apiFetch(`/chat/auto-delete?peer=${encodeURIComponent(withUser)}`);
+    if (s?.status === "active") updateAutoDeleteHeaderLabel(s.days);
+    if (s?.status === "pending" && s?.proposed_by !== getMyUser()) showAutoDeleteProposal(s.days);
+
+    // Klick auf Label → neuen Vorschlag machen oder deaktivieren
+    document.getElementById("auto-delete-header-label")?.addEventListener("click", () => showAutoDeleteMenu());
+  } catch {}
+}
+
+function showAutoDeleteMenu() {
+  const existing = document.getElementById("auto-delete-menu");
+  if (existing) { existing.remove(); return; }
+  const menu = document.createElement("div");
+  menu.id = "auto-delete-menu";
+  menu.style.cssText = "position:absolute;top:50px;left:50%;transform:translateX(-50%);z-index:50;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);padding:8px 0;min-width:160px;";
+  const opts = [
+    { label: "Aus", days: null, action: "cancel" },
+    { label: "1 Tag", days: 1 },
+    { label: "7 Tage", days: 7 },
+    { label: "30 Tage", days: 30 },
+    { label: "90 Tage", days: 90 },
+    { label: "1 Jahr", days: 365 },
+  ];
+  opts.forEach(opt => {
+    const item = document.createElement("div");
+    item.textContent = opt.label;
+    item.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;";
+    item.onmouseenter = () => item.style.background = "var(--bg-hover)";
+    item.onmouseleave = () => item.style.background = "";
+    item.addEventListener("click", async () => {
+      menu.remove();
+      try {
+        const action = opt.action ?? "propose";
+        await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action, days: opt.days }) });
+        if (action === "cancel") {
+          updateAutoDeleteHeaderLabel(null);
+          showAutoDeleteBanner("🗑️ Auto-Delete deaktiviert", "info");
+        } else {
+          showAutoDeleteBanner(`📤 Auto-Delete Vorschlag gesendet: ${autoDeleteLabel(opt.days)}`, "info");
+        }
+      } catch (e) { console.warn("Auto-Delete Vorschlag fehlgeschlagen", e); }
+    });
+    menu.appendChild(item);
+  });
+  document.getElementById("chat-header")?.appendChild(menu);
+  setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 10);
+}
+
 function scrollToBottom() {
   if (!messagesEl) return;
   requestAnimationFrame(() => {
@@ -1693,6 +1823,7 @@ if (e2eReady) {
   await flushDeferredQueue();
   await flushDeferredInboundMessages();
   startTimeBasedRotation();
+  initAutoDeleteUI().catch(() => {});
 
 } else {
 

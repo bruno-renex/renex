@@ -40,3 +40,15 @@ CREATE TABLE IF NOT EXISTS contacts (
 
 CREATE INDEX IF NOT EXISTS idx_contacts_user_status
   ON contacts(user_handle, status);
+
+-- Auto-Delete Settings (pro Conversation, beide müssen zustimmen)
+CREATE TABLE IF NOT EXISTS auto_delete_settings (
+  convo_id     TEXT PRIMARY KEY,
+  days         INTEGER NOT NULL,
+  proposed_by  TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending',  -- pending, active
+  updated_at   INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ads_status
+  ON auto_delete_settings(status);

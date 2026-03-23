@@ -157,7 +157,14 @@ async function processControlMessage(m) {
     return;
   }
 
-  // 7) DELIVERY EVENT
+  // 7) AUTO-DELETE PROPOSAL/ACCEPT/DECLINE
+  if (m.type === "auto_delete_set" && m.from && m.action) {
+    console.log("🗑️ AUTO-DELETE event:", m.action, "von", m.from, "days:", m.days);
+    notify({ type: "AUTO_DELETE_SET", peer: m.from, action: m.action, days: m.days ?? null });
+    return;
+  }
+
+  // 8) DELIVERY EVENT
   if (m.type === "delivered") {
     console.log("📬 CONTROL delivered event:", m);
     notify({ type: "DELIVERED", from: m.from, sid: m.sid, ts: m.ts });

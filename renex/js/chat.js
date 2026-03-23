@@ -876,7 +876,7 @@ console.log("🔄 Chat UI State reset");
   if (sendBtn.dataset.bound === "1") return;
 sendBtn.dataset.bound = "1";
 
-  titleEl.textContent = lang.chatWith(withUser);
+  titleEl.textContent = withUser;
 if (firstLoad) {
   messagesEl.innerHTML = "";
 }

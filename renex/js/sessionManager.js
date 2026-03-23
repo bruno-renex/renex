@@ -421,6 +421,15 @@ export async function fallbackBootstrap(me, peer, fetchInboxKeysFn, apiFetchFn) 
     const limitedDevices = inboxDevices.slice(-MAX_DEVICES);
     const payloads = await wrapCMKForInboxDevices(limitedDevices, cmk);
 
+    // 🔒 Race-Condition-Guard: Echter CMK könnte während des async Fallbacks
+    // via receiveCMK() angekommen sein → Fallback verwerfen, echter CMK hat Vorrang.
+    // onceKey bleibt gesetzt: verhindert weitere Fallback-Versuche in dieser Session.
+    const existing = sessionCache.get(sid);
+    if (existing?.ready) {
+      console.log("⏭️ Fallback Bootstrap: echter CMK bereits im Cache — Fallback verworfen");
+      return false;
+    }
+
     // CMK persistent in KV für Authority speichern
     await apiFetchFn("/e2e/cmk/store", {
       method: "POST",
@@ -431,6 +440,13 @@ export async function fallbackBootstrap(me, peer, fetchInboxKeysFn, apiFetchFn) 
     // Cache aktualisieren (rotation-aware)
     const rotationIndex = await getRotationIndex(sid);
     const skBytes = await deriveSessionKeyBytesForRotation(cmk, sid, rotationIndex);
+
+    // Letzter Check vor Cache-Schreiben (zweite async-Lücke nach KV-Store)
+    if (sessionCache.get(sid)?.ready) {
+      console.log("⏭️ Fallback Bootstrap: echter CMK nach KV-Store angekommen — Fallback verworfen");
+      return false;
+    }
+
     sessionCache.set(sid, { ready: true, cmkBytes: cmk, skBytes, rotationIndex });
 
     console.log("✅ Fallback Bootstrap abgeschlossen:", peer);

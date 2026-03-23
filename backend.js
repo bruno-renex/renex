@@ -966,16 +966,13 @@ if (v === 2 && e2e === true && type !== "cmk") {
   }
 }
 
-// 🔒 Darf nur an ACCEPTED Kontakte senden
-// ❗ GILT NICHT für Control-Messages
-if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate") {
-  const isAllowed = await isAcceptedContact(env, me, to);
-
-  if (!isAllowed) {
-    return json(request, {
-      error: "Recipient not accepted"
-    }, 403);
-  }
+// 🔒 Darf nur an ACCEPTED Kontakte senden — gilt für ALLE Message-Typen inkl. Control-Messages
+// (verhindert CMK-Flooding / E2E-Manipulation gegen Nicht-Kontakte)
+const isAllowed = await isAcceptedContact(env, me, to);
+if (!isAllowed) {
+  return json(request, {
+    error: "Recipient not accepted"
+  }, 403);
 }
 
 if (!other) {
@@ -1425,8 +1422,15 @@ const { handle } = body;
 
   const h = (handle || "").toLowerCase();
 
-  if (!/^[a-z0-9_]+$/.test(h)) {
+  if (!/^[a-z0-9_]+$/.test(h) || h.length < 3 || h.length > 32) {
     return json(request, { error: "Invalid handle" }, 400);
+  }
+
+  // 🤖 Turnstile Bot-Schutz — muss vor jeder weiteren Verarbeitung geprüft werden
+  const ip = request.headers.get("CF-Connecting-IP") || "";
+  const turnstileOk = await verifyTurnstile(body.turnstile_token, ip, env);
+  if (!turnstileOk) {
+    return json(request, { error: "Bot check failed. Please try again." }, 403);
   }
 
   // 🚫 Handle-Sperre prüfen (gelöschte Accounts)

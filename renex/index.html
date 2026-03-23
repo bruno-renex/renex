@@ -111,21 +111,14 @@ applyI18n();
 // 🔐 SICHERER AUTO-LOGIN CHECK
 // =========================================
 async function checkExistingSession() {
-  const token = localStorage.getItem("session_token");
-  if (!token) return;
-
   try {
-    // Backend entscheidet
+    // Cookie wird automatisch mitgeschickt — kein Token in localStorage
     await apiFetch("/users/me");
-
     // ✅ Session gültig → Inbox
     window.location.replace("./inbox.html");
   } catch (e) {
-    // ❌ Session ungültig / abgelaufen
-    console.warn("Session ungültig – Login erforderlich");
-
-    localStorage.removeItem("session_token");
-localStorage.removeItem("my_user");
+    // ❌ Kein Cookie / Session abgelaufen → Login-Seite bleiben
+    localStorage.removeItem("my_user");
   }
 }
 

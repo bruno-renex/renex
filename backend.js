@@ -1640,10 +1640,41 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
   if (!ok) return json(request, { error: "Too many requests" }, 429);
       
   const stored = await env.RENEX_KV.get(`webauthn:${handle}`);
+
+  // 🔐 Login-Challenge erzeugen (immer, unabhängig ob User existiert)
+  const challengeB64 = base64url(
+    crypto.getRandomValues(new Uint8Array(32))
+  );
+
   if (!stored) {
-    return json(request, { error: "No passkey registered" }, 404);
+    // User existiert nicht — fake Challenge zurückgeben, um User Enumeration zu verhindern.
+    // Wir speichern die Challenge als "fake", damit login/finish generisch ablehnen kann.
+    const fakeCredentialId = base64url(crypto.getRandomValues(new Uint8Array(32)));
+    await env.RENEX_KV.put(
+      `challenge:login:${handle}`,
+      JSON.stringify({
+        challenge: challengeB64,
+        credential_id: fakeCredentialId,
+        ts: Date.now(),
+        fake: true,
+      }),
+      { expirationTtl: 300 }
+    );
+    return json(request, {
+      publicKey: {
+        challenge: challengeB64,
+        rpId: "app.renex.id",
+        allowCredentials: [{
+          type: "public-key",
+          id: fakeCredentialId,
+          transports: ["internal"]
+        }],
+        userVerification: "required",
+        timeout: 60000,
+      },
+    });
   }
-      
+
   let parsed;
   try {
   parsed = JSON.parse(stored);
@@ -1654,11 +1685,6 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
   if (!credential_id || typeof credential_id !== "string") {
     return json(request, { error: "Invalid credential" }, 500);
   }
-
-  // 🔐 Login-Challenge erzeugen
-  const challengeB64 = base64url(
-    crypto.getRandomValues(new Uint8Array(32))
-  );
 
   // 💾 Login-Challenge speichern (5 Minuten)
   await env.RENEX_KV.put(
@@ -1675,13 +1701,13 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
       publicKey: {
         challenge: challengeB64,
         rpId: "app.renex.id",
-    
+
         allowCredentials: [{
           type: "public-key",
           id: credential_id,   // ✅ STRING!
           transports: ["internal"]
         }],
-    
+
         userVerification: "required",
         timeout: 60000,
       },
@@ -1727,6 +1753,12 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
   if (!challengeObj.ts || Date.now() - challengeObj.ts > 5 * 60 * 1000) {
     await env.RENEX_KV.delete(`challenge:login:${handle}`);
     return json(request, { error: "Login challenge expired" }, 400);
+  }
+
+  // 🔒 Fake-Challenge: User existierte nicht — generisch ablehnen ohne Info zu leaken
+  if (challengeObj.fake === true) {
+    await env.RENEX_KV.delete(`challenge:login:${handle}`);
+    return json(request, { error: "Authentication failed" }, 401);
   }
 
   // 📦 clientDataJSON
@@ -1806,7 +1838,7 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
   // 🔁 Stored Credential
   const storedRaw = await env.RENEX_KV.get(`webauthn:${handle}`);
-  if (!storedRaw) return json(request, { error: "No passkey registered" }, 403);
+  if (!storedRaw) return json(request, { error: "Authentication failed" }, 401);
 
   const storedObj = JSON.parse(storedRaw);
   const storedSignCount = Number(storedObj.signCount || 0);
@@ -1878,7 +1910,7 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
   }
 
   if (!signatureValid) {
-    return json(request, { error: "Signature verification failed" }, 403);
+    return json(request, { error: "Authentication failed" }, 401);
   }
 
   // 🧹 Challenge löschen (JETZT!)

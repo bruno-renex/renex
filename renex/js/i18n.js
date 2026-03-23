@@ -19,10 +19,32 @@ export function setLang(code) {
 const lang = LANGS[getLang()] ?? de;
 export default lang;
 
+// ── Sicherer HTML-Setter (nur erlaubte Inline-Tags, keine Attribute) ──
+// Verhindert XSS falls Übersetzungs-Strings je aus externen Quellen kommen.
+const SAFE_TAGS = new Set(["BR", "STRONG", "EM", "B", "I", "SPAN"]);
+
+function setSafeHtml(target, htmlString) {
+  const doc = new DOMParser().parseFromString(htmlString, "text/html");
+  target.textContent = "";
+  function importNodes(src, dest) {
+    src.childNodes.forEach(node => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        dest.appendChild(document.createTextNode(node.textContent));
+      } else if (node.nodeType === Node.ELEMENT_NODE && SAFE_TAGS.has(node.tagName)) {
+        const el = document.createElement(node.tagName);
+        importNodes(node, el);
+        dest.appendChild(el);
+      }
+      // Alle anderen Nodes (script, img, ...) werden stillschweigend verworfen
+    });
+  }
+  importNodes(doc.body, target);
+}
+
 // ── DOM-Elemente mit data-i18n automatisch befüllen ───
 //
 //   data-i18n="key"              → el.textContent = lang[key]
-//   data-i18n-html="key"        → el.innerHTML   = lang[key]  (für <br> etc.)
+//   data-i18n-html="key"        → setSafeHtml()   (für <br> etc.)
 //   data-i18n-placeholder="key" → el.placeholder = lang[key]
 //   data-i18n-title="key"       → el.title       = lang[key]
 //
@@ -33,7 +55,7 @@ export function applyI18n() {
   });
   document.querySelectorAll("[data-i18n-html]").forEach(el => {
     const val = lang[el.dataset.i18nHtml];
-    if (typeof val === "string") el.innerHTML = val;
+    if (typeof val === "string") setSafeHtml(el, val);
   });
   document.querySelectorAll("[data-i18n-placeholder]").forEach(el => {
     const val = lang[el.dataset.i18nPlaceholder];

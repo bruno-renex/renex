@@ -16,6 +16,7 @@ export default {
   deleteAccount:            "Account löschen",
   logout:                   "Logout",
   langToggleLabel:          "Sprache",
+  settings:                 "Einstellungen",
 
   // ── Delete-Account-Dialog ───────────────────────────
   deleteAccountDialogTitle:   "Account löschen",

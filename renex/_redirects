@@ -1,3 +1,5 @@
-/chat/*    /chat/index.html   200
-/js/*      /js/:splat         200
-/*         /index.html        200
+/chat/*         /chat/index.html    200
+/js/*           /js/:splat          200
+/settings.html  /settings.html      200
+/inbox.html     /inbox.html         200
+/*              /index.html         200

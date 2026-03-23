@@ -16,6 +16,7 @@ export default {
   deleteAccount:            "Delete account",
   logout:                   "Logout",
   langToggleLabel:          "Language",
+  settings:                 "Settings",
 
   // ── Delete-Account-Dialog ───────────────────────────
   deleteAccountDialogTitle:   "Delete account",

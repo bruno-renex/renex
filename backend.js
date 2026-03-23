@@ -623,6 +623,20 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
     console.warn("device_added push fehlgeschlagen (non-fatal):", e.message);
   }
 
+  // 🔑 device_added → eigene Devices benachrichtigen
+  // Damit das bestehende Device den CMK für das neue Device in KV ablegt
+  try {
+    await pushToUserDO(env, handle, {
+      id: crypto.randomUUID(),
+      type: "device_added",
+      from: handle,
+      to: handle,
+      ts: Date.now()
+    });
+  } catch (e) {
+    console.warn("device_added self-push fehlgeschlagen (non-fatal):", e.message);
+  }
+
   return json(request, { ok: true });
 }
 
@@ -692,7 +706,7 @@ if (request.method === "POST") {
   if (!to || typeof to !== "string" || !/^[a-z0-9_]+$/.test(to)) {
     return json(request, { error: "Invalid to" }, 400);
   }
-  if (!Array.isArray(payloads) || payloads.length === 0 || payloads.length > 10) {
+  if (!Array.isArray(payloads) || payloads.length === 0 || payloads.length > 20) {
     return json(request, { error: "Invalid payloads" }, 400);
   }
 

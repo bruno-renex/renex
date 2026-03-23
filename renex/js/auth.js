@@ -35,10 +35,18 @@ export async function registerWithPasskey(handle) {
   handle = handle.toLowerCase();
   console.log("📝 Register START:", handle);
 
+  // 🤖 Turnstile Token holen
+  const turnstileToken = window.turnstileToken;
+  window.turnstileToken = null; // einmalig verwenden
+  if (!turnstileToken) {
+    alert("Sicherheitscheck läuft noch – bitte einen Moment warten und erneut versuchen.");
+    return;
+  }
+
   const startRes = await fetch(`${API}/auth/register/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ handle })
+    body: JSON.stringify({ handle, turnstile_token: turnstileToken })
   });
 
   const startData = await startRes.json();

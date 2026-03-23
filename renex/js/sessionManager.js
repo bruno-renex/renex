@@ -79,15 +79,25 @@ export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn)
     if (existingLocalCmk) {
       const inboxDevices = await fetchInboxKeysFn(peer);
       if (Array.isArray(inboxDevices) && inboxDevices.length > 0) {
-        const payloads = await wrapCMKForInboxDevices(inboxDevices.slice(-10), existingLocalCmk);
+        const peerPayloads = await wrapCMKForInboxDevices(inboxDevices.slice(-10), existingLocalCmk);
         await apiFetchFn("/chat/send", {
           method: "POST",
-          body: JSON.stringify({ to: peer, e2e: true, v: 2, type: "cmk", sid, message: "__cmk__", payloads })
+          body: JSON.stringify({ to: peer, e2e: true, v: 2, type: "cmk", sid, message: "__cmk__", payloads: peerPayloads })
         });
+        // 🔑 Auch für eigene Devices wrappen → neues Authority-Device kann CMK aus KV holen
+        let kvPayloads = peerPayloads;
+        try {
+          const myInboxDevices = await fetchInboxKeysFn(me);
+          if (Array.isArray(myInboxDevices) && myInboxDevices.length > 0) {
+            const myPayloads = await wrapCMKForInboxDevices(myInboxDevices.slice(-10), existingLocalCmk);
+            kvPayloads = [...peerPayloads, ...myPayloads];
+            console.log("🔑 CMK auch für eigene Devices gewrappt:", myInboxDevices.length);
+          }
+        } catch (e) { console.warn("⚠️ CMK self-wrap fehlgeschlagen (non-fatal)", e); }
         try {
           await apiFetchFn("/e2e/cmk/store", {
             method: "POST",
-            body: JSON.stringify({ to: peer, payloads })
+            body: JSON.stringify({ to: peer, payloads: kvPayloads })
           });
         } catch {}
         const rotationIndex = await getRotationIndex(sid);
@@ -98,10 +108,19 @@ export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn)
       return;
     }
 
-    // 🔑 Kein CMK in IDB: Hat Non-Authority einen Fallback-CMK in KV hinterlegt?
+    // 🔑 Kein CMK in IDB: Hat ein anderes Device den CMK in KV hinterlegt?
+    // Retry-Loop: bestehendes Device braucht ~2s für device_added_self → re-wrap → KV
     try {
       const myDeviceId = getDeviceId();
-      const res = await apiFetchFn(`/e2e/cmk/fetch?from=${peer}&deviceId=${myDeviceId}`);
+      let res = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (attempt > 0) {
+          console.log(`⏳ Authority: Warte auf CMK in KV (Versuch ${attempt}/3)...`);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        res = await apiFetchFn(`/e2e/cmk/fetch?from=${peer}&deviceId=${myDeviceId}`);
+        if (res?.payload) break;
+      }
       if (res?.payload) {
         const { fromDeviceId, ivB64, ctB64 } = res.payload;
 
@@ -150,8 +169,8 @@ export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn)
     const MAX_DEVICES = 10;
     const limitedDevices = inboxDevices.slice(-MAX_DEVICES);
 
-    // 🔐 CMK für alle Geräte gleichzeitig verpacken
-    const payloads = await wrapCMKForInboxDevices(limitedDevices, cmk);
+    // 🔐 CMK für alle Peer-Geräte verpacken
+    const peerPayloads = await wrapCMKForInboxDevices(limitedDevices, cmk);
 
     console.log("📦 CMK payloads prepared for devices:", limitedDevices.map(d => d.deviceId), `(${inboxDevices.length} total, capped at ${MAX_DEVICES})`);
 
@@ -165,17 +184,28 @@ export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn)
         type: "cmk",
         sid,
         message: "__cmk__",
-        payloads
+        payloads: peerPayloads
       })
     });
+
+    // 🔑 Auch für eigene Devices wrappen → neues Authority-Device kann CMK aus KV holen
+    let kvPayloads = peerPayloads;
+    try {
+      const myInboxDevices = await fetchInboxKeysFn(me);
+      if (Array.isArray(myInboxDevices) && myInboxDevices.length > 0) {
+        const myPayloads = await wrapCMKForInboxDevices(myInboxDevices.slice(-10), cmk);
+        kvPayloads = [...peerPayloads, ...myPayloads];
+        console.log("🔑 CMK auch für eigene Devices gewrappt:", myInboxDevices.length);
+      }
+    } catch (e) { console.warn("⚠️ CMK self-wrap fehlgeschlagen (non-fatal)", e); }
 
     // 💾 CMK persistent in KV speichern (Option C: Offline Recovery)
     try {
       await apiFetchFn("/e2e/cmk/store", {
         method: "POST",
-        body: JSON.stringify({ to: peer, payloads })
+        body: JSON.stringify({ to: peer, payloads: kvPayloads })
       });
-      console.log("💾 CMK in KV gespeichert für", peer);
+      console.log("💾 CMK in KV gespeichert für", peer, "(peer +", kvPayloads.length - peerPayloads.length, "own devices)");
     } catch (e) {
       console.warn("⚠️ CMK KV-Store fehlgeschlagen (non-fatal)", e);
     }

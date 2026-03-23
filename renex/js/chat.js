@@ -266,19 +266,64 @@ if (event?.type === "NEW_MESSAGE") {
       fetchInboxKeys(withUser).then(async inboxDevices => {
         if (!Array.isArray(inboxDevices) || inboxDevices.length === 0) return;
         const { wrapCMKForInboxDevices } = await import("./e2e.js");
-        const payloads = await wrapCMKForInboxDevices(inboxDevices.slice(-10), sessionCmkBytes);
+        const peerPayloads = await wrapCMKForInboxDevices(inboxDevices.slice(-10), sessionCmkBytes);
         await apiFetch("/chat/send", {
           method: "POST",
-          body: JSON.stringify({ to: withUser, e2e: true, v: 2, type: "cmk", sid, message: "__cmk__", payloads })
+          body: JSON.stringify({ to: withUser, e2e: true, v: 2, type: "cmk", sid, message: "__cmk__", payloads: peerPayloads })
         });
-        // KV updaten damit Offline-Devices den CMK auch finden
+        // KV updaten: peer + eigene Devices
+        let kvPayloads = peerPayloads;
+        try {
+          const myDevices = await fetchInboxKeys(getMyUser());
+          if (Array.isArray(myDevices) && myDevices.length > 0) {
+            const myPayloads = await wrapCMKForInboxDevices(myDevices.slice(-10), sessionCmkBytes);
+            kvPayloads = [...peerPayloads, ...myPayloads];
+          }
+        } catch {}
         await apiFetch("/e2e/cmk/store", {
           method: "POST",
-          body: JSON.stringify({ to: withUser, payloads })
+          body: JSON.stringify({ to: withUser, payloads: kvPayloads })
         }).catch(() => {});
-        console.log("🔑 CMK re-wrapped für alle Devices inkl. neues:", inboxDevices.length);
+        console.log("🔑 CMK re-wrapped für Peer-Devices:", inboxDevices.length, "+ eigene Devices:", kvPayloads.length - peerPayloads.length);
       }).catch(e => console.warn("⚠️ CMK re-wrap nach Device-Event fehlgeschlagen", e));
     }
+    return;
+  }
+
+  // 🔑 DEVICE_ADDED_SELF: Eigenes neues Device → CMK für aktuelles Gespräch in KV ablegen
+  if (event?.type === "DEVICE_ADDED_SELF") {
+    if (!isAuthority(getMyUser(), withUser) || !e2eReady || !sessionCmkBytes) return;
+    console.log("🔑 DEVICE_ADDED_SELF → CMK für eigene neue Devices re-wrappen:", withUser);
+    const cooldownKey = `cmkSelfRewrapCooldown:${withUser}`;
+    const lastRewrap = Number(sessionStorage.getItem(cooldownKey) || 0);
+    if (Date.now() - lastRewrap < 30_000) {
+      console.log("⏸️ CMK Self-Re-wrap Cooldown aktiv — übersprungen");
+      return;
+    }
+    sessionStorage.setItem(cooldownKey, String(Date.now()));
+    const sid = dmSessionId(getMyUser(), withUser);
+    Promise.all([fetchInboxKeys(withUser), fetchInboxKeys(getMyUser())]).then(async ([peerDevices, myDevices]) => {
+      const { wrapCMKForInboxDevices } = await import("./e2e.js");
+      const peerPayloads = Array.isArray(peerDevices) && peerDevices.length > 0
+        ? await wrapCMKForInboxDevices(peerDevices.slice(-10), sessionCmkBytes)
+        : [];
+      const myPayloads = Array.isArray(myDevices) && myDevices.length > 0
+        ? await wrapCMKForInboxDevices(myDevices.slice(-10), sessionCmkBytes)
+        : [];
+      const kvPayloads = [...peerPayloads, ...myPayloads];
+      if (kvPayloads.length === 0) return;
+      if (peerPayloads.length > 0) {
+        await apiFetch("/chat/send", {
+          method: "POST",
+          body: JSON.stringify({ to: withUser, e2e: true, v: 2, type: "cmk", sid, message: "__cmk__", payloads: peerPayloads })
+        });
+      }
+      await apiFetch("/e2e/cmk/store", {
+        method: "POST",
+        body: JSON.stringify({ to: withUser, payloads: kvPayloads })
+      }).catch(() => {});
+      console.log("🔑 CMK self-re-wrapped: Peer-Devices:", peerPayloads.length, "/ eigene Devices:", myPayloads.length);
+    }).catch(e => console.warn("⚠️ CMK self-re-wrap fehlgeschlagen", e));
     return;
   }
 

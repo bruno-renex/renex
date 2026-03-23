@@ -63,11 +63,21 @@ async function processControlMessage(m) {
 
   // 2) CMK: importieren
   if (m.type === "cmk" && Array.isArray(m.payloads)) {
+    // Fallback: Sender-Key ggf. frisch aus Inbox laden (neues Device noch nicht im Cache)
+    const findSenderJwkWithFallback = async (handle, deviceId) => {
+      const cached = await findSenderDeviceJwk(handle, deviceId);
+      if (cached) return cached;
+      try {
+        const devices = await fetchInboxKeys(handle);
+        const d = (devices || []).find(d => d.deviceId === deviceId);
+        return d?.jwk || null;
+      } catch { return null; }
+    };
     const ok = await receiveCMK({
       from: m.from,
       myDeviceId: getDeviceId(),
       payloads: m.payloads,
-      findSenderDeviceJwk
+      findSenderDeviceJwk: findSenderJwkWithFallback
     });
 
     console.log("✅ receiveCMK result:", ok);
@@ -99,8 +109,13 @@ async function processControlMessage(m) {
   // 5) DEVICE ADDED: Authority soll CMK rotieren
   if (m.type === "device_added" && m.from) {
     if (isAuthority(me, m.from)) {
-      console.log("🔑 Device hinzugefügt → CMK Rotation für:", m.from);
+      // Peer-Device hinzugefügt → als Authority CMK re-wrappen
+      console.log("🔑 Peer-Device hinzugefügt → CMK Re-wrap für:", m.from);
       notify({ type: "DEVICE_ADDED", peer: m.from });
+    } else if (m.from === me) {
+      // Eigenes neues Device hinzugefügt → CMK für alle Authority-Gespräche re-wrappen
+      console.log("🔑 Eigenes neues Device hinzugefügt → DEVICE_ADDED_SELF");
+      notify({ type: "DEVICE_ADDED_SELF" });
     }
     return;
   }

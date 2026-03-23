@@ -136,12 +136,13 @@ textarea::placeholder {
 <div id="messages"></div>
 
 <div id="new-indicator">
-  <span id="unread-count">0</span> neue Nachrichten ↓
+  <span id="unread-count">0</span><span id="new-messages-suffix" data-i18n="newMessagesSuffix"> neue Nachrichten ↓</span>
 </div>
 
 <textarea
   id="msg-input"
   placeholder="Nachricht…"
+  data-i18n-placeholder="messagePlaceholder"
   rows="2"
   style="width:100%; resize:none;"
 ></textarea>
@@ -149,10 +150,14 @@ textarea::placeholder {
 <!-- 👇 DAS HINZUFÜGEN -->
 <div id="length-warning"></div>
 
-<button id="send-btn">Senden</button>
+<button id="send-btn" data-i18n="sendBtn">Senden</button>
 
 <script type="module" src="/js/controlPoller.js"></script>
 <script type="module" src="/js/chat.js?v=99"></script>
+<script type="module">
+  import { applyI18n } from "/js/i18n.js";
+  applyI18n();
+</script>
 
 </body>
 </html>

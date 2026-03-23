@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>RENEX – Inbox</title>
+  <!-- i18n: Seitentitel wird per JS gesetzt -->
 
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/colors.css" />
@@ -280,11 +281,19 @@
       <div id="dropdown-handle" class="dropdown-item has-sub">
         <span id="dropdown-handle-label"></span>
         <div id="account-submenu" class="dropdown">
-          <div id="dropdown-delete" class="dropdown-item logout">Account löschen</div>
+          <div id="dropdown-delete" class="dropdown-item logout" data-i18n="deleteAccount">Account löschen</div>
         </div>
       </div>
       <div class="dropdown-divider"></div>
-      <div id="dropdown-logout" class="dropdown-item logout">
+      <div id="dropdown-lang" class="dropdown-item has-sub">
+        <span data-i18n="langToggleLabel">Sprache</span>
+        <div id="lang-submenu" class="dropdown" style="top:0;right:calc(100% + 6px);position:absolute;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:100px;padding:8px 0;display:none;z-index:102;">
+          <div id="lang-opt-de" class="dropdown-item">DE – Deutsch</div>
+          <div id="lang-opt-en" class="dropdown-item">EN – English</div>
+        </div>
+      </div>
+      <div class="dropdown-divider"></div>
+      <div id="dropdown-logout" class="dropdown-item logout" data-i18n="logout">
         Logout
       </div>
     </div>
@@ -293,34 +302,35 @@
 
   <hr />
 
-  <h2>Kontakt hinzufügen</h2>
+  <h2 data-i18n="addContactHeading">Kontakt hinzufügen</h2>
 
   <input
     id="add-handle"
     type="text"
     placeholder="Handle (z. B. bob)"
+    data-i18n-placeholder="addContactPlaceholder"
     autocomplete="off"
   />
-  <button id="add-btn">Anfrage senden</button>
+  <button id="add-btn" data-i18n="addContactBtn">Anfrage senden</button>
 
   <hr />
 
-  <h2>Offene Anfragen</h2>
+  <h2 data-i18n="pendingHeading">Offene Anfragen</h2>
   <ul id="pending"></ul>
 
-  <h2>Kontakte</h2>
+  <h2 data-i18n="contactsHeading">Kontakte</h2>
   <ul id="accepted"></ul>
 
 <!-- Bestätigungsdialog Account löschen -->
 <div id="delete-overlay">
   <div id="delete-dialog">
-    <h3>Account löschen</h3>
-    <p>Diese Aktion ist unwiderruflich. Alle Nachrichten und Kontakte werden gelöscht.<br><br>Gib deinen Handle zur Bestätigung ein:</p>
-    <input id="delete-confirm-input" type="text" placeholder="Dein Handle" autocomplete="off" />
+    <h3 data-i18n="deleteAccountDialogTitle">Account löschen</h3>
+    <p data-i18n-html="deleteAccountDialogBody">Diese Aktion ist unwiderruflich. Alle Nachrichten und Kontakte werden gelöscht.<br><br>Gib deinen Handle zur Bestätigung ein:</p>
+    <input id="delete-confirm-input" type="text" placeholder="Dein Handle" data-i18n-placeholder="deleteAccountPlaceholder" autocomplete="off" />
     <div id="delete-handle-error"></div>
     <div class="dialog-actions">
-      <button id="btn-cancel-delete">Abbrechen</button>
-      <button id="btn-confirm-delete">Account löschen</button>
+      <button id="btn-cancel-delete" data-i18n="cancelBtn">Abbrechen</button>
+      <button id="btn-confirm-delete" data-i18n="deleteAccountConfirmBtn">Account löschen</button>
     </div>
   </div>
 </div>
@@ -329,7 +339,32 @@
 <script type="module" src="/js/inbox.js"></script>
 <script type="module">
   import { bootApp } from "./js/appBoot.js";
+  import { applyI18n, getLang, setLang } from "./js/i18n.js";
+  applyI18n();
   bootApp();
+
+  // ── Lang-Submenu ──────────────────────────────────────
+  const dropdownLang   = document.getElementById("dropdown-lang");
+  const langSubmenu    = document.getElementById("lang-submenu");
+  const langOptDe      = document.getElementById("lang-opt-de");
+  const langOptEn      = document.getElementById("lang-opt-en");
+
+  // aktive Sprache fetten
+  const active = getLang();
+  if (active === "de") langOptDe.style.fontWeight = "700";
+  if (active === "en") langOptEn.style.fontWeight = "700";
+
+  dropdownLang?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    langSubmenu.style.display = langSubmenu.style.display === "block" ? "none" : "block";
+  });
+  langOptDe?.addEventListener("click", () => setLang("de"));
+  langOptEn?.addEventListener("click", () => setLang("en"));
+
+  // Submenu schließen bei Klick außerhalb
+  document.addEventListener("click", () => {
+    langSubmenu.style.display = "none";
+  });
 </script>
 
 </body>

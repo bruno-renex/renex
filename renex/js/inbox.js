@@ -2,6 +2,7 @@ import {
   initE2EKeys,
   uploadInboxKeyIfNeeded
 } from "./e2e.js";
+import lang from "./i18n.js";
 
 // ================================
 // CONFIG
@@ -172,7 +173,7 @@ if (deleteConfirmInput) {
       btnConfirmDelete.classList.add("enabled");
     } else {
       btnConfirmDelete.classList.remove("enabled");
-      deleteHandleError.textContent = entered.length > 0 ? "Handle stimmt nicht überein" : "";
+      deleteHandleError.textContent = entered.length > 0 ? lang.handleMismatch : "";
     }
   });
 }
@@ -218,7 +219,7 @@ document.addEventListener("click", (e) => {
     console.log("✅ Inbox E2E Init OK");
   } catch (e) {
     console.error("❌ Inbox E2E Init fehlgeschlagen", e);
-    alert("Kryptografie konnte nicht initialisiert werden");
+    alert(lang.cryptoInitFailed);
     return;
   }
 
@@ -251,7 +252,7 @@ async function loadContacts() {
     const contacts = Array.isArray(data.contacts) ? data.contacts : [];
 
     if (contacts.length === 0) {
-      acceptedEl.appendChild(emptyLi("Noch keine Kontakte"));
+      acceptedEl.appendChild(emptyLi(lang.noContacts));
       return;
     }
 
@@ -268,17 +269,17 @@ async function loadContacts() {
     });
 
     if (!pendingEl.children.length) {
-      pendingEl.appendChild(emptyLi("Keine offenen Anfragen"));
+      pendingEl.appendChild(emptyLi(lang.noPendingRequests));
     }
 
     if (!acceptedEl.children.length) {
-      acceptedEl.appendChild(emptyLi("Noch keine Kontakte"));
+      acceptedEl.appendChild(emptyLi(lang.noContacts));
     }
 
   } catch (err) {
     if (!localStorage.getItem("session_token")) return;
     console.error("Load contacts failed:", err);
-    alert("Fehler beim Laden der Kontakte");
+    alert(lang.loadContactsFailed);
   }
 }
 
@@ -297,7 +298,7 @@ function renderPending(contact) {
   if (contact.direction === "out") {
 
     const sent = document.createElement("span");
-    sent.textContent = " (Anfrage gesendet)";
+    sent.textContent = lang.requestSent;
     sent.style.opacity = "0.6";
     sent.style.marginLeft = "6px";
 
@@ -308,7 +309,7 @@ function renderPending(contact) {
 
   // 👉 EINGEHENDE Anfrage
   const acceptBtn = document.createElement("button");
-  acceptBtn.textContent = "Annehmen";
+  acceptBtn.textContent = lang.acceptBtn;
   acceptBtn.onclick = async () => {
     await apiFetch("/contacts/accept", {
       method: "POST",
@@ -318,7 +319,7 @@ function renderPending(contact) {
   };
 
   const rejectBtn = document.createElement("button");
-  rejectBtn.textContent = "Ablehnen";
+  rejectBtn.textContent = lang.rejectBtn;
   rejectBtn.onclick = async () => {
     await apiFetch("/contacts/reject", {
       method: "POST",
@@ -380,7 +381,7 @@ if (unread > 0) {
 
   removeBtn.onclick = async () => {
 
-    if (!confirm(`Kontakt ${contact.handle} wirklich entfernen?`)) {
+    if (!confirm(lang.confirmRemoveContact(contact.handle))) {
       return;
     }
 
@@ -398,7 +399,7 @@ if (unread > 0) {
     } catch (err) {
 
       console.error("Kontakt entfernen fehlgeschlagen", err);
-      alert("Kontakt konnte nicht entfernt werden");
+      alert(lang.removeContactFailed);
 
     }
 
@@ -420,13 +421,13 @@ function renderDeleted(contact) {
   name.style.textDecoration = "line-through";
 
   const label = document.createElement("span");
-  label.textContent = " (Konto gelöscht)";
+  label.textContent = lang.accountDeleted;
   label.style.fontSize = "12px";
   label.style.marginLeft = "6px";
 
   const removeBtn = document.createElement("button");
   removeBtn.textContent = "✕";
-  removeBtn.title = "Aus Liste entfernen";
+  removeBtn.title = lang.removeFromList;
   removeBtn.style.marginLeft = "10px";
   removeBtn.style.color = "var(--text-muted)";
   removeBtn.style.background = "transparent";
@@ -487,7 +488,7 @@ addBtn?.addEventListener("click", async () => {
 
   } catch (err) {
     console.warn("Kontaktanfrage fehlgeschlagen:", err);
-    alert("Kontaktanfrage fehlgeschlagen");
+    alert(lang.contactRequestFailed);
 
   } finally {
 

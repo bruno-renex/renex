@@ -208,8 +208,59 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".profile-wrapper")) {
     profileDropdown?.classList.remove("show");
     accountSubmenu?.classList.remove("show");
+    document.getElementById("autodelete-submenu")?.style.setProperty("display", "none");
   }
 });
+
+// ======================================================
+// 🗑️ AUTO-DELETE SETTINGS
+// ======================================================
+const autoDeleteBtn = document.getElementById("dropdown-autodelete");
+const autoDeleteSubmenu = document.getElementById("autodelete-submenu");
+
+if (autoDeleteBtn && autoDeleteSubmenu) {
+  // Submenu toggle
+  autoDeleteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isOpen = autoDeleteSubmenu.style.display === "block";
+    autoDeleteSubmenu.style.display = isOpen ? "none" : "block";
+  });
+
+  // Aktive Option laden
+  apiFetch("/settings").then(s => {
+    const active = s?.autoDeleteDays ?? null;
+    document.querySelectorAll(".autodelete-opt").forEach(el => {
+      const val = el.dataset.days === "" ? null : Number(el.dataset.days);
+      el.style.fontWeight = val === active ? "700" : "400";
+      el.textContent = el.textContent.replace(" ✓", "") + (val === active ? " ✓" : "");
+    });
+  }).catch(() => {});
+
+  // Option wählen
+  document.querySelectorAll(".autodelete-opt").forEach(el => {
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const days = el.dataset.days === "" ? null : Number(el.dataset.days);
+      try {
+        await apiFetch("/settings", {
+          method: "POST",
+          body: JSON.stringify({ autoDeleteDays: days })
+        });
+        // Alle Optionen updaten
+        document.querySelectorAll(".autodelete-opt").forEach(opt => {
+          const v = opt.dataset.days === "" ? null : Number(opt.dataset.days);
+          opt.style.fontWeight = v === days ? "700" : "400";
+          opt.textContent = opt.textContent.replace(" ✓", "") + (v === days ? " ✓" : "");
+        });
+        autoDeleteSubmenu.style.display = "none";
+        const label = days ? `Auto-Delete: ${el.textContent.replace(" ✓", "")}` : "Auto-Delete: Aus";
+        console.log("✅", label);
+      } catch (e) {
+        console.warn("⚠️ Auto-Delete Setting fehlgeschlagen", e);
+      }
+    });
+  });
+}
 
     console.log("✅ Inbox E2E Init OK");
   } catch (e) {

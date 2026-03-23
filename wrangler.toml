@@ -22,3 +22,6 @@ class_name = "UserSessionDO"
 [[migrations]]
 tag = "v1"
 new_classes = ["UserSessionDO"]
+
+[triggers]
+crons = ["0 3 * * *"]

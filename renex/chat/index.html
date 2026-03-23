@@ -160,10 +160,17 @@ textarea::placeholder {
   <h2 id="chat-with" style="flex:1;margin:0;font-size:16px;font-weight:600;text-align:center;"></h2>
   <div style="position:relative;">
     <button id="chat-menu-btn" style="background:none;border:none;color:var(--text-secondary);font-size:20px;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1;">⋮</button>
-    <div id="chat-menu-dropdown" style="display:none;position:absolute;right:0;top:36px;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:180px;padding:6px 0;z-index:50;">
-      <div id="chat-menu-autodelete" style="padding:10px 16px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;">
+    <div id="chat-menu-dropdown" style="display:none;position:absolute;right:0;top:36px;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:190px;padding:6px 0;z-index:50;">
+      <div id="chat-menu-autodelete" style="padding:10px 16px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;position:relative;">
         <span>🗑️ Auto-Delete</span>
-        <span id="chat-autodelete-label" style="color:var(--text-secondary);font-size:12px;"></span>
+        <span id="chat-autodelete-label" style="color:var(--accent);font-size:12px;font-weight:600;">Aus</span>
+        <div id="chat-autodelete-submenu" style="display:none;position:absolute;right:calc(100% + 6px);top:0;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:130px;padding:6px 0;z-index:60;">
+          <div class="chat-ad-opt" data-days="" style="padding:8px 16px;cursor:pointer;font-size:13px;">Aus</div>
+          <div class="chat-ad-opt" data-days="1" style="padding:8px 16px;cursor:pointer;font-size:13px;">1 Tag</div>
+          <div class="chat-ad-opt" data-days="7" style="padding:8px 16px;cursor:pointer;font-size:13px;">1 Woche</div>
+          <div class="chat-ad-opt" data-days="28" style="padding:8px 16px;cursor:pointer;font-size:13px;">4 Wochen</div>
+          <div class="chat-ad-opt" data-days="90" style="padding:8px 16px;cursor:pointer;font-size:13px;">90 Tage</div>
+        </div>
       </div>
     </div>
   </div>

@@ -1214,9 +1214,18 @@ function showAutoDeleteProposal(days) {
 function updateAutoDeleteHeaderLabel(days) {
   const lbl = document.getElementById("chat-autodelete-label");
   if (lbl) lbl.textContent = days ? autoDeleteLabel(days) : "Aus";
+
+  // Aktive Option im Submenu mit ✓ markieren
+  document.querySelectorAll(".chat-ad-opt").forEach(el => {
+    const v = el.dataset.days === "" ? null : Number(el.dataset.days);
+    const isActive = v === days;
+    el.style.fontWeight = isActive ? "700" : "400";
+    el.textContent = el.textContent.replace(" ✓", "") + (isActive ? " ✓" : "");
+  });
 }
 
 async function initAutoDeleteUI() {
+  updateAutoDeleteHeaderLabel(null); // Default: Aus
   try {
     const s = await apiFetch(`/chat/auto-delete?peer=${encodeURIComponent(withUser)}`);
     if (s?.status === "active") updateAutoDeleteHeaderLabel(s.days);
@@ -1226,66 +1235,47 @@ async function initAutoDeleteUI() {
   // ⋮ Menü-Button
   const menuBtn = document.getElementById("chat-menu-btn");
   const menuDropdown = document.getElementById("chat-menu-dropdown");
+  const adSubmenu = document.getElementById("chat-autodelete-submenu");
+
   if (menuBtn && menuDropdown) {
     menuBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       const isOpen = menuDropdown.style.display === "block";
       menuDropdown.style.display = isOpen ? "none" : "block";
+      if (isOpen && adSubmenu) adSubmenu.style.display = "none";
     });
-    document.addEventListener("click", () => { menuDropdown.style.display = "none"; });
+    document.addEventListener("click", () => {
+      menuDropdown.style.display = "none";
+      if (adSubmenu) adSubmenu.style.display = "none";
+    });
   }
 
-  // Auto-Delete Menü-Eintrag
+  // Auto-Delete Submenu toggle
   document.getElementById("chat-menu-autodelete")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    document.getElementById("chat-menu-dropdown").style.display = "none";
-    showAutoDeleteMenu();
+    if (!adSubmenu) return;
+    adSubmenu.style.display = adSubmenu.style.display === "block" ? "none" : "block";
   });
-}
 
-function showAutoDeleteMenu() {
-  const existing = document.getElementById("auto-delete-menu");
-  if (existing) { existing.remove(); return; }
-  const menu = document.createElement("div");
-  menu.id = "auto-delete-menu";
-  menu.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5);padding:8px 0;min-width:200px;";
-
-  const title = document.createElement("div");
-  title.textContent = "🗑️ Auto-Delete";
-  title.style.cssText = "padding:10px 16px 6px;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.06em;";
-  menu.appendChild(title);
-
-  const opts = [
-    { label: "Aus", days: null, action: "cancel" },
-    { label: "1 Tag", days: 1 },
-    { label: "1 Woche", days: 7 },
-    { label: "4 Wochen", days: 28 },
-    { label: "90 Tage", days: 90 },
-  ];
-  opts.forEach(opt => {
-    const item = document.createElement("div");
-    item.textContent = opt.label;
-    item.style.cssText = "padding:10px 16px;cursor:pointer;font-size:14px;";
-    item.onmouseenter = () => item.style.background = "var(--bg-hover)";
-    item.onmouseleave = () => item.style.background = "";
-    item.addEventListener("click", async () => {
-      menu.remove();
+  // Auto-Delete Optionen
+  document.querySelectorAll(".chat-ad-opt").forEach(el => {
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const days = el.dataset.days === "" ? null : Number(el.dataset.days);
+      const action = days === null ? "cancel" : "propose";
+      menuDropdown.style.display = "none";
+      if (adSubmenu) adSubmenu.style.display = "none";
       try {
-        const action = opt.action ?? "propose";
-        await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action, days: opt.days }) });
+        await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action, days }) });
+        updateAutoDeleteHeaderLabel(days);
         if (action === "cancel") {
-          updateAutoDeleteHeaderLabel(null);
           showAutoDeleteBanner("🗑️ Auto-Delete deaktiviert", "info");
         } else {
-          showAutoDeleteBanner(`📤 Vorschlag gesendet: ${autoDeleteLabel(opt.days)}`, "info");
+          showAutoDeleteBanner(`📤 Vorschlag gesendet: ${autoDeleteLabel(days)}`, "info");
         }
       } catch (e) { console.warn("Auto-Delete Vorschlag fehlgeschlagen", e); }
     });
-    menu.appendChild(item);
   });
-
-  document.body.appendChild(menu);
-  setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 10);
 }
 
 function scrollToBottom() {

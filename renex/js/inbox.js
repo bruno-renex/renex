@@ -231,25 +231,31 @@ window._contactsInterval = setInterval(loadContacts, 8000);
 // ================================
 // LOAD CONTACTS
 // ================================
+// Cache für letzten Render-Stand (verhindert unnötiges DOM-Blinken)
+let _lastContactsKey = null;
+
 async function loadContacts() {
-  
-  pendingEl.innerHTML = "";
-  acceptedEl.innerHTML = "";
 
   try {
-
-  // 🔔 unread counts laden
-  const unreadData = await apiFetch("/chat/unread");
-  unreadMap = unreadData.unread || {};
-
-} catch (e) {
-  console.warn("Unread fetch failed", e);
-  unreadMap = {};
-}
+    // 🔔 unread counts laden
+    const unreadData = await apiFetch("/chat/unread");
+    unreadMap = unreadData.unread || {};
+  } catch (e) {
+    console.warn("Unread fetch failed", e);
+    unreadMap = {};
+  }
 
   try {
     const data = await apiFetch("/contacts/list");
     const contacts = Array.isArray(data.contacts) ? data.contacts : [];
+
+    // 🚫 Kein Re-Render wenn sich nichts geändert hat → kein Blinken
+    const cacheKey = JSON.stringify(contacts) + JSON.stringify(unreadMap);
+    if (cacheKey === _lastContactsKey) return;
+    _lastContactsKey = cacheKey;
+
+    pendingEl.innerHTML = "";
+    acceptedEl.innerHTML = "";
 
     if (contacts.length === 0) {
       acceptedEl.appendChild(emptyLi(lang.noContacts));

@@ -327,6 +327,36 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
+  // 🔑 DEVICE_REMOVED: Authority rotiert CMK → Forward Secrecy für entferntes Device
+  if (event?.type === "DEVICE_REMOVED" && event.peer === withUser) {
+    console.log("🔑 DEVICE_REMOVED → CMK Rotation (Forward Secrecy):", event.peer);
+    if (isAuthority(getMyUser(), withUser) && e2eReady) {
+      const cooldownKey = `cmkRotateCooldown:${withUser}`;
+      const lastRotate = Number(sessionStorage.getItem(cooldownKey) || 0);
+      if (Date.now() - lastRotate < 10_000) {
+        console.log("⏸️ CMK Rotation Cooldown aktiv — übersprungen");
+        return;
+      }
+      sessionStorage.setItem(cooldownKey, String(Date.now()));
+      rotateCMK(getMyUser(), withUser, apiFetch, fetchInboxKeys)
+        .then(ok => {
+          if (ok) {
+            console.log("✅ CMK nach Device-Removal rotiert — Forward Secrecy aktiv");
+            // Session-State aktualisieren
+            bootConversation(getMyUser(), withUser).then(entry => {
+              if (entry?.skBytes) {
+                sessionKeyBytes = entry.skBytes;
+                sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+                sessionRotationIndex = entry.rotationIndex ?? sessionRotationIndex;
+              }
+            });
+          }
+        })
+        .catch(e => console.warn("⚠️ CMK Rotation nach Device-Removal fehlgeschlagen", e));
+    }
+    return;
+  }
+
     if (e.data?.type !== "CMK_READY") return;
     if (e.data.peer !== withUser) return;
 
@@ -1626,7 +1656,7 @@ if (e2eReady) {
   const me = localStorage.getItem("my_user");
 
   // 🔑 Schritt 1: CMK aus KV holen (Authority hat früher bootstrapped)
-  const kvFetched = await fetchAndStoreCMK(me, withUser, apiFetch);
+  const kvFetched = await fetchAndStoreCMK(me, withUser, apiFetch, fetchInboxKeys);
   if (kvFetched) {
     const entry = await bootConversation(me, withUser);
     if (entry?.skBytes) {

@@ -95,18 +95,28 @@ async function processControlMessage(m) {
 
   // 4) CMK ROTATE: Non-Authority empfängt neuen CMK
   if (m.type === "cmk_rotate" && Array.isArray(m.payloads) && typeof m.fromRotationIndex === "number") {
+    const findSenderJwkWithFallback = async (handle, deviceId) => {
+      const cached = await findSenderDeviceJwk(handle, deviceId);
+      if (cached) return cached;
+      try {
+        const devices = await fetchInboxKeys(handle);
+        const d = (devices || []).find(d => d.deviceId === deviceId);
+        return d?.jwk || null;
+      } catch { return null; }
+    };
     const ok = await receiveCMKRotation({
       me,
       from: m.from,
       myDeviceId: getDeviceId(),
       fromRotationIndex: m.fromRotationIndex,
-      payloads: m.payloads
+      payloads: m.payloads,
+      findSenderDeviceJwkFn: findSenderJwkWithFallback
     });
     if (ok) notify({ type: "CMK_ROTATED", peer: m.from, fromRotationIndex: m.fromRotationIndex });
     return;
   }
 
-  // 5) DEVICE ADDED: Authority soll CMK rotieren
+  // 5) DEVICE ADDED: Authority soll CMK re-wrappen
   if (m.type === "device_added" && m.from) {
     if (isAuthority(me, m.from)) {
       // Peer-Device hinzugefügt → als Authority CMK re-wrappen
@@ -120,7 +130,16 @@ async function processControlMessage(m) {
     return;
   }
 
-  // 6) DELIVERY EVENT
+  // 6) DEVICE REMOVED: Authority soll CMK rotieren (Forward Secrecy)
+  if (m.type === "device_removed" && m.from) {
+    if (isAuthority(me, m.from)) {
+      console.log("🔑 Peer-Device entfernt → CMK Rotation für:", m.from);
+      notify({ type: "DEVICE_REMOVED", peer: m.from });
+    }
+    return;
+  }
+
+  // 7) DELIVERY EVENT
   if (m.type === "delivered") {
     console.log("📬 CONTROL delivered event:", m);
     notify({ type: "DELIVERED", from: m.from, sid: m.sid, ts: m.ts });

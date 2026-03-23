@@ -447,7 +447,7 @@ export async function fallbackBootstrap(me, peer, fetchInboxKeysFn, apiFetchFn) 
  * Wird beim Startup aufgerufen bevor CMK_REQ gesendet wird.
  * Gibt true zurück wenn CMK erfolgreich geladen und gespeichert wurde.
  */
-export async function fetchAndStoreCMK(me, peer, apiFetchFn) {
+export async function fetchAndStoreCMK(me, peer, apiFetchFn, fetchInboxKeysFn) {
   // Nur Non-Authority fetcht (Authority hat CMK bereits lokal)
   if (isAuthority(me, peer)) return false;
 
@@ -462,11 +462,24 @@ export async function fetchAndStoreCMK(me, peer, apiFetchFn) {
     }
 
     const { fromDeviceId, ivB64, ctB64 } = res.payload;
+
+    // Fallback: Sender-Key ggf. frisch aus Inbox laden (neues Authority-Device)
+    const findSenderJwkWithFallback = async (fromHandle, deviceId) => {
+      const cached = await findSenderDeviceJwk(fromHandle, deviceId);
+      if (cached) return cached;
+      if (!fetchInboxKeysFn) return null;
+      try {
+        const devices = await fetchInboxKeysFn(fromHandle);
+        const d = (devices || []).find(d => d.deviceId === deviceId);
+        return d?.jwk || null;
+      } catch { return null; }
+    };
+
     const ok = await receiveCMK({
       from: authority,
       myDeviceId,
       payloads: [{ deviceId: myDeviceId, fromDeviceId, ivB64, ctB64 }],
-      findSenderDeviceJwk
+      findSenderDeviceJwk: findSenderJwkWithFallback
     });
 
     if (ok) {
@@ -623,8 +636,9 @@ export async function rotateCMK(me, peer, apiFetchFn, fetchInboxKeysFn) {
 
 /**
  * Non-Authority: neuen CMK aus cmk_rotate Message empfangen und speichern.
+ * @param findSenderDeviceJwkFn Optional: Fallback-Funktion für unbekannte Sender-Devices
  */
-export async function receiveCMKRotation({ me, from, myDeviceId, fromRotationIndex, payloads }) {
+export async function receiveCMKRotation({ me, from, myDeviceId, fromRotationIndex, payloads, findSenderDeviceJwkFn }) {
   const sid = dmSessionId(me, from);
 
   // CMK entschlüsseln + in IDB speichern (nutzt bestehende receiveCMK-Logik)
@@ -632,7 +646,7 @@ export async function receiveCMKRotation({ me, from, myDeviceId, fromRotationInd
     from,
     myDeviceId,
     payloads,
-    findSenderDeviceJwk
+    findSenderDeviceJwk: findSenderDeviceJwkFn || findSenderDeviceJwk
   });
   if (!ok) return false;
 

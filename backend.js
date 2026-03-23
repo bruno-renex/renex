@@ -687,6 +687,61 @@ const user = (param(params, "user") || "").toLowerCase();
 break;
 
 // ======================================================
+// 🔐 INBOX DEVICE REMOVE: Entfernt ein eigenes Device aus dem Inbox-Index
+// Triggert device_removed bei Authority-Kontakten → CMK Rotation (Forward Secrecy)
+// ======================================================
+case "/e2e/inbox/remove":
+
+if (request.method === "POST") {
+  const session = await requireSession(request, env);
+  if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+  const handle = String(session.handle || "").toLowerCase();
+  const body = await request.json().catch(() => ({}));
+  const deviceId = String(body.deviceId || "").trim();
+
+  if (!deviceId) return json(request, { error: "deviceId required" }, 400);
+
+  // Device aus Inbox-Index entfernen
+  const idxKey = `e2e:inbox:index:${handle}`;
+  const rawIdx = await env.RENEX_KV.get(idxKey);
+  let idx = [];
+  if (rawIdx) { try { idx = JSON.parse(rawIdx); } catch {} }
+
+  if (!idx.includes(deviceId)) {
+    return json(request, { ok: true, removed: false, message: "Device not found" });
+  }
+
+  idx = idx.filter(id => id !== deviceId);
+  await env.RENEX_KV.put(idxKey, JSON.stringify(idx));
+  await env.RENEX_KV.delete(`e2e:inbox:${handle}:${deviceId}`);
+
+  // 🔑 device_removed → Authority-Kontakte benachrichtigen (CMK Rotation triggern)
+  try {
+    const authContacts = await env.RENEX_DB.prepare(
+      "SELECT contact_handle FROM contacts WHERE user_handle = ? AND status = 'accepted' AND contact_handle < ?"
+    ).bind(handle, handle).all();
+
+    for (const row of (authContacts.results || [])) {
+      await pushToUserDO(env, row.contact_handle, {
+        id: crypto.randomUUID(),
+        type: "device_removed",
+        from: handle,
+        to: row.contact_handle,
+        ts: Date.now()
+      });
+    }
+  } catch (e) {
+    console.warn("device_removed push fehlgeschlagen (non-fatal):", e.message);
+  }
+
+  console.log(`🗑️ Device entfernt aus Inbox: ${handle} / ${deviceId} — ${idx.length} verbleiben`);
+  return json(request, { ok: true, removed: true, remaining: idx.length });
+}
+
+break;
+
+// ======================================================
 // 🔐 CMK STORE: Authority speichert gewrappte CMK-Payloads in KV
 // ======================================================
 case "/e2e/cmk/store":

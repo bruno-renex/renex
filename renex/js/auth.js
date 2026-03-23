@@ -100,6 +100,7 @@ try {
 
 await fetch(`${API}/auth/register/finish`, {
   method: "POST",
+  credentials: "include",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     handle,
@@ -269,6 +270,7 @@ try {
 
   const res = await fetch(`${API}/auth/login/finish`, {
   method: "POST",
+  credentials: "include",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     handle,

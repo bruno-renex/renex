@@ -101,7 +101,7 @@ const btnConfirmDelete = document.getElementById("btn-confirm-delete");
 document.addEventListener("DOMContentLoaded", async () => {
   initProfileCircle();   // 👈 HIER EINBAUEN
 
-  if (!getToken()) {
+  if (!localStorage.getItem("my_user")) {
     location.href = "/login.html";
     return;
   }

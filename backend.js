@@ -346,6 +346,46 @@ export class UserSessionDO {
 // 🔌 HELPER: Event via DO an User pushen
 // Fail-silent: User offline → kein Problem, KV hat's gespeichert
 // ======================================================
+// ── Session-Index: Token registrieren ─────────────────
+async function registerSessionToken(env, handle, token) {
+  const key = `sessions:index:${handle}`;
+  let tokens = [];
+  try {
+    const raw = await env.RENEX_KV.get(key);
+    if (raw) tokens = JSON.parse(raw);
+  } catch {}
+  tokens.push(token);
+  // Max 20 aktive Sessions pro User speichern
+  if (tokens.length > 20) tokens = tokens.slice(-20);
+  await env.RENEX_KV.put(key, JSON.stringify(tokens), { expirationTtl: 90000 }); // 25h
+}
+
+// ── Session-Index: Token entfernen ────────────────────
+async function unregisterSessionToken(env, handle, token) {
+  const key = `sessions:index:${handle}`;
+  try {
+    const raw = await env.RENEX_KV.get(key);
+    if (!raw) return;
+    const tokens = JSON.parse(raw).filter(t => t !== token);
+    await env.RENEX_KV.put(key, JSON.stringify(tokens), { expirationTtl: 90000 });
+  } catch {}
+}
+
+// ── Alle Sessions eines Users widerrufen ─────────────
+async function revokeAllSessions(env, handle) {
+  const key = `sessions:index:${handle}`;
+  try {
+    const raw = await env.RENEX_KV.get(key);
+    if (!raw) return;
+    const tokens = JSON.parse(raw);
+    await Promise.all(tokens.map(t => env.RENEX_KV.delete(`session:${t}`)));
+    await env.RENEX_KV.delete(key);
+    console.log(`🔐 ${tokens.length} Session(s) widerrufen für: ${handle}`);
+  } catch (e) {
+    console.warn("revokeAllSessions fehlgeschlagen:", e);
+  }
+}
+
 async function pushToUserDO(env, handle, event) {
   try {
     const id = env.USER_SESSION_DO.idFromName(String(handle).toLowerCase());
@@ -1991,6 +2031,9 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
     { expirationTtl: 86400 }
   );
 
+  // 📋 Session-Index aktualisieren (für spätere Revocation)
+  await registerSessionToken(env, handle, sessionToken);
+
   const sessionCookie = `session=${sessionToken}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=86400`;
   return new Response(JSON.stringify({ authenticated: true }), {
     status: 200,
@@ -2014,7 +2057,15 @@ if (request.method === "POST") {
 const token = getToken(request);
 
   if (token) {
-  await env.RENEX_KV.delete(`session:${token}`);
+    // Handle vor dem Löschen auslesen (für Index-Bereinigung)
+    const raw = await env.RENEX_KV.get(`session:${token}`);
+    await env.RENEX_KV.delete(`session:${token}`);
+    if (raw) {
+      try {
+        const s = JSON.parse(raw);
+        if (s?.handle) await unregisterSessionToken(env, s.handle, token);
+      } catch {}
+    }
   }
 
   const clearCookie = `session=; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=0`;
@@ -2043,7 +2094,9 @@ if (!session) return json(request, { error: "Not authenticated" }, 401);
 const handle = session.handle;
 const token = getToken(request);
 
-// 1. Alle Sessions des Users löschen (nur aktuelle ist bekannt → aktuelle löschen)
+// 1. ALLE Sessions des Users widerrufen (alle Geräte sofort ausgeloggt)
+await revokeAllSessions(env, handle);
+// Aktuelle Session zusätzlich explizit löschen (falls noch nicht im Index)
 if (token) {
   await env.RENEX_KV.delete(`session:${token}`);
 }

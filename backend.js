@@ -145,7 +145,7 @@ if (session?.ua && uaHashB64 && session.ua !== uaHashB64) {
   return session; // { handle, created_at, exp }
 }
 
-async function rateLimit(env, key, windowMs, limit) {
+async function rateLimit(env, key, windowMs, limit, { failOpen = false } = {}) {
   try {
     const now = Date.now();
     const bucket = Math.floor(now / windowMs);
@@ -164,9 +164,10 @@ async function rateLimit(env, key, windowMs, limit) {
     return true;
 
   } catch (err) {
-    console.error("⚠️ rateLimit failed (fail-open):", key, err);
-    // ❗ absichtlich NICHT blockieren
-    return true;
+    // 🔒 Fail-Closed für sicherheitskritische Endpoints (Login, Register)
+    // Fail-Open nur wenn explizit erlaubt (z.B. Chat-Send für UX)
+    console.error("⚠️ rateLimit KV error:", key, err.message);
+    return failOpen ? true : false;
   }
 }
 
@@ -919,7 +920,8 @@ if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== 
     env,
     `chat_send:${me}`,
     2000,
-    1
+    1,
+    { failOpen: true } // UX: lieber senden als blockieren bei KV-Fehler
   );
 
   if (!ok) {
@@ -1219,7 +1221,8 @@ const session = await requireSession(request, env);
     env,
     `chat_list:${me}:${ip}`,
     30_000,
-    15
+    15,
+    { failOpen: true } // UX: Chat-List nicht blockieren bei KV-Fehler
   );
 
   if (!ok) {
@@ -1426,8 +1429,12 @@ const { handle } = body;
     return json(request, { error: "Invalid handle" }, 400);
   }
 
+  // 🛑 Rate Limit: max. 5 Registrierungsversuche pro IP pro Minute (fail-closed)
+  const ip = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
+  const rlOk = await rateLimit(env, `register_start:${ip}`, 60_000, 5);
+  if (!rlOk) return json(request, { error: "Too many requests" }, 429);
+
   // 🤖 Turnstile Bot-Schutz — muss vor jeder weiteren Verarbeitung geprüft werden
-  const ip = request.headers.get("CF-Connecting-IP") || "";
   const turnstileOk = await verifyTurnstile(body.turnstile_token, ip, env);
   if (!turnstileOk) {
     return json(request, { error: "Bot check failed. Please try again." }, 403);

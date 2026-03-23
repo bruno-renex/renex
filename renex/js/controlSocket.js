@@ -13,8 +13,18 @@ let reconnectTimer = null;
 let backoff = 1000;
 const MAX_BACKOFF = 30000;
 
-// Verhindert doppelte Verarbeitung (gleich wie controlPoller.js)
+// Verhindert doppelte Verarbeitung — als FIFO-Queue (max. 500 Einträge)
+// Kein .clear() — verhindert Replay-Angriff via ID-Recycling
 const processedControlIds = new Set();
+const PROCESSED_IDS_MAX = 500;
+function markProcessed(id) {
+  if (processedControlIds.size >= PROCESSED_IDS_MAX) {
+    // Ältesten Eintrag entfernen (FIFO)
+    const first = processedControlIds.values().next().value;
+    processedControlIds.delete(first);
+  }
+  processedControlIds.add(id);
+}
 
 // ── BroadcastChannel (gleich wie controlPoller.js) ───────
 const bc = ("BroadcastChannel" in window)
@@ -183,16 +193,10 @@ function connect() {
     try {
       const m = JSON.parse(event.data);
 
-      // Doppel-Processing verhindern (gleich wie controlPoller.js)
+      // Doppel-Processing verhindern — FIFO (kein clear(), verhindert Replay)
       if (!m?.id) return;
       if (processedControlIds.has(m.id)) return;
-      processedControlIds.add(m.id);
-
-      // Memory-Schutz für lange Sessions
-      if (processedControlIds.size > 1000) {
-        processedControlIds.clear();
-        console.log("🧹 processedControlIds zurückgesetzt");
-      }
+      markProcessed(m.id);
 
       await processControlMessage(m);
     } catch (e) {

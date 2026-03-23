@@ -1421,6 +1421,51 @@ if (updated > 0) {
 break;
 
 // =========================
+// CHAT / DELETE MESSAGE
+// =========================
+case "/chat/message/delete":
+
+if (request.method === "DELETE" || request.method === "POST") {
+
+  const session = await requireSession(request, env);
+  if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+  const me = String(session.handle || "").toLowerCase();
+
+  const body = await readJson(request);
+  if (!body) return json(request, { error: "Invalid JSON" }, 400);
+
+  const msgId = String(body.id || "").trim();
+  if (!msgId) return json(request, { error: "Missing id" }, 400);
+
+  // 🔍 Nachricht laden — prüfen ob Sender korrekt
+  const row = await env.RENEX_DB.prepare(
+    "SELECT id, from_user, to_user, convo_id FROM messages WHERE id = ?"
+  ).bind(msgId).first();
+
+  if (!row) return json(request, { error: "Message not found" }, 404);
+  if (row.from_user !== me) return json(request, { error: "Forbidden" }, 403);
+
+  // 🗑️ Aus D1 löschen
+  await env.RENEX_DB.prepare("DELETE FROM messages WHERE id = ?").bind(msgId).run();
+
+  // 📡 Peer via DO benachrichtigen
+  const peer = row.to_user === me ? row.from_user : row.to_user;
+  await pushToUserDO(env, peer, {
+    id: crypto.randomUUID(),
+    type: "message_deleted",
+    messageId: msgId,
+    from: me,
+    to: peer,
+    ts: Date.now()
+  });
+
+  return json(request, { ok: true });
+}
+
+break;
+
+// =========================
 // AUTH / REGISTER / START
 // =========================
 case "/auth/register/start":

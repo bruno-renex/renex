@@ -204,6 +204,12 @@ if (event?.type === "DELIVERED") {
   return;
 }
 
+// 🗑️ MESSAGE DELETED (von Peer oder eigene Bestätigung)
+if (event?.type === "MESSAGE_DELETED") {
+  markMessageDeleted(event.messageId);
+  return;
+}
+
 // 🔔 LIVE NEW MESSAGE
 if (event?.type === "NEW_MESSAGE") {
   const msg = event.message;
@@ -1264,11 +1270,24 @@ if (id && status) {
 
 if (status === "pending" && from === getMyUser()) {
   div.classList.add("pending");
-  }
-  if (status === "failed") div.classList.add("failed");
+}
+if (status === "failed") div.classList.add("failed");
 
-  messagesEl.appendChild(div);
-  return div;
+// 🗑️ Delete-Button für eigene Nachrichten (nicht pending/failed)
+if (id && from === getMyUser() && status !== "pending" && status !== "failed") {
+  const delBtn = document.createElement("button");
+  delBtn.className = "delete-btn";
+  delBtn.title = "Nachricht löschen";
+  delBtn.textContent = "🗑";
+  delBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (confirm("Nachricht für alle löschen?")) deleteMessage(id);
+  });
+  div.appendChild(delBtn);
+}
+
+messagesEl.appendChild(div);
+return div;
 }
 
 // ======================================================
@@ -1305,6 +1324,36 @@ el.dataset.status = status;
 timeEl.textContent = meta;
 
 renderedMessageStatus.set(messageId, status);
+}
+
+// ======================================================
+// MESSAGE DELETE
+// ======================================================
+
+function markMessageDeleted(messageId) {
+  const el = document.querySelector(`[data-id="${messageId}"]`);
+  if (!el) return;
+  const textEl = el.querySelector("div:first-child");
+  if (textEl) {
+    textEl.textContent = "🗑️ Nachricht gelöscht";
+    textEl.style.opacity = "0.5";
+    textEl.style.fontStyle = "italic";
+  }
+  // Delete-Button entfernen falls vorhanden
+  el.querySelector(".delete-btn")?.remove();
+  el.dataset.deleted = "1";
+}
+
+async function deleteMessage(messageId) {
+  try {
+    await apiFetch("/chat/message/delete", {
+      method: "DELETE",
+      body: JSON.stringify({ id: messageId })
+    });
+    markMessageDeleted(messageId);
+  } catch (e) {
+    console.warn("⚠️ Nachricht konnte nicht gelöscht werden", e);
+  }
 }
 
 // ======================================================

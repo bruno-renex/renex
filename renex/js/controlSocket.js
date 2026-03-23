@@ -164,6 +164,13 @@ async function processControlMessage(m) {
     return;
   }
 
+  // 8) MESSAGE DELETED
+  if (m.type === "message_deleted" && m.messageId) {
+    console.log("🗑️ Nachricht gelöscht:", m.messageId);
+    notify({ type: "MESSAGE_DELETED", messageId: m.messageId, from: m.from });
+    return;
+  }
+
   // 4) LIVE MESSAGE
   if (!m.type && m.from) {
     console.log("💬 LIVE MESSAGE:", m);

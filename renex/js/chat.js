@@ -1161,7 +1161,7 @@ function isUserAtBottom() {
 // ======================================================
 function autoDeleteLabel(days) {
   if (!days) return "Aus";
-  const map = { 1: "1 Tag", 7: "7 Tage", 30: "30 Tage", 90: "90 Tage", 365: "1 Jahr" };
+  const map = { 1: "1 Tag", 7: "1 Woche", 28: "4 Wochen", 90: "90 Tage" };
   return map[days] ?? `${days} Tage`;
 }
 
@@ -1258,10 +1258,9 @@ function showAutoDeleteMenu() {
   const opts = [
     { label: "Aus", days: null, action: "cancel" },
     { label: "1 Tag", days: 1 },
-    { label: "7 Tage", days: 7 },
-    { label: "30 Tage", days: 30 },
+    { label: "1 Woche", days: 7 },
+    { label: "4 Wochen", days: 28 },
     { label: "90 Tage", days: 90 },
-    { label: "1 Jahr", days: 365 },
   ];
   opts.forEach(opt => {
     const item = document.createElement("div");

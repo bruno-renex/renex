@@ -2459,7 +2459,7 @@ case "/chat/auto-delete": {
     ).bind(me, peer).first();
     if (contact?.status !== "accepted") return json(request, { error: "Not a contact" }, 403);
 
-    const ALLOWED_DAYS = new Set([1, 7, 30, 90, 365]);
+    const ALLOWED_DAYS = new Set([1, 7, 28, 90]);
     const convoId = [me, peer].sort().join(":");
     const now = Date.now();
 
@@ -2526,8 +2526,8 @@ if (request.method === "POST") {
   const body = await readJson(request);
   if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
-  // autoDeleteDays: null = nie, oder 1 / 7 / 30 / 90 / 365
-  const ALLOWED_DAYS = new Set([null, 1, 7, 30, 90, 365]);
+  // autoDeleteDays: null = aus, oder 1 / 7 / 28 / 90
+  const ALLOWED_DAYS = new Set([null, 1, 7, 28, 90]);
   const days = body.autoDeleteDays === null ? null : Number(body.autoDeleteDays);
   if (!ALLOWED_DAYS.has(days)) return json(request, { error: "Invalid autoDeleteDays" }, 400);
 

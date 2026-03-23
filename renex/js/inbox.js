@@ -2,7 +2,7 @@ import {
   initE2EKeys,
   uploadInboxKeyIfNeeded
 } from "./e2e.js";
-import lang from "./i18n.js";
+import lang, { getLang, setLang } from "./i18n.js";
 
 // ================================
 // CONFIG
@@ -208,8 +208,31 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".profile-wrapper")) {
     profileDropdown?.classList.remove("show");
     accountSubmenu?.classList.remove("show");
+    document.getElementById("lang-submenu")?.style.setProperty("display", "none");
   }
 });
+
+// ======================================================
+// 🌍 SPRACHE
+// ======================================================
+const langBtn = document.getElementById("dropdown-lang");
+const langSubmenu = document.getElementById("lang-submenu");
+const langOptDe = document.getElementById("lang-opt-de");
+const langOptEn = document.getElementById("lang-opt-en");
+
+if (langBtn && langSubmenu) {
+  const active = getLang();
+  if (active === "de") langOptDe.style.fontWeight = "700";
+  if (active === "en") langOptEn.style.fontWeight = "700";
+
+  langBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    langSubmenu.style.display = langSubmenu.style.display === "block" ? "none" : "block";
+  });
+
+  langOptDe.addEventListener("click", () => { setLang("de"); location.reload(); });
+  langOptEn.addEventListener("click", () => { setLang("en"); location.reload(); });
+}
 
     console.log("✅ Inbox E2E Init OK");
   } catch (e) {

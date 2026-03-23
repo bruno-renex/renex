@@ -2426,9 +2426,6 @@ const { contact } = body;
 break;
 
 // =========================
-// USER SETTINGS (Auto-Delete)
-// =========================
-// =========================
 // AUTO-DELETE PRO CONVERSATION
 // =========================
 case "/chat/auto-delete": {
@@ -2510,34 +2507,6 @@ case "/chat/auto-delete": {
   break;
 }
 
-case "/settings":
-
-if (request.method === "GET") {
-  const session = await requireSession(request, env);
-  if (!session) return json(request, { error: "Not authenticated" }, 401);
-  const raw = await env.RENEX_KV.get(`user:settings:${session.handle}`);
-  const settings = raw ? JSON.parse(raw) : { autoDeleteDays: null };
-  return json(request, settings);
-}
-
-if (request.method === "POST") {
-  const session = await requireSession(request, env);
-  if (!session) return json(request, { error: "Not authenticated" }, 401);
-  const body = await readJson(request);
-  if (!body) return json(request, { error: "Invalid JSON" }, 400);
-
-  // autoDeleteDays: null = aus, oder 1 / 7 / 28 / 90
-  const ALLOWED_DAYS = new Set([null, 1, 7, 28, 90]);
-  const days = body.autoDeleteDays === null ? null : Number(body.autoDeleteDays);
-  if (!ALLOWED_DAYS.has(days)) return json(request, { error: "Invalid autoDeleteDays" }, 400);
-
-  const settings = { autoDeleteDays: days };
-  await env.RENEX_KV.put(`user:settings:${session.handle}`, JSON.stringify(settings));
-  return json(request, { ok: true, settings });
-}
-
-break;
-
       // =========================
       // FALLBACK
       // =========================
@@ -2563,40 +2532,9 @@ async scheduled(event, env) {
   console.log("🕐 Auto-Delete Cron gestartet:", new Date().toISOString());
 
   try {
-    // Alle User-Settings aus KV laden (list mit prefix)
-    const list = await env.RENEX_KV.list({ prefix: "user:settings:" });
     let deleted = 0;
 
-    for (const key of list.keys) {
-      try {
-        const raw = await env.RENEX_KV.get(key.name);
-        if (!raw) continue;
-        const settings = JSON.parse(raw);
-        if (!settings.autoDeleteDays) continue; // null = nie löschen
-
-        // Handle aus Key extrahieren: "user:settings:{handle}"
-        const handle = key.name.replace("user:settings:", "");
-        const cutoffTs = Date.now() - settings.autoDeleteDays * 86400_000;
-
-        // Nachrichten löschen wo User Sender oder Empfänger ist und älter als Cutoff
-        const result = await env.RENEX_DB.prepare(
-          `DELETE FROM messages
-           WHERE (from_user = ? OR to_user = ?)
-             AND ts < ?
-             AND type IS NULL`
-        ).bind(handle, handle, cutoffTs).run();
-
-        const count = result.meta?.changes ?? 0;
-        if (count > 0) {
-          console.log(`🗑️ Auto-Delete: ${count} Nachrichten gelöscht für ${handle} (>${settings.autoDeleteDays}d)`);
-          deleted += count;
-        }
-      } catch (e) {
-        console.warn("Auto-Delete Fehler für Key:", key.name, e.message);
-      }
-    }
-
-    // 2️⃣ Conversation-Level Auto-Delete (beide haben akzeptiert)
+    // Conversation-Level Auto-Delete (beide haben akzeptiert)
     const activeConvos = await env.RENEX_DB.prepare(
       "SELECT convo_id, days FROM auto_delete_settings WHERE status = 'active'"
     ).all();

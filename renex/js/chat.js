@@ -1830,7 +1830,10 @@ if (e2eReady) {
   }
 }
 
-// 7️⃣ Flush nur wenn ready
+// 7️⃣ Auto-Delete UI immer initialisieren (unabhängig von E2E)
+initAutoDeleteUI().catch(() => {});
+
+// 8️⃣ Flush nur wenn ready
 if (e2eReady) {
 
   console.log("🟢 Chat gestartet (E2E bereit)");
@@ -1838,7 +1841,6 @@ if (e2eReady) {
   await flushDeferredQueue();
   await flushDeferredInboundMessages();
   startTimeBasedRotation();
-  initAutoDeleteUI().catch(() => {});
 
 } else {
 

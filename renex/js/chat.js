@@ -1212,15 +1212,8 @@ function showAutoDeleteProposal(days) {
 }
 
 function updateAutoDeleteHeaderLabel(days) {
-  let lbl = document.getElementById("auto-delete-header-label");
-  if (!lbl) {
-    lbl = document.createElement("span");
-    lbl.id = "auto-delete-header-label";
-    lbl.style.cssText = "font-size:11px;color:var(--text-secondary);margin-left:6px;cursor:pointer;";
-    lbl.title = "Auto-Delete Einstellung ändern";
-    document.getElementById("chat-with-name")?.after(lbl);
-  }
-  lbl.textContent = days ? `🗑️ ${autoDeleteLabel(days)}` : "";
+  const lbl = document.getElementById("chat-autodelete-label");
+  if (lbl) lbl.textContent = days ? autoDeleteLabel(days) : "Aus";
 }
 
 async function initAutoDeleteUI() {
@@ -1228,10 +1221,26 @@ async function initAutoDeleteUI() {
     const s = await apiFetch(`/chat/auto-delete?peer=${encodeURIComponent(withUser)}`);
     if (s?.status === "active") updateAutoDeleteHeaderLabel(s.days);
     if (s?.status === "pending" && s?.proposed_by !== getMyUser()) showAutoDeleteProposal(s.days);
-
-    // Klick auf Label → neuen Vorschlag machen oder deaktivieren
-    document.getElementById("auto-delete-header-label")?.addEventListener("click", () => showAutoDeleteMenu());
   } catch {}
+
+  // ⋮ Menü-Button
+  const menuBtn = document.getElementById("chat-menu-btn");
+  const menuDropdown = document.getElementById("chat-menu-dropdown");
+  if (menuBtn && menuDropdown) {
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = menuDropdown.style.display === "block";
+      menuDropdown.style.display = isOpen ? "none" : "block";
+    });
+    document.addEventListener("click", () => { menuDropdown.style.display = "none"; });
+  }
+
+  // Auto-Delete Menü-Eintrag
+  document.getElementById("chat-menu-autodelete")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("chat-menu-dropdown").style.display = "none";
+    showAutoDeleteMenu();
+  });
 }
 
 function showAutoDeleteMenu() {
@@ -1239,7 +1248,13 @@ function showAutoDeleteMenu() {
   if (existing) { existing.remove(); return; }
   const menu = document.createElement("div");
   menu.id = "auto-delete-menu";
-  menu.style.cssText = "position:absolute;top:50px;left:50%;transform:translateX(-50%);z-index:50;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);padding:8px 0;min-width:160px;";
+  menu.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5);padding:8px 0;min-width:200px;";
+
+  const title = document.createElement("div");
+  title.textContent = "🗑️ Auto-Delete";
+  title.style.cssText = "padding:10px 16px 6px;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.06em;";
+  menu.appendChild(title);
+
   const opts = [
     { label: "Aus", days: null, action: "cancel" },
     { label: "1 Tag", days: 1 },
@@ -1251,7 +1266,7 @@ function showAutoDeleteMenu() {
   opts.forEach(opt => {
     const item = document.createElement("div");
     item.textContent = opt.label;
-    item.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;";
+    item.style.cssText = "padding:10px 16px;cursor:pointer;font-size:14px;";
     item.onmouseenter = () => item.style.background = "var(--bg-hover)";
     item.onmouseleave = () => item.style.background = "";
     item.addEventListener("click", async () => {
@@ -1263,13 +1278,14 @@ function showAutoDeleteMenu() {
           updateAutoDeleteHeaderLabel(null);
           showAutoDeleteBanner("🗑️ Auto-Delete deaktiviert", "info");
         } else {
-          showAutoDeleteBanner(`📤 Auto-Delete Vorschlag gesendet: ${autoDeleteLabel(opt.days)}`, "info");
+          showAutoDeleteBanner(`📤 Vorschlag gesendet: ${autoDeleteLabel(opt.days)}`, "info");
         }
       } catch (e) { console.warn("Auto-Delete Vorschlag fehlgeschlagen", e); }
     });
     menu.appendChild(item);
   });
-  document.getElementById("chat-header")?.appendChild(menu);
+
+  document.body.appendChild(menu);
   setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 10);
 }
 

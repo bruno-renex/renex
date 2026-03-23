@@ -155,8 +155,19 @@ textarea::placeholder {
 </head>
 <body>
 
-
-<h2 id="chat-with">Chat</h2>
+<div id="chat-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border-panel);background:var(--bg-panel);position:sticky;top:0;z-index:20;gap:8px;">
+  <button onclick="history.back()" style="background:none;border:none;color:var(--accent);font-size:15px;cursor:pointer;padding:4px 8px;border-radius:6px;">←</button>
+  <h2 id="chat-with" style="flex:1;margin:0;font-size:16px;font-weight:600;text-align:center;"></h2>
+  <div style="position:relative;">
+    <button id="chat-menu-btn" style="background:none;border:none;color:var(--text-secondary);font-size:20px;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1;">⋮</button>
+    <div id="chat-menu-dropdown" style="display:none;position:absolute;right:0;top:36px;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:180px;padding:6px 0;z-index:50;">
+      <div id="chat-menu-autodelete" style="padding:10px 16px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;">
+        <span>🗑️ Auto-Delete</span>
+        <span id="chat-autodelete-label" style="color:var(--text-secondary);font-size:12px;"></span>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div id="messages"></div>
 

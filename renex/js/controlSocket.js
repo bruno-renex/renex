@@ -96,15 +96,23 @@ async function processControlMessage(m) {
     return;
   }
 
-  // 3) EPOCH ROTATE
+  // 3) EPOCH ROTATE — nur von der Authority akzeptieren
   if (m.type === "epoch_rotate" && typeof m.rotationIndex === "number") {
+    if (!isAuthority(m.from, me)) {
+      console.warn("⚠️ epoch_rotate von Nicht-Authority ignoriert:", m.from);
+      return;
+    }
     const ok = await handleEpochRotate(me, m.from, m.rotationIndex);
     if (ok) notify({ type: "EPOCH_ROTATED", peer: m.from, rotationIndex: m.rotationIndex });
     return;
   }
 
-  // 4) CMK ROTATE: Non-Authority empfängt neuen CMK
+  // 4) CMK ROTATE: Non-Authority empfängt neuen CMK — nur von Authority akzeptieren
   if (m.type === "cmk_rotate" && Array.isArray(m.payloads) && typeof m.fromRotationIndex === "number") {
+    if (!isAuthority(m.from, me)) {
+      console.warn("⚠️ cmk_rotate von Nicht-Authority ignoriert:", m.from);
+      return;
+    }
     const findSenderJwkWithFallback = async (handle, deviceId) => {
       const cached = await findSenderDeviceJwk(handle, deviceId);
       if (cached) return cached;

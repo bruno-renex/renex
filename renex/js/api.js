@@ -1,22 +1,16 @@
 export async function apiFetch(path, options = {}) {
-  const token = localStorage.getItem("session_token");
-
   const res = await fetch("https://api.renex.id" + path, {
     ...options,
-    credentials: "include", // 🔥 WICHTIG
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
-      ...(token ? { Authorization: "Bearer " + token } : {})
     }
   });
 
   if (res.status === 401) {
     console.warn("🔒 Session expired");
-
-    localStorage.removeItem("session_token");
     localStorage.removeItem("my_user");
-
     window.location.replace("/index.html");
     throw new Error("Session expired");
   }

@@ -113,12 +113,11 @@ if (!m.type && m.from) {
 function connectWebSocket() {
   if (!running) return;
 
-  const token = localStorage.getItem("session_token");
   const me = localStorage.getItem("my_user");
-  if (!token || !me) return;
+  if (!me) return;
 
   console.log("🔌 WebSocket connecting...");
-  ws = new WebSocket(`${WS_URL}?token=${encodeURIComponent(token)}`);
+  ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
     console.log("✅ WebSocket connected");

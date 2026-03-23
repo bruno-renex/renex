@@ -168,11 +168,10 @@ async function processControlMessage(m) {
 function connect() {
   if (!running) return;
 
-  const token = localStorage.getItem("session_token");
   const me = localStorage.getItem("my_user");
-  if (!token || !me) return;
+  if (!me) return;
 
-  const wsUrl = `wss://api.renex.id/chat/ws?token=${encodeURIComponent(token)}`;
+  const wsUrl = `wss://api.renex.id/chat/ws`;
 
   console.log("🔌 Control WebSocket connecting...");
 

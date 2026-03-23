@@ -295,7 +295,6 @@ try {
   console.log("🔐 login/finish:", data);
   
 if (data.authenticated) {
-  localStorage.setItem("session_token", data.session_token);
   localStorage.setItem("my_user", handle);
 
   // ✅ HIER IST SCHRITT 2: deviceId erzwingen (SOFORT nach erfolgreichem Login)
@@ -327,31 +326,18 @@ if (data.authenticated) {
 }
 }
 
-// ================================
-// SESSION HELPERS
-// ================================
-export function getSession() {
-  return localStorage.getItem("session_token");
-}
-
 export async function logout() {
-  const token = localStorage.getItem("session_token");
-
   try {
     await fetch(`${API}/auth/logout`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
-      }
+      credentials: "include",
+      headers: { "Content-Type": "application/json" }
     });
   } catch {
     // egal – lokaler Logout reicht
   }
 
-  localStorage.removeItem("session_token");
   localStorage.removeItem("my_user");
-
   sessionStorage.clear();
 
   console.log("🚪 Logout abgeschlossen (Keys behalten)");

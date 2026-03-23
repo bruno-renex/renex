@@ -36,16 +36,12 @@ function initProfileCircle() {
 // ================================
 // HELPERS
 // ================================
-function getToken() {
-  return localStorage.getItem("session_token");
-}
-
 async function apiFetch(path, options = {}) {
   const res = await fetch(API + path, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      Authorization: "Bearer " + getToken(),
       ...(options.headers || {})
     }
   });
@@ -197,7 +193,6 @@ if (btnConfirmDelete) {
       await apiFetch("/account", { method: "DELETE" });
     } catch {}
     // Lokale Daten löschen
-    localStorage.removeItem("session_token");
     localStorage.removeItem("my_user");
     localStorage.removeItem("device_id");
     try {
@@ -283,7 +278,7 @@ async function loadContacts() {
     }
 
   } catch (err) {
-    if (!localStorage.getItem("session_token")) return;
+    if (!localStorage.getItem("my_user")) return;
     console.error("Load contacts failed:", err);
     alert(lang.loadContactsFailed);
   }

@@ -483,10 +483,8 @@ export async function uploadInboxKeyIfNeeded() {
 
   await fetch("https://api.renex.id/e2e/inbox/upload", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: "Bearer " + localStorage.getItem("session_token")
-    },
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ jwk, deviceId })
   });
 

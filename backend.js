@@ -70,21 +70,29 @@ async function verifyTurnstile(token, ip, env) {
 // =========================
 // SESSION + CHAT HELPERS
 // =========================
+const SESSION_TOKEN_RE = /^sess_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validateTokenFormat(token) {
+  if (!token || token.length < 10 || token.length > 64) return null;
+  return SESSION_TOKEN_RE.test(token) ? token : null;
+}
+
 function getToken(request) {
+  // 1) Cookie (bevorzugt — nicht in Logs sichtbar)
+  const cookie = request.headers.get("Cookie") || "";
+  const cookieMatch = cookie.match(/(?:^|;\s*)session=([^;]+)/);
+  if (cookieMatch) {
+    const t = validateTokenFormat(decodeURIComponent(cookieMatch[1].trim()));
+    if (t) return t;
+  }
+
+  // 2) Authorization-Header (Fallback für ältere Clients)
   const auth = request.headers.get("Authorization") || "";
-  if (!auth.startsWith("Bearer ")) return null;
+  if (auth.startsWith("Bearer ")) {
+    return validateTokenFormat(auth.slice(7).trim());
+  }
 
-  const token = auth.slice(7).trim();
-
-  // 1) Hard length limit (KV + Abuse Schutz)
-  if (token.length < 10 || token.length > 64) return null;
-
-  // 2) Only allow exactly your token format: sess_ + UUID
-  // UUID: 8-4-4-4-12 hex
-  const ok = /^sess_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
-  if (!ok) return null;
-
-  return token;
+  return null;
 }
 
 
@@ -402,14 +410,15 @@ case "/chat/ws":
 
 if (request.headers.get("Upgrade") === "websocket") {
 
-  // Token aus Query-Param (nicht aus Header — WS limitation)
-  const wsToken = param(params, "token");
+  // Token aus Cookie (Browser sendet Cookie automatisch beim WS-Upgrade)
+  // Fallback: Query-Param für ältere Clients
+  const wsToken = getToken(request) || validateTokenFormat(param(params, "token"));
   if (!wsToken) {
     return new Response("Missing token", { status: 401 });
   }
 
   // Session validieren (gleiche Logik wie requireSession)
-  const tokenOk = /^sess_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(wsToken);
+  const tokenOk = SESSION_TOKEN_RE.test(wsToken);
   if (!tokenOk) {
     return new Response("Invalid token", { status: 401 });
   }
@@ -1905,9 +1914,14 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
     { expirationTtl: 86400 }
   );
 
-  return json(request, {
-    authenticated: true,
-    session_token: sessionToken
+  const sessionCookie = `session=${sessionToken}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=86400`;
+  return new Response(JSON.stringify({ authenticated: true }), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Set-Cookie": sessionCookie,
+      ...corsHeaders(request),
+    },
   });
 }
 
@@ -1926,7 +1940,15 @@ const token = getToken(request);
   await env.RENEX_KV.delete(`session:${token}`);
   }
 
-  return json(request, { status: "logged_out" });
+  const clearCookie = `session=; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=0`;
+  return new Response(JSON.stringify({ status: "logged_out" }), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Set-Cookie": clearCookie,
+      ...corsHeaders(request),
+    },
+  });
 }
 
 break;

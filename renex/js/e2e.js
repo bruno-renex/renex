@@ -16,8 +16,19 @@ function openKeyDB() {
       }
     };
 
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => {
+      dbPromise = null; // Cache zurücksetzen → nächster Aufruf versucht erneut
+      reject(req.error);
+    };
+
+    req.onsuccess = () => {
+      const db = req.result;
+      // IDB-Verbindung kann vom Browser geschlossen werden (z.B. bei DB-Version-Upgrade)
+      // → Promise-Cache zurücksetzen damit der nächste idbGet/idbSet neu öffnet
+      db.onclose = () => { dbPromise = null; };
+      db.onerror = () => { dbPromise = null; };
+      resolve(db);
+    };
   });
 
   return dbPromise;
@@ -479,16 +490,17 @@ export async function uploadInboxKeyIfNeeded() {
     return;
   }
 
-  const jwk = await crypto.subtle.exportKey("jwk", pubKey);
+  const jwk    = await crypto.subtle.exportKey("jwk", pubKey);
+  const sigPub = await getSigningPublicKeyJwk();
 
   await fetch("https://api.renex.id/e2e/inbox/upload", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jwk, deviceId })
+    body: JSON.stringify({ jwk, deviceId, sigPub })
   });
 
-  console.log("📮 Inbox-Key hochgeladen:", deviceId);
+  console.log("📮 Inbox-Key + SigPub hochgeladen:", deviceId);
 }
 
 // ======================================================
@@ -564,4 +576,78 @@ export async function createAndStoreCMK(peerHandle) {
   const newCmkBytes = crypto.getRandomValues(new Uint8Array(32));
   await importAndStoreCMKFromPeer(peerHandle, newCmkBytes);
   return newCmkBytes;
+}
+
+// ======================================================
+// 🔏 MESSAGE SIGNING — ECDSA P-256
+// Schützt ctB64 vor Backend-Manipulation.
+// Signing-Key: 1 pro Device, in IDB gespeichert.
+// ======================================================
+const SIG_KEY_IDB = "sig_keypair";
+
+async function getOrCreateSigningKeyPair() {
+  const saved = await idbGet(SIG_KEY_IDB);
+  if (saved?.pub && saved?.priv) {
+    try {
+      const privKey = await crypto.subtle.importKey(
+        "jwk", saved.priv,
+        { name: "ECDSA", namedCurve: "P-256" },
+        false, ["sign"]
+      );
+      return { privKey, pubJwk: saved.pub };
+    } catch {}
+  }
+
+  // Neu generieren
+  const pair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true, ["sign", "verify"]
+  );
+  const pubJwk  = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  const privJwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
+  await idbSet(SIG_KEY_IDB, { pub: pubJwk, priv: privJwk });
+  return { privKey: pair.privateKey, pubJwk };
+}
+
+// Signing Public Key (JWK) — wird beim Inbox-Upload mitgeschickt
+export async function getSigningPublicKeyJwk() {
+  const { pubJwk } = await getOrCreateSigningKeyPair();
+  return pubJwk;
+}
+
+// signiert: ivB64 | ctB64 | sid | epoch
+export async function signMessage(ivB64, ctB64, sid, epoch) {
+  const { privKey } = await getOrCreateSigningKeyPair();
+  const data = new TextEncoder().encode(`${ivB64}|${ctB64}|${sid}|${epoch}`);
+  const sig = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    privKey, data
+  );
+  return bytesToB64(new Uint8Array(sig));
+}
+
+// Verifiziert Signatur gegen den Sender-pubJwk
+export async function verifyMessageSig(ivB64, ctB64, sid, epoch, sigB64, pubJwk) {
+  try {
+    const pubKey = await crypto.subtle.importKey(
+      "jwk", pubJwk,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false, ["verify"]
+    );
+    const data = new TextEncoder().encode(`${ivB64}|${ctB64}|${sid}|${epoch}`);
+    const sig  = b64ToBytes(sigB64);
+    return await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      pubKey, sig, data
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Liefert sigPub für ein Device aus dem lokalen Peer-Cache
+export async function getSigPubForDevice(fromHandle, fromDeviceId) {
+  const devices = (await idbGet(`peer-devices:${fromHandle}`)) || [];
+  const d = devices.find(x => x.deviceId === fromDeviceId);
+  return d?.sigPub || null;
 }

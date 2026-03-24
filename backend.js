@@ -16,12 +16,11 @@ function corsHeaders(request) {
     "Vary": "Origin",
   };
 
+  // Nur explizit erlaubte Origins → kein Fallback auf fixen Wert
   if (origin && allowedOrigins.includes(origin)) {
     headers["Access-Control-Allow-Origin"] = origin;
-  } else {
-    // 🔥 WICHTIG: Development fallback
-    headers["Access-Control-Allow-Origin"] = allowedOrigins[0];
   }
+  // Kein ACAO-Header für unbekannte Origins → Browser blockt, Server verrät nichts
 
   return headers;
 }
@@ -450,30 +449,35 @@ case "/chat/ws":
 
 if (request.headers.get("Upgrade") === "websocket") {
 
-  // Token aus Cookie (Browser sendet Cookie automatisch beim WS-Upgrade)
-  // Fallback: Query-Param für ältere Clients
-  const wsToken = getToken(request) || validateTokenFormat(param(params, "token"));
-  if (!wsToken) {
-    return new Response("Missing token", { status: 401 });
+  let wsHandle;
+
+  // 1) WS-Ticket (bevorzugt): Einmal-Token aus ?ticket= — nie persistent in Logs
+  const ticketParam = param(params, "ticket");
+  if (ticketParam && /^wst_[0-9a-f-]{36}$/.test(ticketParam)) {
+    const rawTicket = await env.RENEX_KV.get(`ws-ticket:${ticketParam}`);
+    if (!rawTicket) return new Response("Invalid or expired ticket", { status: 401 });
+    // Sofort löschen — Einmal-Ticket (One-Time-Use)
+    await env.RENEX_KV.delete(`ws-ticket:${ticketParam}`);
+    let ticketData;
+    try { ticketData = JSON.parse(rawTicket); } catch { return new Response("Unauthorized", { status: 401 }); }
+    wsHandle = String(ticketData.handle).toLowerCase();
+
+  } else {
+    // 2) Cookie-Fallback (Browser sendet HttpOnly-Cookie automatisch beim WS-Upgrade)
+    const wsToken = getToken(request);
+    if (!wsToken) return new Response("Missing auth", { status: 401 });
+
+    const rawSess = await env.RENEX_KV.get(`session:${wsToken}`);
+    if (!rawSess) return new Response("Unauthorized", { status: 401 });
+
+    let wsSess;
+    try { wsSess = JSON.parse(rawSess); } catch { return new Response("Unauthorized", { status: 401 }); }
+
+    if (!wsSess?.handle || (wsSess?.exp && Date.now() > Number(wsSess.exp))) {
+      return new Response("Session expired", { status: 401 });
+    }
+    wsHandle = String(wsSess.handle).toLowerCase();
   }
-
-  // Session validieren (gleiche Logik wie requireSession)
-  const tokenOk = SESSION_TOKEN_RE.test(wsToken);
-  if (!tokenOk) {
-    return new Response("Invalid token", { status: 401 });
-  }
-
-  const rawSess = await env.RENEX_KV.get(`session:${wsToken}`);
-  if (!rawSess) return new Response("Unauthorized", { status: 401 });
-
-  let wsSess;
-  try { wsSess = JSON.parse(rawSess); } catch { return new Response("Unauthorized", { status: 401 }); }
-
-  if (!wsSess?.handle || (wsSess?.exp && Date.now() > Number(wsSess.exp))) {
-    return new Response("Session expired", { status: 401 });
-  }
-
-  const wsHandle = String(wsSess.handle).toLowerCase();
 
   // An UserSessionDO weiterleiten
   const doId = env.USER_SESSION_DO.idFromName(wsHandle);
@@ -612,7 +616,7 @@ const session = await requireSession(request, env);
 const body = await readJson(request);
 if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
-  const { jwk, deviceId } = body;
+  const { jwk, deviceId, sigPub } = body;
 
   if (!jwk || typeof jwk !== "object") {
     return json(request, { error: "Missing jwk" }, 400);
@@ -631,6 +635,14 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
     `e2e:inbox:${handle}:${deviceId}`,
     JSON.stringify(jwk)
   );
+
+  // 🔏 Signing Public Key (optional — für Message-Signatur-Verifikation)
+  if (sigPub && typeof sigPub === "object") {
+    await env.RENEX_KV.put(
+      `e2e:inbox:sigpub:${handle}:${deviceId}`,
+      JSON.stringify(sigPub)
+    );
+  }
 
   // optional Index
   const idxKey = `e2e:inbox:index:${handle}`;
@@ -704,10 +716,21 @@ const session = await requireSession(request, env);
     return json(request, { error: "Not authenticated" }, 401);
   }
 
+const { handle: me } = session;
 const user = (param(params, "user") || "").toLowerCase();
 
   if (!user || !/^[a-z0-9_]+$/.test(user)) {
     return json(request, { devices: [] });
+  }
+
+  // 🛑 Rate Limit: max. 30 Inbox-Key-Abfragen pro Minute pro User
+  const rlInbox = await rateLimit(env, `inbox_get:${me}`, 60_000, 30, { failOpen: true });
+  if (!rlInbox) return json(request, { error: "Too many requests" }, 429);
+
+  // 🔒 Contact-Check: nur eigene Keys oder akzeptierte Kontakte abrufbar
+  if (user !== me) {
+    const isContact = await isAcceptedContact(env, me, user);
+    if (!isContact) return json(request, { devices: [] });
   }
 
   const idxKey = `e2e:inbox:index:${user}`;
@@ -724,10 +747,13 @@ const user = (param(params, "user") || "").toLowerCase();
     if (!raw) continue;
 
     try {
-      devices.push({
-        deviceId,
-        jwk: JSON.parse(raw)
-      });
+      const entry = { deviceId, jwk: JSON.parse(raw) };
+      // 🔏 Signing Public Key mitsenden (falls vorhanden)
+      const rawSig = await env.RENEX_KV.get(`e2e:inbox:sigpub:${user}:${deviceId}`);
+      if (rawSig) {
+        try { entry.sigPub = JSON.parse(rawSig); } catch {}
+      }
+      devices.push(entry);
     } catch {}
   }
 
@@ -922,7 +948,9 @@ const {
   v,
   type,
   sid,
-  epoch
+  epoch,
+  sig,
+  deviceId: senderDeviceId
 } = body;
 
 // 🔒 Recipient Validation (early guard)
@@ -953,6 +981,14 @@ if (typeof sid === "string" && sid.length > MAX_SID_LEN) {
 }
 if (typeof type === "string" && type.length > MAX_TYPE_LEN) {
   return json(request, { error: "type too large" }, 400);
+}
+// sig: ECDSA P-256 Signatur (base64, max ~120 Zeichen)
+if (sig !== undefined && (typeof sig !== "string" || sig.length > 256)) {
+  return json(request, { error: "sig invalid" }, 400);
+}
+// senderDeviceId: device_id des Senders für sig-Verifikation
+if (senderDeviceId !== undefined && (typeof senderDeviceId !== "string" || senderDeviceId.length > 64)) {
+  return json(request, { error: "deviceId invalid" }, 400);
 }
 
 console.log("📨 SEND BODY TYPE:", type);
@@ -1163,8 +1199,8 @@ if (typeof v === "number" && type !== "cmk_req" && type !== "cmk") {
 if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set") {
   await env.RENEX_DB.prepare(
     `INSERT OR IGNORE INTO messages
-       (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     msg.id,
     cid,
@@ -1181,7 +1217,9 @@ if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" 
     msg.ivB64 ?? null,
     msg.ctB64 ?? null,
     msg.payloads ? JSON.stringify(msg.payloads) : null,
-    rotationIndex
+    rotationIndex,
+    (typeof sig === "string" && sig.length > 0) ? sig : null,
+    (typeof senderDeviceId === "string" && senderDeviceId.length > 0) ? senderDeviceId : null
   ).run();
 }
 
@@ -1327,6 +1365,8 @@ sliced = (rows.results || []).reverse().map(r => {
     try { m.payloads = JSON.parse(r.payloads); } catch {}
   }
   if (r.rotation_index) m.rotationIndex = r.rotation_index;
+  if (r.sig)       m.sig      = r.sig;
+  if (r.device_id) m.deviceId = r.device_id;
   return m;
 });
 
@@ -1528,12 +1568,6 @@ const { handle } = body;
   const rlOk = await rateLimit(env, `register_start:${ip}`, 60_000, 5);
   if (!rlOk) return json(request, { error: "Too many requests" }, 429);
 
-  // 🤖 Turnstile Bot-Schutz — muss vor jeder weiteren Verarbeitung geprüft werden
-  const turnstileOk = await verifyTurnstile(body.turnstile_token, ip, env);
-  if (!turnstileOk) {
-    return json(request, { error: "Bot check failed. Please try again." }, 403);
-  }
-
   // 🚫 Handle-Sperre prüfen (gelöschte Accounts)
   const deletedFlag = await env.RENEX_KV.get(`deleted:${h}`);
   if (deletedFlag) {
@@ -1732,32 +1766,8 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
   );
 
   if (!stored) {
-    // User existiert nicht — fake Challenge zurückgeben, um User Enumeration zu verhindern.
-    // Wir speichern die Challenge als "fake", damit login/finish generisch ablehnen kann.
-    const fakeCredentialId = base64url(crypto.getRandomValues(new Uint8Array(32)));
-    await env.RENEX_KV.put(
-      `challenge:login:${handle}`,
-      JSON.stringify({
-        challenge: challengeB64,
-        credential_id: fakeCredentialId,
-        ts: Date.now(),
-        fake: true,
-      }),
-      { expirationTtl: 300 }
-    );
-    return json(request, {
-      publicKey: {
-        challenge: challengeB64,
-        rpId: "app.renex.id",
-        allowCredentials: [{
-          type: "public-key",
-          id: fakeCredentialId,
-          transports: ["internal"]
-        }],
-        userVerification: "required",
-        timeout: 60000,
-      },
-    });
+    // User existiert nicht → Registrierung starten
+    return json(request, { registered: false });
   }
 
   let parsed;
@@ -2025,15 +2035,16 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
     JSON.stringify({
       handle,
       created_at: Date.now(),
-      exp: Date.now() + 86400000,
+      exp: Date.now() + 86_400_000, // 24h in ms
       ua: uaHash || null
     }),
-    { expirationTtl: 86400 }
+    { expirationTtl: 86_400 }       // 24h in Sekunden (KV TTL)
   );
 
   // 📋 Session-Index aktualisieren (für spätere Revocation)
   await registerSessionToken(env, handle, sessionToken);
 
+  // Max-Age = 86400s = 24h (Cookie-Laufzeit = KV TTL)
   const sessionCookie = `session=${sessionToken}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=86400`;
   return new Response(JSON.stringify({ authenticated: true }), {
     status: 200,
@@ -2043,6 +2054,58 @@ if (!body) return json(request, { error: "Invalid JSON" }, 400);
       ...corsHeaders(request),
     },
   });
+}
+
+break;
+
+// =========================
+// AUTH / SESSION CHECK (immer 200 — kein Console-Error im Browser)
+// =========================
+case "/auth/session":
+
+if (request.method === "GET") {
+  const session = await requireSession(request, env);
+  if (!session) return json(request, { valid: false });
+  return json(request, { valid: true, handle: session.handle });
+}
+
+break;
+
+// =========================
+// USERS / ME
+// =========================
+case "/users/me":
+
+if (request.method === "GET") {
+  const session = await requireSession(request, env);
+  if (!session) return json(request, { error: "Not authenticated" }, 401);
+  return json(request, { handle: session.handle });
+}
+
+break;
+
+// =========================
+// AUTH / WS-TICKET
+// Kurzlebiges Einmal-Ticket (60s TTL) für WebSocket-Auth.
+// Kein Session-Token in der WS-URL — Ticket wird nach erstem
+// Verbindungsaufbau sofort aus KV gelöscht.
+// ⚠️ Cloudflare KV: minimales expirationTtl = 60s
+// =========================
+case "/auth/ws-ticket":
+
+if (request.method === "POST") {
+
+  const session = await requireSession(request, env);
+  if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+  const ticket = `wst_${crypto.randomUUID()}`;
+  await env.RENEX_KV.put(
+    `ws-ticket:${ticket}`,
+    JSON.stringify({ handle: session.handle }),
+    { expirationTtl: 60 }  // ⚠️ KV-Minimum: 60s
+  );
+
+  return json(request, { ticket });
 }
 
 break;

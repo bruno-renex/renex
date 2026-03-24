@@ -12,7 +12,10 @@ import {
   getLastRotationTime,
   setLastRotationTime,
   getRotationMap,
-  findCmkForRotationIndex
+  findCmkForRotationIndex,
+  signMessage,
+  verifyMessageSig,
+  getSigPubForDevice
 } from "./e2e.js";
 
 import {
@@ -259,6 +262,8 @@ if (event?.type === "NEW_MESSAGE") {
   // CMK-Rotation nur bei Device-Revoke (noch nicht implementiert).
   if (event?.type === "DEVICE_ADDED" && event.peer === withUser) {
     console.log("🔑 DEVICE_ADDED → CMK re-wrap für alle Devices:", event.peer);
+    // Cache invalidieren → nächster fetchInboxKeys holt frische Devices
+    invalidateInboxKeyCache(event.peer);
     const cooldownKey = `cmkRewrapCooldown:${withUser}`;
     const lastRewrap = Number(sessionStorage.getItem(cooldownKey) || 0);
     if (Date.now() - lastRewrap < 30_000) {
@@ -300,6 +305,8 @@ if (event?.type === "NEW_MESSAGE") {
   if (event?.type === "DEVICE_ADDED_SELF") {
     if (!isAuthority(getMyUser(), withUser) || !e2eReady || !sessionCmkBytes) return;
     console.log("🔑 DEVICE_ADDED_SELF → CMK für eigene neue Devices re-wrappen:", withUser);
+    // Cache invalidieren → eigene neuen Devices werden frisch geladen
+    invalidateInboxKeyCache(getMyUser());
     const cooldownKey = `cmkSelfRewrapCooldown:${withUser}`;
     const lastRewrap = Number(sessionStorage.getItem(cooldownKey) || 0);
     if (Date.now() - lastRewrap < 30_000) {
@@ -485,11 +492,28 @@ return true;
 
 // ======================================================
 // 🔐 INBOX KEYS LADEN (für First Message Bootstrap)
+// TTL-Cache: vermeidet redundante KV-Reads bei device_added / CMK-Rotation
 // ======================================================
+const inboxKeyCache = new Map(); // handle → { devices, expiresAt }
+const INBOX_KEY_TTL = 30_000;   // 30s: kurz genug dass neue Devices erscheinen
+
+export function invalidateInboxKeyCache(handle) {
+  inboxKeyCache.delete(handle);
+}
+
 async function fetchInboxKeys(peerHandle) {
+  // Cache-Hit?
+  const cached = inboxKeyCache.get(peerHandle);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.devices;
+  }
+
   try {
     const res = await apiFetch(`/e2e/inbox/get?user=${peerHandle}`);
     const devices = Array.isArray(res.devices) ? res.devices : [];
+
+    // Ergebnis cachen (auch leeres Array — verhindert Hammer bei offline-User)
+    inboxKeyCache.set(peerHandle, { devices, expiresAt: Date.now() + INBOX_KEY_TTL });
 
     if (devices.length === 0) {
       console.warn("ℹ️ Keine Inbox-Keys für", peerHandle);
@@ -500,7 +524,8 @@ async function fetchInboxKeys(peerHandle) {
     return devices;
   } catch (e) {
     console.warn("Inbox-Key fetch failed", e);
-    return [];
+    // Bei Fehler: alten Cache zurückgeben falls vorhanden
+    return cached?.devices ?? [];
   }
 }
 
@@ -590,9 +615,27 @@ if (!e2eReady || !(sessionKeyBytes instanceof Uint8Array)) {
 
 if (typeof decrypted === "string") {
 
+  // 🔏 Signatur prüfen (nur bei Peer-Nachrichten mit sig-Feld)
+  let finalText = decrypted;
+  if (msg.from !== getMyUser() && msg.sig && msg.deviceId) {
+    const sigPub = await getSigPubForDevice(msg.from, msg.deviceId);
+    if (sigPub) {
+      const sigOk = await verifyMessageSig(
+        msg.ivB64, msg.ctB64,
+        msg.sid || sessionId, baseEpoch,  // signierte Epoch = msg.epoch, nicht Loop-var ep
+        msg.sig, sigPub
+      );
+      if (!sigOk) {
+        console.warn("🚨 Signatur-Fehler — mögliche Manipulation!", msg.id);
+        finalText = "⚠️ [Nachricht konnte nicht verifiziert werden]";
+      }
+    }
+    // kein sigPub → alte Nachricht oder Upload ausstehend → nicht warnen
+  }
+
   // ✅ Cache setzen (vor return)
   if (msg?.id) {
-    decryptedCache.set(msg.id, decrypted);
+    decryptedCache.set(msg.id, finalText);
 
     // simple cap
     if (decryptedCache.size > MAX_DECRYPT_CACHE) {
@@ -605,7 +648,7 @@ if (typeof decrypted === "string") {
     epoch: ep
   });
 
-  return decrypted;   // "" ist hier erlaubt!
+  return finalText;   // "" ist hier erlaubt!
 }
 
       } catch {
@@ -747,6 +790,10 @@ if (deferredQueue.length === 0) return;
       const mk = await deriveMessageKey(sessionKeyBytes, sessionId, epoch);
       const { ivB64, ctB64 } = await e2eEncrypt(mk, item.text);
 
+      // 🔏 Nachricht signieren — verhindert Backend-Manipulation von ctB64
+      const sig      = await signMessage(ivB64, ctB64, sessionId, epoch);
+      const deviceId = getDeviceId();
+
       const res = await apiFetch("/chat/send", {
         method: "POST",
         body: JSON.stringify({
@@ -756,7 +803,9 @@ if (deferredQueue.length === 0) return;
           sid: sessionId,
           epoch,
           ivB64,
-          ctB64
+          ctB64,
+          sig,
+          deviceId
         })
       });
 

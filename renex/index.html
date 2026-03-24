@@ -111,13 +111,11 @@ applyI18n();
 // 🔐 SICHERER AUTO-LOGIN CHECK
 // =========================================
 async function checkExistingSession() {
-  try {
-    // Cookie wird automatisch mitgeschickt — kein Token in localStorage
-    await apiFetch("/users/me");
-    // ✅ Session gültig → Inbox
+  // /auth/session gibt immer 200 zurück — kein Browser-Console-Error
+  const res = await apiFetch("/auth/session");
+  if (res?.valid) {
     window.location.replace("./inbox.html");
-  } catch (e) {
-    // ❌ Kein Cookie / Session abgelaufen → Login-Seite bleiben
+  } else {
     localStorage.removeItem("my_user");
   }
 }

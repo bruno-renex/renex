@@ -187,13 +187,28 @@ async function processControlMessage(m) {
 }
 
 // ── WebSocket Verbindung ──────────────────────────────────
-function connect() {
+async function connect() {
   if (!running) return;
 
   const me = localStorage.getItem("my_user");
   if (!me) return;
 
-  const wsUrl = `wss://api.renex.id/chat/ws`;
+  // WS-Ticket holen (60s TTL, Einmal-Verwendung)
+  let wsUrl = `wss://api.renex.id/chat/ws`;
+  try {
+    const ticketRes = await apiFetch("/auth/ws-ticket", { method: "POST" });
+    if (ticketRes?.ticket) {
+      wsUrl = `wss://api.renex.id/chat/ws?ticket=${encodeURIComponent(ticketRes.ticket)}`;
+    }
+  } catch (e) {
+    // 401 / Session expired → apiFetch redirectet bereits zur Login-Seite
+    // Reconnect-Loop stoppen damit kein Endlos-Redirect entsteht
+    if (e?.message?.includes("Session expired") || e?.message?.includes("401")) {
+      running = false;
+      return;
+    }
+    // andere Fehler (Netzwerk etc.) → Fallback auf Cookie-Auth
+  }
 
   console.log("🔌 Control WebSocket connecting...");
 
@@ -229,9 +244,18 @@ function connect() {
     ws = null;
     console.log(`🔴 Control WebSocket closed (code: ${event.code})`);
 
-    // 1001 = Going Away (Tab close), 1000 = Normal → kein Reconnect nötig
+    // 1000 = Normal close, 1001 = Tab/Page close → kein Reconnect
     if (!running || event.code === 1000) return;
 
+    // 4401 = Auth-Fehler vom Server (Session ungültig) → zur Login-Seite
+    if (event.code === 4401) {
+      running = false;
+      localStorage.removeItem("my_user");
+      window.location.replace("/index.html");
+      return;
+    }
+
+    // Alle anderen Codes (1006 = Netzwerkfehler, 1011 = Server-Error…) → Reconnect
     scheduleReconnect();
   };
 

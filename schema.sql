@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS messages (
   iv_b64    TEXT,
   ct_b64    TEXT,
   payloads        TEXT,                 -- JSON string for multi-device payloads
-  rotation_index  INTEGER DEFAULT 0     -- SK rotation epoch index
+  rotation_index  INTEGER DEFAULT 0,    -- SK rotation epoch index
+  sig             TEXT,                 -- ECDSA-P256 Nachrichtensignatur (base64)
+  device_id       TEXT                  -- Sender-Device-ID für sig-Verifikation
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_convo_ts

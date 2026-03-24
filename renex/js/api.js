@@ -1,3 +1,12 @@
+// ======================================================
+// 🔇 PRODUCTION LOG SUPPRESSION
+// console.log wird in Production deaktiviert.
+// console.warn + console.error bleiben sichtbar.
+// ======================================================
+if (globalThis.location?.hostname === "app.renex.id") {
+  console.log = () => {};
+}
+
 export async function apiFetch(path, options = {}) {
   const res = await fetch("https://api.renex.id" + path, {
     ...options,
@@ -9,9 +18,12 @@ export async function apiFetch(path, options = {}) {
   });
 
   if (res.status === 401) {
-    console.warn("🔒 Session expired");
     localStorage.removeItem("my_user");
-    window.location.replace("/index.html");
+    const onLoginPage = window.location.pathname === "/" || window.location.pathname.endsWith("index.html");
+    if (!onLoginPage) {
+      console.warn("🔒 Session expired — redirecting to login");
+      window.location.replace("/index.html");
+    }
     throw new Error("Session expired");
   }
 

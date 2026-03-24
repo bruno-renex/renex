@@ -656,9 +656,16 @@ if (typeof decrypted === "string") {
       }
     }
 
-    console.warn("❌ MK decrypt failed (all epochs)", msg.id);
+    // Diagnose: mehr Kontext für Debugging
+    console.warn("❌ MK decrypt failed (all epochs)", msg.id, {
+      msgRotationIndex: typeof msg.rotationIndex === "number" ? msg.rotationIndex : 0,
+      sessionRotationIndex,
+      hasCmk: !!sessionCmkBytes,
+      sid: msg.sid || "(keins)",
+      computedSid: dmSessionId(getMyUser(), otherHandle)
+    });
 
-    return null;   // 🔥 WICHTIG: NICHT Error-String zurückgeben!
+    return "__decrypt_failed__";  // 🔥 Sentinel: permanenter Fehler — NICHT deferred!
 
   } catch (e) {
     console.warn("❌ decrypt crash", e);
@@ -870,6 +877,17 @@ if (deferredInboundMessages.length === 0) return;
       const text = await decryptMessageIfNeeded(m, withUser);
 
       if (text === null || text === "__control__") {
+        continue;  // null = noch kein Key, bleibt in queue
+      }
+
+      // Permanenter Decrypt-Fehler: Placeholder durch Fehlermeldung ersetzen
+      if (text === "__decrypt_failed__") {
+        const el = document.querySelector(`[data-id="${m.id}"]`);
+        if (el) {
+          const textEl = el.querySelector("div:first-child");
+          if (textEl) textEl.textContent = "🔒 Nachricht konnte nicht entschlüsselt werden";
+        }
+        if (m?.id) deferredInboundIds.delete(m.id);
         continue;
       }
 
@@ -1571,18 +1589,30 @@ async function processMessage(m) {
     text = "🔒 Verschlüsselte Nachricht (Fehler)";
   }
 
-  // Noch kein Key → Placeholder
+  // Key fehlt noch → Placeholder + deferred (wird nach CMK-Empfang entschlüsselt)
   if (text === null) {
     deferredInboundMessages.push(m);
     deferredInboundIds.add(messageId);
     renderMessage({
       id: messageId,
       from: m.from,
-      message: "🔒 Verschlüsselte Nachricht (warte auf Schlüssel)…",
+      message: "🔒 Nachricht wird entschlüsselt…",
       ts: m.ts
     });
     renderedMessageIds.add(messageId);
     return false;
+  }
+
+  // Permanenter Decrypt-Fehler (falscher CMK / anderes Gerät / alter Key)
+  if (text === "__decrypt_failed__") {
+    renderedMessageIds.add(messageId);
+    renderMessage({
+      id: messageId,
+      from: m.from,
+      message: "🔒 Nachricht konnte nicht entschlüsselt werden",
+      ts: m.ts
+    });
+    return true;
   }
 
   // Normale Nachricht rendern

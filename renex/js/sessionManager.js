@@ -20,6 +20,26 @@ import {
 
 const sessionCache = new Map(); // sid -> { cmkBytes, skBytes, ready }
 
+// ======================================================
+// DM vs. GRUPPE unterscheiden
+// ======================================================
+
+/**
+ * DM-Konversation: convoId = "alice:bob" (kein Sonderzeichen, kein Prefix)
+ * Gruppe:          convoId = UUID (z.B. "550e8400-e29b-41d4-a716-446655440000")
+ *
+ * Authority-Konzept, CMK, isAuthority() → NUR für DMs gültig.
+ * Gruppen nutzen Sender Keys (groupSessionManager.js).
+ */
+export function isDMConversation(convoId) {
+  // UUID-Pattern: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  return !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(convoId);
+}
+
+/**
+ * Authority = alphabetisch kleinerer Handle.
+ * ⚠️  NUR für 1:1 DMs — für Gruppen gilt Sender Keys (kein Authority-Konzept).
+ */
 export function isAuthority(me, peer) {
   const a = String(me || "").toLowerCase();
   const b = String(peer || "").toLowerCase();

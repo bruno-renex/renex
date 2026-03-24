@@ -80,7 +80,7 @@ export async function handleChatSend(request, env) {
 
   // HARD SEND RATE LIMIT (global pro User)
   // GILT NICHT für Control-Messages
-  if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set") {
+  if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk") {
     const ok = await rateLimit(
       env,
       `chat_send:${me}`,
@@ -95,7 +95,7 @@ export async function handleChatSend(request, env) {
 
   // CONTROL MESSAGE RATE LIMIT (cmk / cmk_req / epoch_rotate)
   // Max. 10 Key-Exchange-Messages pro Minute pro User
-  if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set") {
+  if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set" || type === "gsk") {
     const ok = await rateLimit(env, `control_send:${me}`, 60_000, 10);
     if (!ok) {
       return json(request, { error: "Control message rate limit exceeded", retryAfterMs: 60000 }, 429);
@@ -103,7 +103,7 @@ export async function handleChatSend(request, env) {
   }
 
   // E2E Versions-Guard — gilt NUR für echte E2E-Nachrichten
-  if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set") {
+  if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk") {
     if (v !== undefined && v !== 2) {
       return json(request, { error: "Unsupported E2E version" }, 400);
     }
@@ -157,7 +157,7 @@ export async function handleChatSend(request, env) {
   }
 
   // Nur echte Chat-Messages brauchen Payload
-  if (!type || (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set")) {
+  if (!type || (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk")) {
     if (!message && !(hasLegacyE2E || hasMultiE2E)) {
       return json(request, { error: "Missing message payload" }, 400);
     }
@@ -231,7 +231,7 @@ export async function handleChatSend(request, env) {
   }
 
   // D1 INSERT — only real chat messages (not control)
-  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set") {
+  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk") {
     await env.RENEX_DB.prepare(
       `INSERT OR IGNORE INTO messages
          (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id)
@@ -269,7 +269,7 @@ export async function handleChatSend(request, env) {
   // ======================================================
   // UNREAD COUNTER
   // ======================================================
-  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set") {
+  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk") {
     const unreadKey = `unread:${other}:${me}`;
     let count = 0;
     const rawUnread = await env.RENEX_KV.get(unreadKey);

@@ -182,7 +182,7 @@ export async function revokeAllSessions(env, handle) {
   }
 }
 
-// ── Event via DO an User pushen ───────────────────────
+// ── Event via DO an einzelnen User pushen ────────────
 // Fail-silent: User offline → kein Problem, KV hat's gespeichert
 export async function pushToUserDO(env, handle, event) {
   try {
@@ -197,6 +197,31 @@ export async function pushToUserDO(env, handle, event) {
     // User offline oder DO nicht erreichbar → kein Fehler
     console.log("📴 pushToUserDO skipped (user offline):", handle);
   }
+}
+
+// ── Event an alle Gruppen-Mitglieder pushen ───────────
+// Liest Mitglieder aus conversation_members, pusht an jeden (ausser Sender).
+// Parallel via Promise.allSettled — ein offline User blockiert keine anderen.
+export async function pushToGroupMembers(env, db, groupId, senderHandle, event) {
+  let members;
+  try {
+    const rows = await db.prepare(
+      "SELECT member_handle FROM conversation_members WHERE convo_id = ?"
+    ).bind(groupId).all();
+    members = (rows.results || []).map(r => r.member_handle);
+  } catch (e) {
+    console.warn("pushToGroupMembers: D1 lookup failed", groupId, e);
+    return;
+  }
+
+  // Sender bekommt kein Echo über DO (er hat die Nachricht selbst gesendet)
+  const recipients = members.filter(h => h !== senderHandle);
+
+  await Promise.allSettled(
+    recipients.map(handle => pushToUserDO(env, handle, event))
+  );
+
+  console.log(`📡 Group push: ${groupId} → ${recipients.length} members`);
 }
 
 // ======================================================

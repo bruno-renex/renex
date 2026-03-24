@@ -1,5 +1,5 @@
 import { json, readJson, dmConvoId } from '../utils.js';
-import { requireSession, rateLimit, isAcceptedContact, pushToUserDO } from '../auth.js';
+import { requireSession, rateLimit, isAcceptedContact, pushToUserDO, pushToGroupMembers } from '../auth.js';
 
 // ======================================================
 // CHAT / SEND handler (extracted for line-count budget)
@@ -255,14 +255,19 @@ export async function handleChatSend(request, env) {
   }
 
   // ======================================================
-  // CONTROL INDEX (für /chat/control)
+  // LIVE PUSH via Durable Object
+  // DM:    → pushToUserDO(to)         — einzelner Empfänger
+  // Gruppe:→ pushToGroupMembers(cid)  — alle Mitglieder ausser Sender
   // ======================================================
-  if (msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "epoch_rotate" || msg.type === "cmk_rotate" || msg.type === "auto_delete_set" || msg.type === undefined) {
+  if (bodyConvoId) {
+    // Gruppen-Nachricht: an alle Mitglieder der Konversation senden
+    await pushToGroupMembers(env, env.RENEX_DB, bodyConvoId, me, msg);
+  } else {
+    // DM: an einzelnen Empfänger senden
     if (!to || typeof to !== "string") {
-      console.error("❌ CONTROL: invalid 'to'", to);
-      return json(request, { error: "Invalid control target" }, 400);
+      console.error("❌ PUSH: invalid 'to'", to);
+      return json(request, { error: "Invalid recipient" }, 400);
     }
-    // Live Push via DO
     await pushToUserDO(env, String(to).toLowerCase(), msg);
   }
 

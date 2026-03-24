@@ -118,11 +118,28 @@ export async function handleChatSend(request, env) {
     }
   }
 
-  // Darf nur an ACCEPTED Kontakte senden — gilt für ALLE Message-Typen inkl. Control-Messages
-  // (verhindert CMK-Flooding / E2E-Manipulation gegen Nicht-Kontakte)
-  const isAllowed = await isAcceptedContact(env, me, to);
+  // Zugriffsprüfung: DM vs. Gruppe
+  // DM:     beide müssen gegenseitige Kontakte sein (verhindert Spam + CMK-Flooding)
+  // Gruppe: Sender UND Empfänger müssen Mitglieder der Konversation sein
+  let isAllowed = false;
+  if (bodyConvoId) {
+    // Gruppen-Nachricht: Mitgliedschaft prüfen
+    const senderMember = await env.RENEX_DB.prepare(
+      "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+    ).bind(bodyConvoId, me).first();
+
+    const recipientMember = await env.RENEX_DB.prepare(
+      "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+    ).bind(bodyConvoId, other).first();
+
+    isAllowed = !!(senderMember && recipientMember);
+  } else {
+    // DM: gegenseitiger Kontakt-Check (bestehende Logik)
+    isAllowed = await isAcceptedContact(env, me, to);
+  }
+
   if (!isAllowed) {
-    return json(request, { error: "Recipient not accepted" }, 403);
+    return json(request, { error: "Not authorized for this conversation" }, 403);
   }
 
   if (!other) {

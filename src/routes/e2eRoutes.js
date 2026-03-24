@@ -234,10 +234,20 @@ export async function handleE2eRoutes(request, env, path, params) {
         const rlInbox = await rateLimit(env, `inbox_get:${me}`, 60_000, 30, { failOpen: true });
         if (!rlInbox) return json(request, { error: "Too many requests" }, 429);
 
-        // Contact-Check: nur eigene Keys oder akzeptierte Kontakte abrufbar
+        // Zugriffsprüfung: eigene Keys immer erlaubt
+        // Fremde Keys: entweder Kontakt ODER gemeinsames Gruppen-Mitglied
         if (user !== me) {
           const isContact = await isAcceptedContact(env, me, user);
-          if (!isContact) return json(request, { devices: [] });
+          if (!isContact) {
+            // Fallback: gemeinsame Gruppe prüfen (JOIN über conversation_members)
+            const sharedGroup = await env.RENEX_DB.prepare(`
+              SELECT 1 FROM conversation_members cm1
+              JOIN conversation_members cm2 ON cm1.convo_id = cm2.convo_id
+              WHERE cm1.member_handle = ? AND cm2.member_handle = ?
+              LIMIT 1
+            `).bind(me, user).first();
+            if (!sharedGroup) return json(request, { devices: [] });
+          }
         }
 
         const idxKey = `e2e:inbox:index:${user}`;

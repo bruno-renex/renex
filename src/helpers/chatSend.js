@@ -170,10 +170,14 @@ export async function handleChatSend(request, env) {
     ? bodyConvoId
     : dmConvoId(me, other);
 
+  const isGroupMessage = !!bodyConvoId;
+
   const msg = {
     id: crypto.randomUUID(),
     from: me,
-    to: other,
+    // DM:    to = peer handle (für Delivered-Status + DO-Routing)
+    // Gruppe: to = null  (Empfänger kommen aus conversation_members)
+    to: isGroupMessage ? null : other,
     ts: Date.now(),
     status: "sent"
   };

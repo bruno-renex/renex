@@ -228,7 +228,8 @@ if (event?.type === "NEW_MESSAGE") {
       if (wasAtBottom) { scrollToBottom(); unreadCount = 0; }
       else { unreadCount++; }
       updateUnreadIndicator();
-      if (msg.from === withUser) {
+      // Delivered-Status nur für DMs — Gruppen: status='sent' ist die Server-Bestätigung (✓)
+      if (msg.from === withUser && !isGroupConversation(withUser)) {
         apiFetch("/chat/delivered", {
           method: "POST",
           body: JSON.stringify({ with: withUser })
@@ -750,6 +751,12 @@ async function uploadMyPublicKeyIfNeeded() {
 // ======================================================
 function getMyUser() {
   return localStorage.getItem("my_user");
+}
+
+// Gruppen-Konversation = UUID (zukünftig als withUser gesetzt)
+// DM = "alice:bob" oder Handle-String
+function isGroupConversation(id) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id));
 }
 // ======================================================
 // DEVICE ID (STABIL PRO GERÄT)
@@ -1669,9 +1676,10 @@ async function loadMessages() {
 updateUnreadIndicator();
 
 // ==================================================
-// DELIVERED STATUS MELDEN
+// DELIVERED STATUS MELDEN (nur DMs)
+// Gruppen: status='sent' = Server-Bestätigung ✓, kein weiteres Tracking
 // ==================================================
-if (messages.some(m =>
+if (!isGroupConversation(withUser) && messages.some(m =>
   m &&
   m.from === withUser &&
   m.to === getMyUser() &&

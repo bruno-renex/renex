@@ -180,9 +180,18 @@ export async function handleChatRoutes(request, env, path, params) {
           return json(request, { error: "Missing with" }, 400);
         }
 
+        // Gruppen-Konversationen: kein Delivered-Tracking (Option D)
+        // Status bleibt 'sent' = Server-Bestätigung ✓
+        // UUID-Format erkennt Gruppen (DMs: "alice:bob")
+        const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(other);
+        if (isGroup) {
+          return json(request, { ok: true, updated: 0, skipped: "group" });
+        }
+
         const cid = dmConvoId(me, other);
 
-        // D1 UPDATE — mark incoming messages as delivered
+        // D1 UPDATE — mark incoming DM messages as delivered
+        // to_user IS NOT NULL Guard verhindert versehentliches Update von Gruppen-Messages
         const result = await env.RENEX_DB.prepare(
           `UPDATE messages
            SET status = 'delivered'

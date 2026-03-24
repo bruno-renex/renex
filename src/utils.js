@@ -146,11 +146,16 @@ export function derToRawECDSA(derSig) {
 }
 
 // ======================================================
-// convoId helper (same sorting logic as old chatKey)
+// dmConvoId — deterministisches Konversations-ID für 1:1 DMs
+// Format: "alice:bob" (alphabetisch sortiert, lowercase)
+// Für Gruppen wird stattdessen eine UUID verwendet (GroupChatDO).
 // ======================================================
-export function convoId(a, b) {
+export function dmConvoId(a, b) {
   const x = String(a).toLowerCase();
   const y = String(b).toLowerCase();
   const [p, q] = x < y ? [x, y] : [y, x];
   return `${p}:${q}`;
 }
+
+// Backward-Kompatibilität: bestehende Importe müssen nicht sofort angepasst werden
+export const convoId = dmConvoId;

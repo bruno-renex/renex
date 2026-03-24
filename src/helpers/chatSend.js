@@ -1,4 +1,4 @@
-import { json, readJson, convoId } from '../utils.js';
+import { json, readJson, dmConvoId } from '../utils.js';
 import { requireSession, rateLimit, isAcceptedContact, pushToUserDO } from '../auth.js';
 
 // ======================================================
@@ -19,6 +19,7 @@ export async function handleChatSend(request, env) {
 
   const {
     to,
+    convoId: bodyConvoId,   // optional: explizite Konversations-ID (Gruppen-Ready)
     message,
     e2e,
     payloads,
@@ -145,8 +146,12 @@ export async function handleChatSend(request, env) {
     }
   }
 
-  // Conversation ID
-  const cid = convoId(me, other);
+  // Conversation ID:
+  // - DM:    wird aus me + other berechnet → "alice:bob"
+  // - Gruppe: kommt als explizites Feld im Body (UUID, vom Client gesetzt)
+  const cid = (typeof bodyConvoId === "string" && bodyConvoId.length > 0)
+    ? bodyConvoId
+    : dmConvoId(me, other);
 
   const msg = {
     id: crypto.randomUUID(),

@@ -1,4 +1,4 @@
-import { json, readJson, param, convoId } from '../utils.js';
+import { json, readJson, param, dmConvoId } from '../utils.js';
 import { requireSession, rateLimit, pushToUserDO } from '../auth.js';
 import { handleChatSend } from '../helpers/chatSend.js';
 
@@ -61,7 +61,7 @@ export async function handleChatRoutes(request, env, path, params) {
         }
 
         const other = String(otherRaw).toLowerCase();
-        const cid = convoId(me, other);
+        const cid = dmConvoId(me, other);
 
         let sliced = [];
 
@@ -180,7 +180,7 @@ export async function handleChatRoutes(request, env, path, params) {
           return json(request, { error: "Missing with" }, 400);
         }
 
-        const cid = convoId(me, other);
+        const cid = dmConvoId(me, other);
 
         // D1 UPDATE — mark incoming messages as delivered
         const result = await env.RENEX_DB.prepare(

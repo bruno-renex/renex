@@ -1,4 +1,4 @@
-import { json, readJson } from '../utils.js';
+import { json, readJson, dmConvoId } from '../utils.js';
 import { requireSession, pushToUserDO } from '../auth.js';
 
 // ======================================================
@@ -20,7 +20,7 @@ export async function handleAutoDeleteRoutes(request, env, path, params) {
         const url = new URL(request.url);
         const peer = url.searchParams.get("peer");
         if (!peer) return json(request, { error: "peer required" }, 400);
-        const convoId = [me, peer].sort().join(":");
+        const convoId = dmConvoId(me, peer);
         const row = await env.RENEX_DB.prepare(
           "SELECT * FROM auto_delete_settings WHERE convo_id = ?"
         ).bind(convoId).first();
@@ -40,7 +40,7 @@ export async function handleAutoDeleteRoutes(request, env, path, params) {
         if (contact?.status !== "accepted") return json(request, { error: "Not a contact" }, 403);
 
         const ALLOWED_DAYS = new Set([1, 7, 28, 90]);
-        const convoId = [me, peer].sort().join(":");
+        const convoId = dmConvoId(me, peer);
         const now = Date.now();
 
         if (action === "propose") {

@@ -1,11 +1,42 @@
 -- RENEX D1 Schema
 -- Run: npx wrangler d1 execute renex-db --file=schema.sql
 
+-- ======================================================
+-- Conversations — generisches Modell für DM + Gruppen
+-- DMs:    id = "alice:bob" (alphabetisch, kein Prefix)
+-- Gruppen: id = UUID (zukünftig, via GroupChatDO erstellt)
+-- ======================================================
+CREATE TABLE IF NOT EXISTS conversations (
+  id         TEXT    PRIMARY KEY,          -- "alice:bob" | UUID
+  type       TEXT    NOT NULL DEFAULT 'dm', -- 'dm' | 'group'
+  name       TEXT,                          -- Gruppenname (NULL für DMs)
+  created_at INTEGER NOT NULL,
+  created_by TEXT    NOT NULL
+);
+
+-- Mitglieder einer Konversation (DM: 2 Einträge, Gruppe: N Einträge)
+CREATE TABLE IF NOT EXISTS conversation_members (
+  convo_id      TEXT    NOT NULL,
+  member_handle TEXT    NOT NULL,
+  role          TEXT    NOT NULL DEFAULT 'member', -- 'member' | 'admin'
+  joined_at     INTEGER NOT NULL,
+  PRIMARY KEY (convo_id, member_handle)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_members_handle
+  ON conversation_members(member_handle);
+
+-- ======================================================
+-- Messages
+-- convo_id → references conversations.id
+-- to_user:  DM = Empfänger-Handle, Gruppe = NULL
+--           (Gruppen-Empfänger werden über conversation_members bestimmt)
+-- ======================================================
 CREATE TABLE IF NOT EXISTS messages (
   id        TEXT    PRIMARY KEY,
-  convo_id  TEXT    NOT NULL,     -- sorted pair: "alice:bob"
+  convo_id  TEXT    NOT NULL,
   from_user TEXT    NOT NULL,
-  to_user   TEXT    NOT NULL,
+  to_user   TEXT,                -- NULL für Gruppen-Nachrichten
   ts        INTEGER NOT NULL,
   status    TEXT    DEFAULT 'sent',
   type      TEXT,                 -- NULL for regular messages

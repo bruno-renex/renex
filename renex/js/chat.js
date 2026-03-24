@@ -456,7 +456,7 @@ async function fetchAndStorePeerPublicKey(peerHandle) {
 
     // 2️⃣ Fallback → Inbox-Key
     if (devices.length === 0) {
-      console.warn("ℹ️ Keine Chat-Keys – versuche Inbox-Key:", peerHandle);
+      console.log("ℹ️ Keine Chat-Keys – versuche Inbox-Key:", peerHandle);
 
       const inbox = await apiFetch(`/e2e/inbox/get?user=${peerHandle}`);
 
@@ -1145,10 +1145,12 @@ updateSendButton();
 inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-
     sendBtn.click();
   }
 });
+
+  // Fokus sofort auf das Eingabefeld setzen
+  inputEl.focus();
 // =========================
 // MESSAGE LENGTH CHECK
 // =========================
@@ -1844,7 +1846,12 @@ if (window.__chatStartupDone) {
 window.__chatStartupDone = true;
 
   console.log("💬 Chat Startup läuft");
-  
+
+  // 0️⃣ UI sofort binden — Enter & Click funktionieren von Anfang an.
+  // Nachrichten während E2E-Setup werden in deferredQueue gepuffert und
+  // nach CMK-Ready via flushDeferredQueue() gesendet.
+  startChat();
+
   // 1️⃣ Eigene E2E-Keys
   getDeviceId(); // ✅ Device-ID sicher setzen
   await initE2EKeys();

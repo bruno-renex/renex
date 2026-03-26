@@ -30,6 +30,13 @@ import {
 
 import { apiFetch } from "./api.js";
 import lang from "./i18n.js";
+import {
+  encryptGroupMessage,
+  decryptGroupMessage,
+  getOrCreateGroupSK,
+  getGroupSK,
+  distributeGroupSK
+} from "./groupSessionManager.js";
 // ======================================================
 // CONFIG
 // ======================================================
@@ -38,6 +45,8 @@ const MAX_MESSAGE_LENGTH = 1000;
 const SEND_COOLDOWN_MS = 2000;
 const deferredInboundMessages = [];
 const deferredInboundIds = new Set();
+// GSK-Requests: verhindert Spam (max 1 Request pro Sender pro Session)
+const pendingGskRequests = new Set();
 
 // ======================================================
 // CMK v2 – Epoch Definition (GLOBAL)
@@ -66,6 +75,7 @@ let unreadCount = 0;
 let lastSendTime = 0;
 let cooldownTimer = null;
 let sendFailsafeTimer = null;
+let fallbackFlushTimer = null; // Race-Guard: Fallback-CMK Flush verzögern bis Authority-CMK ankommt
 let e2eReady = false;
 let lastSendBtnState = null;
 let sessionKeyBytes = null;   // Uint8Array(32) — current SK
@@ -218,9 +228,10 @@ if (event?.type === "NEW_MESSAGE") {
   const msg = event.message;
   if (!msg) return;
   const me = getMyUser();
-  const isForThisChat =
-    (msg.from === withUser && msg.to === me) ||
-    (msg.from === me && msg.to === withUser);
+  // Gruppen: msg.groupId (immer) oder msg.sid (= group UUID); DM: from/to
+  const isForThisChat = isGroupConversation(withUser)
+    ? (msg.groupId === withUser || msg.sid === withUser)
+    : ((msg.from === withUser && msg.to === me) || (msg.from === me && msg.to === withUser));
   if (isForThisChat && e2eReady) {
     const wasAtBottom = isUserAtBottom();
     processMessage(msg).then(isNew => {
@@ -371,6 +382,38 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
+  // 🔑 GSK_READY: Gruppen-Sender-Key empfangen → deferred Nachrichten entschlüsseln
+  if (event?.type === "GSK_READY" && event.groupId === withUser) {
+    console.log("🔑 GSK_READY → reload + flush deferred Gruppen-Nachrichten:", event.from);
+    // loadMessages holt evtl. verpasste Nachrichten aus DB; flush entschlüsselt Placeholder
+    loadMessages().catch(() => {}).finally(() => flushDeferredInboundMessages().catch(() => {}));
+    return;
+  }
+
+  // 👋 GROUP_MEMBER_JOINED / 🚪 GROUP_MEMBER_LEFT:
+  // Nicht direkt showSystemMessage — stattdessen loadMessages() triggern,
+  // damit die persistierte DB-Zeile (type:"system") gerendert wird (kein Duplicate).
+  if ((event?.type === "GROUP_MEMBER_JOINED" || event?.type === "GROUP_MEMBER_LEFT") && event.groupId === withUser) {
+    initGroupMembersUI(withUser);
+    loadMessages().catch(() => {});
+    return;
+  }
+
+  // 🔑 REQUEST_GSK: ein Gruppen-Mitglied fehlt unser GSK → sofort re-distribuieren
+  if (event?.type === "REQUEST_GSK" && event.groupId === withUser) {
+    const myHandle = getMyUser();
+    if (!myHandle || event.from === myHandle) return;
+    console.log("🔑 REQUEST_GSK → re-distribuiere GSK an:", event.from);
+    fetchInboxKeys(event.from)
+      .then(devices => {
+        if (!devices?.length) return;
+        const tagged = devices.map(d => ({ ...d, memberHandle: event.from }));
+        return distributeGroupSK(withUser, myHandle, tagged, apiFetch);
+      })
+      .catch(e => console.warn("⚠️ GSK re-distribute on REQUEST_GSK fehlgeschlagen:", e));
+    return;
+  }
+
   // 🗑️ AUTO-DELETE: Vorschlag / Akzeptiert / Abgelehnt
   if (event?.type === "AUTO_DELETE_SET" && event.peer === withUser) {
     console.log("🗑️ AUTO_DELETE_SET:", event.action, "days:", event.days);
@@ -392,6 +435,13 @@ if (event?.type === "NEW_MESSAGE") {
 
     try {
 
+      // Fallback-Flush-Timer canceln — Authority-CMK hat Vorrang (Fallback-Race-Fix)
+      if (fallbackFlushTimer) {
+        clearTimeout(fallbackFlushTimer);
+        fallbackFlushTimer = null;
+        console.log("✅ CMK_READY: Fallback-Flush-Timer gecancelt — sende mit Authority-CMK");
+      }
+
       // CMK aus IDB laden (kann neuer CMK sein der Fallback überschrieben hat)
       const entry = await bootConversation(
         localStorage.getItem("my_user"),
@@ -406,6 +456,7 @@ if (event?.type === "NEW_MESSAGE") {
       sessionRotationIndex = entry.rotationIndex ?? 0;
       skCache.set(`${dmSessionId(getMyUser(), withUser)}:${sessionRotationIndex}`, sessionKeyBytes);
       e2eReady = true;
+      updateSendButton();
 
       if (!wasReady) {
         // Erstmals bereit: alles flushen
@@ -414,8 +465,9 @@ if (event?.type === "NEW_MESSAGE") {
         await flushDeferredInboundMessages();
       } else {
         // CMK ausgetauscht (Fallback → Authority CMK):
-        // Nachrichten neu laden damit evtl. noch nicht entschlüsselte gerendert werden
+        // Deferred Queue nochmals flushen (mit korrektem CMK) + Nachrichten neu laden
         await loadMessages();
+        await flushDeferredQueue();  // noch ausstehende Nachrichten mit Authority-CMK senden
         await flushDeferredInboundMessages();
       }
 
@@ -535,9 +587,47 @@ async function fetchInboxKeys(peerHandle) {
 // ======================================================
 async function decryptMessageIfNeeded(msg, otherHandle) {
 
+  // ── System-Messages (join/leave) → kein Decrypt nötig ──
+  if (msg?.type === "system") return msg.message || msg.text || "";
+
     // ✅ Wenn wir diese Message schon mal erfolgreich entschlüsselt haben:
   if (msg?.id && decryptedCache.has(msg.id)) {
     return decryptedCache.get(msg.id);
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // GRUPPEN-NACHRICHT: Sender Keys Protokoll (kein CMK / SessionKey)
+  // ──────────────────────────────────────────────────────────────
+  if (isGroupConversation(withUser)) {
+    // Eigene Nachrichten: Outbox Cache (kein Decrypt nötig)
+    if (msg.from === getMyUser()) {
+      const cached = getCachedSentMessage(msg.id);
+      if (cached !== null) return cached;
+      // Cache-Miss nach Seiten-Reload → eigene Nachricht über eigenen GSK entschlüsseln
+      // (IDB hat eigenen GSK gespeichert → wir können eigene Nachrichten selbst entschlüsseln)
+      if (msg.ivB64 && msg.ctB64) {
+        const chainIndex = typeof msg.rotationIndex === "number" ? msg.rotationIndex : 0;
+        const result = await decryptGroupMessage(withUser, getMyUser(), msg.ivB64, msg.ctB64, chainIndex);
+        if (typeof result === "string" && result !== "__decrypt_failed__" && msg?.id) {
+          decryptedCache.set(msg.id, result);
+        }
+        return result;
+      }
+      return null; // kein E2E-Payload → skip
+    }
+    // Kein E2E-Payload → nicht entschlüsselbar
+    if (!msg.ivB64 || !msg.ctB64) return null;
+    // chainIndex aus rotationIndex (im Backend so gespeichert)
+    const chainIndex = typeof msg.rotationIndex === "number" ? msg.rotationIndex : 0;
+    const result = await decryptGroupMessage(withUser, msg.from, msg.ivB64, msg.ctB64, chainIndex);
+    // null = GSK fehlt noch → deferred (wird nach GSK_READY flush wiederholt)
+    if (result === null) return null;
+    // Erfolg: in Decrypt-Cache aufnehmen
+    if (typeof result === "string" && result !== "__decrypt_failed__" && msg?.id) {
+      decryptedCache.set(msg.id, result);
+      if (decryptedCache.size > MAX_DECRYPT_CACHE) decryptedCache.clear();
+    }
+    return result; // Plaintext oder "__decrypt_failed__"
   }
 
   // ✅ Wenn E2E noch nicht ready → NICHT decrypten, NICHT warnen
@@ -872,7 +962,8 @@ if (deferredQueue.length === 0) return;
 // ======================================================
 async function flushDeferredInboundMessages() {
 if (!e2eReady) return;
-if (!(sessionKeyBytes instanceof Uint8Array)) return;
+// DMs brauchen sessionKeyBytes; Gruppen nutzen GSK (kein SK nötig)
+if (!isGroupConversation(withUser) && !(sessionKeyBytes instanceof Uint8Array)) return;
 if (deferredInboundMessages.length === 0) return;
   console.log("📥 Flush deferred INBOUND", deferredInboundMessages.length);
 
@@ -884,7 +975,9 @@ if (deferredInboundMessages.length === 0) return;
       const text = await decryptMessageIfNeeded(m, withUser);
 
       if (text === null || text === "__control__") {
-        continue;  // null = noch kein Key, bleibt in queue
+        // GSK noch nicht verfügbar → zurück in Deferred-Queue
+        deferredInboundMessages.push(m);
+        continue;
       }
 
       // Permanenter Decrypt-Fehler: Placeholder durch Fehlermeldung ersetzen
@@ -918,6 +1011,32 @@ renderMessage({
   }
 
   scrollToBottom();
+}
+
+// ======================================================
+// REQUEST_GSK — Pull-Mechanismus wenn GSK eines Senders fehlt
+// Sendet "request_gsk" Control-Message an den Sender (über Gruppen-Routing)
+// Der Sender antwortet mit distributeGroupSK() gezielt für unsere Devices
+// ======================================================
+async function requestGSKFrom(groupId, senderHandle) {
+  const key = `${groupId}:${senderHandle}`;
+  if (pendingGskRequests.has(key)) return; // max 1 Request pro Sender pro Session
+  pendingGskRequests.add(key);
+  try {
+    await apiFetch("/chat/send", {
+      method: "POST",
+      body: JSON.stringify({
+        to:            senderHandle,
+        convoId:       groupId,
+        type:          "request_gsk",
+        requestedFrom: senderHandle  // Nur der Angefragte antwortet (Handler-Filter)
+      })
+    });
+    console.log("📩 GSK angefordert von:", senderHandle, "in Gruppe:", groupId);
+  } catch (e) {
+    console.warn("⚠️ requestGSKFrom fehlgeschlagen:", e);
+    pendingGskRequests.delete(key); // Retry erlauben bei Netzwerkfehler
+  }
 }
 
 // ======================================================
@@ -994,7 +1113,7 @@ if (!e2eReady) {
   return;
 }
 
-if (!(sessionKeyBytes instanceof Uint8Array)) {
+if (!isGroupConversation(withUser) && !(sessionKeyBytes instanceof Uint8Array)) {
   console.warn("⚠️ SessionKey fehlt trotz e2eReady");
   return;
 }
@@ -1014,7 +1133,7 @@ if (now - lastSendTime < SEND_COOLDOWN_MS) {
     console.warn("🧯 Send-Failsafe ausgelöst");
     pendingByTempId.clear();
     updateSendButton(); // ✅ NUR freigeben wenn E2E ready
-    }, 8000);
+    }, 15000);
     
     // Optimistic UI
     const tempId = `tmp-${now}-${Math.random().toString(16).slice(2)}`;
@@ -1034,42 +1153,68 @@ if (now - lastSendTime < SEND_COOLDOWN_MS) {
 try {
 
 // ======================================================
-// CMK v2 – SEND PATH (MK statt CMK)
+// SEND PATH — Gruppe: Sender Keys / DM: CMK v2
 // ======================================================
+let res;
 
-// 1️⃣ Session-ID (deterministisch)
-const sessionId = dmSessionId(getMyUser(), withUser);
+if (isGroupConversation(withUser)) {
 
-// 2️⃣ Epoch bestimmen (z. B. 1 Stunde)
-const epoch = Math.floor(Date.now() / EPOCH_MS);
+  // ── GRUPPE ─────────────────────────────────────────
+  // O(1) Encrypt mit eigenem Group Sender Key (kein CMK)
+  const encrypted = await encryptGroupMessage(withUser, getMyUser(), text);
 
-// 3️⃣ Message Key aus Session Key ableiten
-const mk = await deriveMessageKey(
-  sessionKeyBytes,
-  sessionId,
-  epoch
-);
+  res = await apiFetch("/chat/send", {
+    method: "POST",
+    body: JSON.stringify({
+      to:           getMyUser(),  // membership-hint: Sender ist immer Mitglied
+      convoId:      withUser,     // Gruppen-UUID → Backend fan-out via pushToGroupMembers
+      message:      "",
+      e2e:          true,
+      v:            2,
+      sid:          withUser,     // group UUID als sid → WS-Event-Routing
+      epoch:        Math.floor(Date.now() / EPOCH_MS), // nicht genutzt aber v2-Pflichtfeld
+      ivB64:        encrypted.ivB64,
+      ctB64:        encrypted.ctB64,
+      rotationIndex: encrypted.chainIndex  // chainIndex im rotation_index Feld gespeichert
+    })
+  });
 
-// 4️⃣ Mit MK verschlüsseln
-const { ivB64, ctB64 } = await e2eEncrypt(mk, text);
+} else {
 
-const res = await apiFetch("/chat/send", {
-  method: "POST",
-body: JSON.stringify({
-  to: withUser,
-  message: "",
-  e2e: true,
-  v: 2,
+  // ── DM: CMK v2 ─────────────────────────────────────
 
-  // 🔑 CMK v2 Metadaten
-  sid: sessionId,
-  epoch,
-  rotationIndex: sessionRotationIndex,
+  // 1️⃣ Session-ID (deterministisch)
+  const sessionId = dmSessionId(getMyUser(), withUser);
 
-  ivB64,
-  ctB64,
-})
-});
+  // 2️⃣ Epoch bestimmen (z. B. 1 Stunde)
+  const epoch = Math.floor(Date.now() / EPOCH_MS);
+
+  // 3️⃣ Message Key aus Session Key ableiten
+  const mk = await deriveMessageKey(
+    sessionKeyBytes,
+    sessionId,
+    epoch
+  );
+
+  // 4️⃣ Mit MK verschlüsseln
+  const { ivB64, ctB64 } = await e2eEncrypt(mk, text);
+
+  res = await apiFetch("/chat/send", {
+    method: "POST",
+    body: JSON.stringify({
+      to: withUser,
+      message: "",
+      e2e: true,
+      v: 2,
+      sid: sessionId,
+      epoch,
+      rotationIndex: sessionRotationIndex,
+      ivB64,
+      ctB64,
+    })
+  });
+
+}
 
 // 🔧 FIX SCHRITT 3 — 429 = warten, NICHT fehlschlagen
 if (res?.rateLimited) {
@@ -1094,11 +1239,13 @@ const saved = res.message;
 if (saved?.id) {
   cacheSentMessage(saved.id, text);
 
-  // 🔄 Rotation-Trigger (nur Authority, alle ROTATION_THRESHOLD Nachrichten)
-  sentMessageCount++;
-  if (isAuthority(getMyUser(), withUser) && sentMessageCount >= ROTATION_THRESHOLD) {
-    sentMessageCount = 0;
-    doRotationAndRefresh().catch(e => console.warn("⚠️ rotateEpoch failed", e));
+  // 🔄 CMK Rotation-Trigger (nur DMs, nur Authority, alle ROTATION_THRESHOLD Nachrichten)
+  if (!isGroupConversation(withUser)) {
+    sentMessageCount++;
+    if (isAuthority(getMyUser(), withUser) && sentMessageCount >= ROTATION_THRESHOLD) {
+      sentMessageCount = 0;
+      doRotationAndRefresh().catch(e => console.warn("⚠️ rotateEpoch failed", e));
+    }
   }
 }
 
@@ -1355,6 +1502,90 @@ async function initAutoDeleteUI() {
   });
 }
 
+// ======================================================
+// 🏘️ GRUPPE: Member-Liste + Einladen im Chat-Header
+// ======================================================
+async function initGroupMembersUI(groupId) {
+  const membersItem  = document.getElementById("group-members-item");
+  const memberList   = document.getElementById("group-member-list");
+  const inviteItem   = document.getElementById("group-invite-item");
+  const inviteInput  = document.getElementById("group-invite-input");
+  const inviteBtn    = document.getElementById("group-invite-btn");
+
+  if (!membersItem || !memberList || !inviteItem) return;
+
+  // Sichtbar machen (nur für Gruppen)
+  membersItem.style.display = "block";
+  inviteItem.style.display  = "block";
+
+  // Mitgliederliste laden
+  async function refreshMembers() {
+    try {
+      const res = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
+      const members = res.members || [];
+
+      // Gruppenname in Header setzen
+      if (res.group?.name && titleEl) {
+        titleEl.textContent = res.group.name;
+      }
+
+      memberList.innerHTML = "";
+      for (const m of members) {
+        const li = document.createElement("li");
+        li.style.cssText = "font-size:13px;padding:3px 0;display:flex;align-items:center;gap:6px;";
+        const isMe = m.member_handle === getMyUser();
+        const isMeStr = isMe ? " (Du)" : "";
+        const roleIcon = m.role === "admin" ? "⭐ " : "";
+        li.textContent = `${roleIcon}${m.member_handle}${isMeStr}`;
+        memberList.appendChild(li);
+      }
+    } catch (e) {
+      console.warn("refreshMembers fehlgeschlagen", e);
+    }
+  }
+
+  await refreshMembers();
+
+  // Einladen
+  inviteBtn?.addEventListener("click", async () => {
+    const handle = inviteInput?.value.trim().toLowerCase();
+    if (!handle) return;
+    inviteBtn.disabled = true;
+    try {
+      const res = await apiFetch("/groups/invite", {
+        method: "POST",
+        body: JSON.stringify({ groupId, handle })
+      });
+      if (res.alreadyMember) { alert(`${handle} ist bereits Mitglied.`); return; }
+      inviteInput.value = "";
+      await refreshMembers();
+      // GSK an neues Mitglied distribuieren
+      const devices = await fetchInboxKeys(handle);
+      if (devices?.length) {
+        const tagged = devices.map(d => ({ ...d, memberHandle: handle }));
+        await distributeGroupSK(groupId, getMyUser(), tagged, apiFetch)
+          .catch(e => console.warn("GSK für neues Mitglied fehlgeschlagen", e));
+      }
+    } catch (e) {
+      let msg = e.message || "";
+      try { msg = JSON.parse(msg).error || msg; } catch {}
+      if (msg.includes("not found") || msg.includes("404")) {
+        alert(`Nutzer „${handle}" existiert nicht.`);
+      } else if (msg.includes("Not in your contacts") || msg.includes("contacts")) {
+        alert(`„${handle}" ist nicht in deinen Kontakten. Füge ihn/sie zuerst als Kontakt hinzu.`);
+      } else {
+        alert("Einladen fehlgeschlagen: " + msg);
+      }
+    } finally {
+      inviteBtn.disabled = false;
+    }
+  });
+
+  inviteInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); inviteBtn?.click(); }
+  });
+}
+
 function scrollToBottom() {
   if (!messagesEl) return;
   requestAnimationFrame(() => {
@@ -1440,10 +1671,17 @@ if (status === "pending" && from !== getMyUser()) {
   if (!message || message.length > MAX_MESSAGE_LENGTH) return null;
 
 const div = document.createElement("div");
-div.className =
-  from?.toLowerCase() === withUser?.toLowerCase()
-    ? "other"
-    : "me";
+// Gruppe: "me" wenn ich der Sender bin; DM: "me" wenn from !== withUser
+const isOwnMessage = from?.toLowerCase() === getMyUser()?.toLowerCase();
+div.className = isOwnMessage ? "me" : "other";
+
+// Gruppe + fremde Nachricht: Absender-Name anzeigen (Discord-Style)
+if (!isOwnMessage && isGroupConversation(withUser) && from) {
+  const senderEl = document.createElement("div");
+  senderEl.className = "sender-name";
+  senderEl.textContent = from;
+  div.appendChild(senderEl);
+}
 
 const textEl = document.createElement("div");
 textEl.textContent = message;
@@ -1577,6 +1815,15 @@ async function deleteMessage(messageId) {
 // ======================================================
 async function processMessage(m) {
   if (!m?.id || !m?.from) return false;
+
+  // System-Messages (join/leave) direkt als UI-Hinweis rendern — kein Decrypt, kein Bubble
+  if (m.type === "system") {
+    if (renderedMessageIds.has(m.id)) return false;
+    renderedMessageIds.add(m.id);
+    showSystemMessage(m.message || m.text || "");
+    return true;
+  }
+
   const messageId = m.id;
 
   // Bereits gerendert → nur Status updaten
@@ -1598,8 +1845,13 @@ async function processMessage(m) {
     text = "🔒 Verschlüsselte Nachricht (Fehler)";
   }
 
-  // Key fehlt noch → Placeholder + deferred (wird nach CMK-Empfang entschlüsselt)
+  // Key fehlt noch → Placeholder + deferred (wird nach CMK/GSK-Empfang entschlüsselt)
   if (text === null) {
+    // Kein E2E-Payload vorhanden → kann nie entschlüsselt werden, nicht deferred
+    if (!m.ivB64 && !m.ctB64) {
+      renderedMessageIds.add(messageId);
+      return false; // System-/Control-Message ohne Payload still skippen
+    }
     deferredInboundMessages.push(m);
     deferredInboundIds.add(messageId);
     renderMessage({
@@ -1609,6 +1861,10 @@ async function processMessage(m) {
       ts: m.ts
     });
     renderedMessageIds.add(messageId);
+    // Gruppen-GSK fehlt → beim Sender anfordern (Pull-Mechanismus)
+    if (isGroupConversation(withUser) && m.from && m.from !== getMyUser()) {
+      requestGSKFrom(withUser, m.from).catch(() => {});
+    }
     return false;
   }
 
@@ -1647,7 +1903,7 @@ async function loadMessages() {
   try {
     const url = "/chat/list?with=" + withUser;
     const { messages = [] } = await apiFetch(url);
-    console.log("📥 SERVER MESSAGES:", messages.length);
+    console.warn("📥 SERVER MESSAGES:", messages.length, "withUser:", withUser);
     const wasAtBottom = isUserAtBottom();
 
     let added = false;
@@ -1841,6 +2097,67 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 // ======================================================
+// 🏘️ GRUPPE: Chat-Bereitschaft sicherstellen
+// 1. Eigenen GSK generieren (falls noch nicht vorhanden)
+// 2. GSK an alle anderen Mitglieder-Devices distribuieren
+//    (einmalig pro Session, tracked via sessionStorage)
+// ======================================================
+async function ensureGroupChatReady(groupId, myHandle) {
+  // Eigenen GSK bereitstellen (IDB-persistent)
+  await getOrCreateGroupSK(groupId, myHandle);
+
+  // Nur einmal pro Session distribuieren (verhindert Spam beim Tab-Reload)
+  const distKey = `gsk-dist:${groupId}`;
+  if (sessionStorage.getItem(distKey)) {
+    console.log("🔑 GSK bereits in dieser Session distribuiert:", groupId);
+    return;
+  }
+
+  // Mitgliederliste vom Server holen
+  let members = [];
+  try {
+    const res = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
+    members = (res.members || []).filter(m => m.member_handle !== myHandle);
+  } catch (e) {
+    console.warn("⚠️ ensureGroupChatReady: Mitgliederliste fehlgeschlagen", e);
+    return;
+  }
+
+  if (members.length === 0) {
+    console.log("🏘️ Gruppe hat noch keine anderen Mitglieder:", groupId);
+    sessionStorage.setItem(distKey, "1");
+    return;
+  }
+
+  // Pro Mitglied: Devices laden + eigenen GSK senden + fehlende GSKs anfordern
+  let distributed = 0;
+  let requested = 0;
+  for (const member of members) {
+    try {
+      const devices = await fetchInboxKeys(member.member_handle);
+      if (!devices?.length) continue;
+
+      // 1) Eigenen GSK an Member senden (Push)
+      const tagged = devices.map(d => ({ ...d, memberHandle: member.member_handle }));
+      await distributeGroupSK(groupId, myHandle, tagged, apiFetch);
+      distributed++;
+
+      // 2) Falls wir ihren GSK noch nicht haben → anfordern (Pull)
+      const existingGsk = await getGroupSK(groupId, member.member_handle);
+      if (!existingGsk) {
+        await requestGSKFrom(groupId, member.member_handle);
+        requested++;
+      }
+    } catch (e) {
+      console.warn("⚠️ GSK distribute fehlgeschlagen für:", member.member_handle, e);
+    }
+  }
+
+  sessionStorage.setItem(distKey, "1");
+  console.log("✅ GSK distribuiert:", { groupId, members: members.length, distributed, requested });
+}
+
+// ======================================================
 // STARTUP (FIXED ORDER)
 // ======================================================
 
@@ -1860,13 +2177,36 @@ window.__chatStartupDone = true;
   // nach CMK-Ready via flushDeferredQueue() gesendet.
   startChat();
 
-  // 1️⃣ Eigene E2E-Keys
+  // 1️⃣ Eigene E2E-Keys (immer — auch für Gruppen nötig für GSK-Wrap/Unwrap)
   getDeviceId(); // ✅ Device-ID sicher setzen
   await initE2EKeys();
   await debugPrintMyPublicKey();
   await uploadMyPublicKeyIfNeeded();
 
-  // 2️⃣ Peer Public Key
+  // ──────────────────────────────────────────────────────────────
+  // 🏘️ GRUPPEN-STARTUP (kein CMK / keine Authority)
+  // ──────────────────────────────────────────────────────────────
+  if (isGroupConversation(withUser)) {
+    // Gruppen brauchen keinen DM-Handshake (CMK). E2E via Sender Keys.
+    // e2eReady = true sofort → Nachrichten können direkt gesendet werden.
+    e2eReady = true;
+    startChat(); // zweiter Aufruf ist idempotent (dataset.bound Guard)
+    updateSendButton();
+
+    try { await loadMessages(); } catch (e) { console.warn("Group loadMessages failed", e); }
+
+    // GSK im Hintergrund distribuieren (non-blocking)
+    ensureGroupChatReady(withUser, getMyUser())
+      .catch(e => console.warn("⚠️ ensureGroupChatReady failed", e));
+
+    initAutoDeleteUI().catch(() => {});
+    initGroupMembersUI(withUser).catch(() => {});
+    startPolling();
+    console.log("🟢 Gruppen-Chat gestartet:", withUser);
+    return; // DM-Startup überspringen
+  }
+
+  // 2️⃣ Peer Public Key (nur DMs)
   const peerOk = await fetchAndStorePeerPublicKey(withUser);
   if (!peerOk) {
     e2eReady = false;
@@ -1946,6 +2286,7 @@ if (e2eReady) {
       sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
       sessionRotationIndex = entry.rotationIndex ?? 0;
       e2eReady = true;
+      updateSendButton();
       console.log("✅ CMK aus KV geladen – E2E bereit");
       await loadMessages();
       await flushDeferredQueue();
@@ -1964,11 +2305,19 @@ if (e2eReady) {
         sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
         sessionRotationIndex = entry.rotationIndex ?? 0;
         e2eReady = true;
-        console.log("✅ Fallback Bootstrap: E2E bereit");
+        updateSendButton();
+        console.log("✅ Fallback Bootstrap: E2E bereit — warte 5s auf Authority-CMK");
         await loadMessages();
-        await flushDeferredQueue();
         await flushDeferredInboundMessages();
         startTimeBasedRotation();
+        // Race-Fix: Deferred Queue erst nach 5s senden
+        // → Authority-CMK hat Zeit anzukommen (CMK_READY cancelt diesen Timer)
+        // → verhindert Nachrichten die mit Fallback-CMK verschlüsselt wurden und vom Authority nicht entschlüsselt werden können
+        fallbackFlushTimer = setTimeout(async () => {
+          fallbackFlushTimer = null;
+          console.log("⏱️ Fallback-Flush: kein Authority-CMK in 5s — sende mit Fallback-CMK");
+          await flushDeferredQueue();
+        }, 5000);
       }
     }
   }

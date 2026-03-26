@@ -83,6 +83,15 @@
   color: var(--status-error);
   font-weight: bold;
 }
+/* Absender-Name in Gruppen-Nachrichten */
+.sender-name {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.75;
+  margin-bottom: 2px;
+  color: var(--accent, #7c6af7);
+}
+
 /* Timestamp unter jeder Nachricht */
 .timestamp {
   font-size: 11px;
@@ -112,6 +121,18 @@
   content: " ⏳";
   font-size: 0.9em;
   opacity: 0.7;
+}
+
+/* =========================
+   Gruppen: Absender-Label
+   ========================= */
+
+.sender-name {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.55;
+  margin-bottom: 2px;
+  color: var(--accent-voice);
 }
 
 /* =========================
@@ -174,6 +195,19 @@ textarea::placeholder {
           <div class="chat-ad-opt" data-days="7" style="padding:8px 16px;cursor:pointer;font-size:13px;">1 Woche</div>
           <div class="chat-ad-opt" data-days="28" style="padding:8px 16px;cursor:pointer;font-size:13px;">4 Wochen</div>
           <div class="chat-ad-opt" data-days="90" style="padding:8px 16px;cursor:pointer;font-size:13px;">90 Tage</div>
+        </div>
+      </div>
+      <!-- Gruppen: Mitglieder anzeigen (nur für Gruppen sichtbar) -->
+      <div id="group-members-item" style="display:none;padding:8px 16px 4px;border-top:1px solid var(--border-subtle);margin-top:4px;">
+        <div style="font-size:11px;font-weight:600;opacity:0.5;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">Mitglieder</div>
+        <ul id="group-member-list" style="list-style:none;padding:0;margin:0;max-height:180px;overflow-y:auto;"></ul>
+      </div>
+      <!-- Gruppen: Mitglied einladen -->
+      <div id="group-invite-item" style="display:none;padding:4px 16px 10px;">
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <input id="group-invite-input" type="text" placeholder="Handle einladen…" autocomplete="off"
+            style="flex:1;font-size:12px;padding:5px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);" />
+          <button id="group-invite-btn" style="font-size:12px;padding:5px 10px;border-radius:6px;">+ Einladen</button>
         </div>
       </div>
     </div>

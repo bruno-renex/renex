@@ -263,7 +263,7 @@ export async function distributeGroupSK(groupId, myHandle, allDevices, apiFetch)
  * @param myDeviceId  eigene Device-ID
  * @param payloads    Array<{deviceId, fromDeviceId, ivB64, ctB64}> aus der Message
  */
-export async function receiveGroupSK({ from, groupId, myDeviceId, payloads }) {
+export async function receiveGroupSK({ from, groupId, myDeviceId, payloads, findSenderDeviceJwkFn }) {
   const p = payloads?.find(x => x.deviceId === myDeviceId);
   if (!p) {
     console.log("ℹ️ GSK payload nicht für dieses Device", { myDeviceId });
@@ -273,8 +273,9 @@ export async function receiveGroupSK({ from, groupId, myDeviceId, payloads }) {
   const myPriv = await loadPrivateKey();
   if (!myPriv) return false;
 
-  // Sender-JWK holen (Inbox-Key des Senders, selbe Lookup-Logik wie CMK)
-  const senderJwk = await findSenderDeviceJwk(from, p.fromDeviceId);
+  // Sender-JWK holen — optionaler Callback (mit Inbox-Fallback) hat Vorrang vor IDB-only
+  const lookupFn = findSenderDeviceJwkFn || findSenderDeviceJwk;
+  const senderJwk = await lookupFn(from, p.fromDeviceId);
   if (!senderJwk) {
     console.warn("❌ Sender-JWK nicht gefunden für GSK:", { from, fromDeviceId: p.fromDeviceId });
     return false;

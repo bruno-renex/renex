@@ -71,8 +71,6 @@ export async function handleChatSend(request, env) {
     return json(request, { error: "deviceId invalid" }, 400);
   }
 
-  console.log("📨 SEND BODY TYPE:", type);
-
   // Rotation-Index aus Body
   const rotationIndex = (typeof body.rotationIndex === "number" && Number.isInteger(body.rotationIndex) && body.rotationIndex >= 0)
     ? body.rotationIndex
@@ -109,7 +107,8 @@ export async function handleChatSend(request, env) {
     }
   }
   // v2 Pflichtfelder – NUR für echte verschlüsselte Nachrichten
-  if (v === 2 && e2e === true && type !== "cmk") {
+  // gsk / request_gsk = Group Sender Key Protokoll — kein sid/epoch nötig
+  if (v === 2 && e2e === true && type !== "cmk" && type !== "gsk" && type !== "request_gsk") {
     if (typeof sid !== "string" || sid.length < 5) {
       return json(request, { error: "Missing or invalid sid" }, 400);
     }
@@ -150,14 +149,14 @@ export async function handleChatSend(request, env) {
   const hasMultiE2E = (e2e === true && Array.isArray(payloads) && payloads.length > 0);
 
   // v2 VALIDATION — NUR für echte verschlüsselte Chat-Messages
-  if (v === 2 && e2e === true && type !== "cmk" && type !== "cmk_req") {
+  if (v === 2 && e2e === true && type !== "cmk" && type !== "cmk_req" && type !== "gsk" && type !== "request_gsk") {
     if (typeof ivB64 !== "string" || typeof ctB64 !== "string") {
       return json(request, { error: "v2 message requires ivB64/ctB64" }, 400);
     }
   }
 
   // Nur echte Chat-Messages brauchen Payload
-  if (!type || (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk")) {
+  if (!type || (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk" && type !== "request_gsk")) {
     if (!message && !(hasLegacyE2E || hasMultiE2E)) {
       return json(request, { error: "Missing message payload" }, 400);
     }
@@ -187,11 +186,19 @@ export async function handleChatSend(request, env) {
     delete msg.status;
   }
 
-  // Rotation-Index für epoch_rotate
-  if (type === "epoch_rotate") msg.rotationIndex = rotationIndex;
+  // Rotation-Index: immer ins msg-Objekt (WS-Push braucht es für Group chainIndex + DM Rotation)
+  msg.rotationIndex = rotationIndex;
   if (typeof sid === "string")    msg.sid = sid;
   if (typeof epoch === "number")  msg.epoch = epoch;
   if (typeof type === "string")   msg.type = type;
+
+  // Gruppen-UUID in WS-Event einbetten (nötig für gsk-Handler + Chat-Routing)
+  if (isGroupMessage) msg.groupId = cid;
+
+  // request_gsk: requestedFrom preservieren damit nur der Betroffene antwortet
+  if (type === "request_gsk" && typeof body.requestedFrom === "string" && body.requestedFrom.length > 0) {
+    msg.requestedFrom = body.requestedFrom;
+  }
 
   // CMK ist Control + E2E-Hülle, aber KEINE Chat-v2-Message
   if (type === "cmk")     { msg.v = 2; msg.e2e = true; }
@@ -235,7 +242,7 @@ export async function handleChatSend(request, env) {
   }
 
   // D1 INSERT — only real chat messages (not control)
-  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk") {
+  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
     await env.RENEX_DB.prepare(
       `INSERT OR IGNORE INTO messages
          (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id)
@@ -276,9 +283,9 @@ export async function handleChatSend(request, env) {
   }
 
   // ======================================================
-  // UNREAD COUNTER
+  // UNREAD COUNTER (nur DMs — Gruppen haben kein per-Member Tracking)
   // ======================================================
-  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk") {
+  if (!isGroupMessage && msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
     const unreadKey = `unread:${other}:${me}`;
     let count = 0;
     const rawUnread = await env.RENEX_KV.get(unreadKey);

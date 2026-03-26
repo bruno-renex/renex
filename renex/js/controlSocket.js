@@ -5,6 +5,7 @@
 import { apiFetch } from "./api.js";
 import { getDeviceId, idbGet, dmSessionId } from "./e2e.js";
 import { isAuthority, ensureBootstrapped, receiveCMK, handleEpochRotate, rotateCMK, receiveCMKRotation } from "./sessionManager.js";
+import { receiveGroupSK, distributeGroupSK, getOrCreateGroupSK } from "./groupSessionManager.js";
 
 // ── State ────────────────────────────────────────────────
 let ws = null;
@@ -171,14 +172,81 @@ async function processControlMessage(m) {
     return;
   }
 
-  // 8) MESSAGE DELETED
+  // 8b) MESSAGE DELETED
   if (m.type === "message_deleted" && m.messageId) {
     console.log("🗑️ Nachricht gelöscht:", m.messageId);
     notify({ type: "MESSAGE_DELETED", messageId: m.messageId, from: m.from });
     return;
   }
 
-  // 4) LIVE MESSAGE
+  // 9) GROUP SENDER KEY — empfange GSK eines Gruppen-Members
+  if (m.type === "gsk" && m.groupId && Array.isArray(m.payloads)) {
+    console.log("🔑 GSK empfangen von:", m.from, "für Gruppe:", m.groupId);
+    try {
+      const ok = await receiveGroupSK({
+        from: m.from,
+        groupId: m.groupId,
+        myDeviceId: getDeviceId(),
+        payloads: m.payloads,
+        findSenderDeviceJwkFn: async (handle, deviceId) => {
+          const cached = await findSenderDeviceJwk(handle, deviceId);
+          if (cached) return cached;
+          try {
+            const devices = await fetchInboxKeys(handle);
+            const match = (devices || []).find(d => d.deviceId === deviceId);
+            return match?.jwk || null;
+          } catch (e) {
+            console.warn("❌ GSK fetchInboxKeys fehlgeschlagen:", { handle, error: String(e) });
+            return null;
+          }
+        }
+      });
+      if (ok) notify({ type: "GSK_READY", groupId: m.groupId, from: m.from });
+    } catch (e) {
+      console.warn("⚠️ receiveGroupSK fehlgeschlagen:", e);
+    }
+    return;
+  }
+
+  // 10) GROUP MEMBER JOINED
+  if (m.type === "group_member_joined" && m.groupId) {
+    console.log("👋 Gruppe:", m.groupId, "— neues Mitglied:", m.handle);
+    notify({ type: "GROUP_MEMBER_JOINED", groupId: m.groupId, handle: m.handle, invitedBy: m.invitedBy });
+    return;
+  }
+
+  // 11) GROUP MEMBER LEFT
+  if (m.type === "group_member_left" && m.groupId) {
+    console.log("🚪 Gruppe:", m.groupId, "— Mitglied verlassen:", m.handle);
+    notify({ type: "GROUP_MEMBER_LEFT", groupId: m.groupId, handle: m.handle });
+    return;
+  }
+
+  // 12) GROUP GSK REQUEST — jemand benötigt meinen GSK
+  // Direkt in controlSocket antworten → funktioniert auch wenn Chat-Seite nicht offen ist
+  if (m.type === "request_gsk" && m.groupId && m.requestedFrom) {
+    if (m.requestedFrom === me && m.from && m.from !== me) {
+      // Eigenen GSK sicherstellen + sofort an Anfrager senden
+      (async () => {
+        try {
+          await getOrCreateGroupSK(m.groupId, me);
+          const devices = await fetchInboxKeys(m.from);
+          if (devices?.length) {
+            const tagged = devices.map(d => ({ ...d, memberHandle: m.from }));
+            await distributeGroupSK(m.groupId, me, tagged, apiFetch);
+            console.log("✅ GSK auf Anfrage gesendet an:", m.from, "Gruppe:", m.groupId);
+          }
+        } catch (e) {
+          console.warn("⚠️ REQUEST_GSK response fehlgeschlagen:", e);
+        }
+      })();
+      // Zusätzlich BroadcastChannel für offene Chat-Seite (re-distribute via ensureGroupChatReady)
+      notify({ type: "REQUEST_GSK", groupId: m.groupId, from: m.from });
+    }
+    return;
+  }
+
+  // 13) LIVE MESSAGE
   if (!m.type && m.from) {
     console.log("💬 LIVE MESSAGE:", m);
     notify({ type: "NEW_MESSAGE", message: m });

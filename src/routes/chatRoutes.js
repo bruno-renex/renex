@@ -61,11 +61,20 @@ export async function handleChatRoutes(request, env, path, params) {
         }
 
         const other = String(otherRaw).toLowerCase();
-        const cid = dmConvoId(me, other);
+        // Gruppe = UUID direkt verwenden; DM = sorted "alice:bob"
+        const isGroupConvo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(other);
+        const cid = isGroupConvo ? other : dmConvoId(me, other);
+
+        // Gruppen: Mitgliedschaft prüfen (verhindert Lesen fremder Gruppen)
+        if (isGroupConvo) {
+          const isMember = await env.RENEX_DB.prepare(
+            "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+          ).bind(cid, me).first();
+          if (!isMember) return json(request, { error: "Not a member of this group" }, 403);
+        }
 
         let sliced = [];
 
-        // D1 SELECT — cursor pagination (newest first, then reversed)
         const rows = cursor !== null
           ? await env.RENEX_DB.prepare(
               `SELECT * FROM messages WHERE convo_id = ? AND ts < ? ORDER BY ts DESC LIMIT ?`
@@ -93,7 +102,7 @@ export async function handleChatRoutes(request, env, path, params) {
           if (r.payloads) {
             try { m.payloads = JSON.parse(r.payloads); } catch {}
           }
-          if (r.rotation_index) m.rotationIndex = r.rotation_index;
+          if (r.rotation_index != null) m.rotationIndex = r.rotation_index;
           if (r.sig)       m.sig      = r.sig;
           if (r.device_id) m.deviceId = r.device_id;
           return m;
@@ -123,8 +132,6 @@ export async function handleChatRoutes(request, env, path, params) {
             }
           } catch {}
         }
-
-        console.log("📦 CHAT LIST RETURN:", { me, other, count: sliced.length });
 
         return json(request, {
           with: other,

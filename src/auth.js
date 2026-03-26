@@ -214,8 +214,11 @@ export async function pushToGroupMembers(env, db, groupId, senderHandle, event) 
     return;
   }
 
-  // Sender bekommt kein Echo über DO (er hat die Nachricht selbst gesendet)
-  const recipients = members.filter(h => h !== senderHandle);
+  // Sender bekommt kein Echo (er hat die Nachricht selbst gesendet)
+  // senderHandle = null → alle Members benachrichtigen (z.B. Join/Leave-Events)
+  const recipients = senderHandle
+    ? members.filter(h => h !== senderHandle)
+    : members;
 
   await Promise.allSettled(
     recipients.map(handle => pushToUserDO(env, handle, event))

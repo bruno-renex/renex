@@ -65,6 +65,12 @@ const addBtn    = document.getElementById("add-btn");
 
 let unreadMap = {};
 
+const groupsEl = document.getElementById("groups");
+const groupNameInput = document.getElementById("group-name-input");
+const createGroupBtn = document.getElementById("create-group-btn");
+
+let _lastGroupsKey = null;
+
 let contactRequestInFlight = false;
 
 // Enter im Input löst Anfrage aus (spam-safe)
@@ -242,8 +248,10 @@ if (langBtn && langSubmenu) {
   }
 
   loadContacts();
+  loadGroups();
   // 🔄 Inbox automatisch aktualisieren
 window._contactsInterval = setInterval(loadContacts, 8000);
+setInterval(loadGroups, 8000);
 });
 
 // ================================
@@ -487,6 +495,129 @@ function emptyLi(text) {
   li.style.opacity = "0.6";
   return li;
 }
+
+// ================================
+// GROUPS
+// ================================
+async function loadGroups() {
+  if (!groupsEl) return;
+  try {
+    const data = await apiFetch("/groups/list");
+    const groups = Array.isArray(data.groups) ? data.groups : [];
+    const cacheKey = JSON.stringify(groups);
+    if (cacheKey === _lastGroupsKey) return;
+    _lastGroupsKey = cacheKey;
+
+    groupsEl.innerHTML = "";
+    if (groups.length === 0) {
+      groupsEl.appendChild(emptyLi("Noch keine Gruppen."));
+      return;
+    }
+    groups.forEach(g => groupsEl.appendChild(renderGroup(g)));
+  } catch (e) {
+    console.warn("loadGroups fehlgeschlagen", e);
+  }
+}
+
+function renderGroup(group) {
+  const li = document.createElement("li");
+  li.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--border-subtle);";
+
+  const name = document.createElement("span");
+  name.style.cssText = "font-weight:600;flex:1;min-width:100px;";
+  name.textContent = `${group.name}`;
+
+  const count = document.createElement("span");
+  count.style.cssText = "font-size:12px;color:var(--text-secondary);margin-left:4px;";
+  count.textContent = `👥 ${group.member_count}`;
+  name.appendChild(count);
+
+  const chatBtn = document.createElement("a");
+  chatBtn.href = `/chat?with=${encodeURIComponent(group.id)}`;
+  chatBtn.textContent = "Chat";
+  chatBtn.className = "chat-link";
+
+  // Invite input + button (inline)
+  const inviteInput = document.createElement("input");
+  inviteInput.type = "text";
+  inviteInput.placeholder = "Handle einladen…";
+  inviteInput.autocomplete = "off";
+  inviteInput.style.cssText = "font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);width:130px;";
+
+  const inviteBtn = document.createElement("button");
+  inviteBtn.textContent = "+ Einladen";
+  inviteBtn.style.cssText = "font-size:12px;padding:4px 10px;border-radius:6px;";
+  inviteBtn.onclick = async () => {
+    const handle = inviteInput.value.trim().toLowerCase();
+    if (!handle) return;
+    inviteBtn.disabled = true;
+    try {
+      const res = await apiFetch("/groups/invite", {
+        method: "POST",
+        body: JSON.stringify({ groupId: group.id, handle })
+      });
+      if (res.alreadyMember) { alert(`${handle} ist bereits Mitglied.`); return; }
+      inviteInput.value = "";
+      _lastGroupsKey = null; // force re-render
+      await loadGroups();
+    } catch (e) {
+      let msg = e.message || "";
+      try { msg = JSON.parse(msg).error || msg; } catch {}
+      if (msg.includes("not found") || msg.includes("404")) {
+        alert(`Nutzer „${handle}" existiert nicht.`);
+      } else if (msg.includes("Not in your contacts") || msg.includes("contacts")) {
+        alert(`„${handle}" ist nicht in deinen Kontakten. Füge ihn/sie zuerst als Kontakt hinzu.`);
+      } else {
+        alert("Einladen fehlgeschlagen: " + msg);
+      }
+    } finally {
+      inviteBtn.disabled = false;
+    }
+  };
+  inviteInput.addEventListener("keydown", (e) => { if (e.key === "Enter") inviteBtn.click(); });
+
+  // Leave button
+  const leaveBtn = document.createElement("button");
+  leaveBtn.textContent = "Verlassen";
+  leaveBtn.style.cssText = "font-size:12px;color:var(--status-error);background:transparent;border:1px solid var(--border-subtle);border-radius:6px;padding:4px 10px;cursor:pointer;margin-left:auto;";
+  leaveBtn.onclick = async () => {
+    if (!confirm(`Gruppe "${group.name}" verlassen?`)) return;
+    leaveBtn.disabled = true;
+    try {
+      await apiFetch("/groups/leave", { method: "POST", body: JSON.stringify({ groupId: group.id }) });
+      _lastGroupsKey = null;
+      await loadGroups();
+    } catch (e) {
+      alert("Verlassen fehlgeschlagen: " + e.message);
+      leaveBtn.disabled = false;
+    }
+  };
+
+  li.appendChild(name);
+  li.appendChild(chatBtn);
+  li.appendChild(inviteInput);
+  li.appendChild(inviteBtn);
+  li.appendChild(leaveBtn);
+  return li;
+}
+
+createGroupBtn?.addEventListener("click", async () => {
+  const name = groupNameInput?.value.trim();
+  if (!name) return;
+  createGroupBtn.disabled = true;
+  try {
+    await apiFetch("/groups/create", { method: "POST", body: JSON.stringify({ name }) });
+    groupNameInput.value = "";
+    _lastGroupsKey = null;
+    await loadGroups();
+  } catch (e) {
+    alert("Gruppe erstellen fehlgeschlagen: " + e.message);
+  } finally {
+    createGroupBtn.disabled = false;
+  }
+});
+
+groupNameInput?.addEventListener("keydown", (e) => { if (e.key === "Enter") createGroupBtn?.click(); });
 
 // ================================
 // ADD CONTACT

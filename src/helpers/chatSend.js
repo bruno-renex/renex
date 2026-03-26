@@ -100,6 +100,18 @@ export async function handleChatSend(request, env) {
     }
   }
 
+  // SECURITY: GSK-Control-Messages nur in Gruppen-Kontext erlaubt
+  // Expliziter Fail-Fast bevor der allgemeine isAllowed-Check greift
+  if (type === "gsk" || type === "request_gsk") {
+    if (!bodyConvoId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(bodyConvoId)) {
+      return json(request, { error: "GSK messages require a valid group context" }, 400);
+    }
+    const gskSenderMember = await env.RENEX_DB.prepare(
+      "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+    ).bind(bodyConvoId, me).first();
+    if (!gskSenderMember) return json(request, { error: "Not a group member" }, 403);
+  }
+
   // E2E Versions-Guard — gilt NUR für echte E2E-Nachrichten
   if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk") {
     if (v !== undefined && v !== 2) {
@@ -195,9 +207,18 @@ export async function handleChatSend(request, env) {
   // Gruppen-UUID in WS-Event einbetten (nötig für gsk-Handler + Chat-Routing)
   if (isGroupMessage) msg.groupId = cid;
 
-  // request_gsk: requestedFrom preservieren damit nur der Betroffene antwortet
-  if (type === "request_gsk" && typeof body.requestedFrom === "string" && body.requestedFrom.length > 0) {
-    msg.requestedFrom = body.requestedFrom;
+  // request_gsk: requestedFrom validieren + preservieren damit nur der Betroffene antwortet
+  // SECURITY: requestedFrom muss gültiger Handle-String sein (1-64 Zeichen, kein leerstring)
+  if (type === "request_gsk") {
+    const rf = body.requestedFrom;
+    if (typeof rf !== "string" || rf.trim().length < 1 || rf.trim().length > 64) {
+      return json(request, { error: "Invalid requestedFrom" }, 400);
+    }
+    // requestedFrom darf NICHT der Sender selbst sein (man kann nicht den eigenen GSK anfordern)
+    if (rf.trim().toLowerCase() === me) {
+      return json(request, { error: "Cannot request own GSK" }, 400);
+    }
+    msg.requestedFrom = rf.trim().toLowerCase();
   }
 
   // CMK ist Control + E2E-Hülle, aber KEINE Chat-v2-Message

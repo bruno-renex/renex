@@ -14,17 +14,32 @@ let reconnectTimer = null;
 let backoff = 1000;
 const MAX_BACKOFF = 30000;
 
-// Verhindert doppelte Verarbeitung — als FIFO-Queue (max. 500 Einträge)
+// Verhindert doppelte Verarbeitung — als FIFO-Queue (max. 2000 Einträge)
 // Kein .clear() — verhindert Replay-Angriff via ID-Recycling
 const processedControlIds = new Set();
-const PROCESSED_IDS_MAX = 500;
+const PROCESSED_IDS_MAX   = 2000;
+const MAX_MSG_AGE_MS       = 5 * 60 * 1000; // 5 Minuten — ältere Nachrichten = Replay-Verdacht
+const MAX_MSG_FUTURE_MS    = 60 * 1000;      // 1 Minute Toleranz für Clock-Skew
+
 function markProcessed(id) {
   if (processedControlIds.size >= PROCESSED_IDS_MAX) {
-    // Ältesten Eintrag entfernen (FIFO)
-    const first = processedControlIds.values().next().value;
-    processedControlIds.delete(first);
+    // Ältesten Eintrag entfernen (FIFO-LRU)
+    processedControlIds.delete(processedControlIds.values().next().value);
   }
   processedControlIds.add(id);
+}
+
+// Gibt true zurück wenn die Nachricht als Replay abgelehnt werden soll
+function isReplay(m) {
+  if (!m?.id) return true;
+  if (processedControlIds.has(m.id)) return true;
+  // Timestamp-Guard: zu alt oder zu weit in der Zukunft → Replay-Verdacht
+  if (typeof m.ts === "number") {
+    const delta = Date.now() - m.ts;
+    if (delta > MAX_MSG_AGE_MS)    return true; // >5min alt
+    if (delta < -MAX_MSG_FUTURE_MS) return true; // >1min in Zukunft
+  }
+  return false;
 }
 
 // ── BroadcastChannel (gleich wie controlPoller.js) ───────
@@ -222,7 +237,20 @@ async function processControlMessage(m) {
     return;
   }
 
-  // 12) GROUP GSK REQUEST — jemand benötigt meinen GSK
+  // 12) CONTACT ACCEPTED — meine Anfrage wurde angenommen
+  if (m.type === "contact_accepted") {
+    console.warn("🤝 Kontaktanfrage akzeptiert von:", m.from);
+    notify({ type: "CONTACT_ACCEPTED", from: m.from });
+    return;
+  }
+
+  // 12b) CONTACT UPDATE — stiller Reload (z.B. nach stiller Ablehnung)
+  if (m.type === "contact_update") {
+    notify({ type: "CONTACT_UPDATE" });
+    return;
+  }
+
+  // 13) GROUP GSK REQUEST — jemand benötigt meinen GSK
   // Direkt in controlSocket antworten → funktioniert auch wenn Chat-Seite nicht offen ist
   if (m.type === "request_gsk" && m.groupId && m.requestedFrom) {
     if (m.requestedFrom === me && m.from && m.from !== me) {
@@ -297,9 +325,8 @@ async function connect() {
     try {
       const m = JSON.parse(event.data);
 
-      // Doppel-Processing verhindern — FIFO (kein clear(), verhindert Replay)
-      if (!m?.id) return;
-      if (processedControlIds.has(m.id)) return;
+      // Doppel-Processing + Replay-Schutz (ID-Dedup + Timestamp-Guard)
+      if (isReplay(m)) return;
       markProcessed(m.id);
 
       await processControlMessage(m);

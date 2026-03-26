@@ -78,6 +78,10 @@ export async function handleGroupRoutes(request, env, path, params) {
       const invitee = String(handle || "").toLowerCase();
       if (!/^[a-z0-9_]+$/.test(invitee)) return json(request, { error: "Invalid handle" }, 400);
 
+      // Rate-Limit: max 20 Einladungen pro User pro Minute
+      const rl = await rateLimit(env, `groups_invite:${me}`, 60_000, 20);
+      if (!rl) return json(request, { error: "Too many invitations, please wait" }, 429);
+
       // Nur Admin oder Member darf einladen
       const myMembership = await env.RENEX_DB.prepare(
         "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
@@ -158,6 +162,30 @@ export async function handleGroupRoutes(request, env, path, params) {
         "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
       ).bind(groupId, me).run();
 
+      // ── Admin-Nachfolge (Option D) ──────────────────────────────────────────
+      // War der Verlassende Admin und gibt es keine weiteren Admins mehr?
+      let newAdminHandle = null;
+      if (membership.role === "admin") {
+        const otherAdmin = await env.RENEX_DB.prepare(
+          "SELECT member_handle FROM conversation_members WHERE convo_id = ? AND role = 'admin' LIMIT 1"
+        ).bind(groupId).first();
+
+        if (!otherAdmin) {
+          // Ältestes verbleibendes Mitglied (kleinster joined_at) wird Admin
+          const successor = await env.RENEX_DB.prepare(
+            "SELECT member_handle FROM conversation_members WHERE convo_id = ? ORDER BY joined_at ASC LIMIT 1"
+          ).bind(groupId).first();
+
+          if (successor) {
+            newAdminHandle = successor.member_handle;
+            await env.RENEX_DB.prepare(
+              "UPDATE conversation_members SET role = 'admin' WHERE convo_id = ? AND member_handle = ?"
+            ).bind(groupId, newAdminHandle).run();
+          }
+        }
+      }
+      // ───────────────────────────────────────────────────────────────────────
+
       // System-Message persistieren (vor delete-check, weil bei letztem Member alles gelöscht wird)
       const leaveTs = Date.now();
       await env.RENEX_DB.prepare(
@@ -166,12 +194,22 @@ export async function handleGroupRoutes(request, env, path, params) {
       ).bind(crypto.randomUUID(), groupId, me, leaveTs,
         `${me} hat die Gruppe verlassen`).run();
 
+      // Admin-Wechsel System-Message
+      if (newAdminHandle) {
+        await env.RENEX_DB.prepare(
+          `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+           VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+        ).bind(crypto.randomUUID(), groupId, me, leaveTs + 1,
+          `${newAdminHandle} ist jetzt Admin`).run();
+      }
+
       // Verbleibende Members benachrichtigen
       const leaveEvent = {
         id:   crypto.randomUUID(),
         type: "group_member_left",
         groupId,
         handle: me,
+        newAdmin: newAdminHandle ?? undefined,
         ts: leaveTs
       };
       await pushToGroupMembers(env, env.RENEX_DB, groupId, null, leaveEvent);
@@ -197,11 +235,17 @@ export async function handleGroupRoutes(request, env, path, params) {
 
       const rows = await env.RENEX_DB.prepare(`
         SELECT c.id, c.name, c.created_at, cm.role,
-               (SELECT COUNT(*) FROM conversation_members WHERE convo_id = c.id) as member_count
+               COUNT(cm2.member_handle) as member_count,
+               (SELECT ts        FROM messages WHERE convo_id = c.id ORDER BY ts DESC LIMIT 1) as last_ts,
+               (SELECT from_user FROM messages WHERE convo_id = c.id ORDER BY ts DESC LIMIT 1) as last_from,
+               (SELECT type      FROM messages WHERE convo_id = c.id ORDER BY ts DESC LIMIT 1) as last_type,
+               (SELECT message   FROM messages WHERE convo_id = c.id ORDER BY ts DESC LIMIT 1) as last_text
         FROM conversations c
-        JOIN conversation_members cm ON c.id = cm.convo_id
-        WHERE cm.member_handle = ? AND c.type = 'group'
-        ORDER BY c.created_at DESC
+        JOIN conversation_members cm  ON c.id = cm.convo_id  AND cm.member_handle = ?
+        JOIN conversation_members cm2 ON c.id = cm2.convo_id
+        WHERE c.type = 'group'
+        GROUP BY c.id, c.name, c.created_at, cm.role
+        ORDER BY COALESCE(last_ts, c.created_at) DESC
       `).bind(me).all();
 
       return json(request, { groups: rows.results || [] });

@@ -70,6 +70,71 @@ const groupNameInput = document.getElementById("group-name-input");
 const createGroupBtn = document.getElementById("create-group-btn");
 
 let _lastGroupsKey = null;
+let _currentGroups  = []; // für Badge-Neuberechnung nach Klick
+
+function getSeenGroups() {
+  try { return new Set(JSON.parse(localStorage.getItem("renex_seen_groups") || "[]")); }
+  catch { return new Set(); }
+}
+function markGroupSeen(groupId) {
+  const seen = getSeenGroups();
+  seen.add(groupId);
+  localStorage.setItem("renex_seen_groups", JSON.stringify([...seen]));
+}
+function refreshGroupBadge() {
+  const seen = getSeenGroups();
+  const count = _currentGroups.filter(g => !seen.has(g.id)).length;
+  updateTabBadge("groups", count);
+}
+
+// ================================
+// PREVIEW CACHE HELPERS
+// ================================
+function dmConvoId(a, b) {
+  const x = a.toLowerCase(), y = b.toLowerCase();
+  return x < y ? `${x}:${y}` : `${y}:${x}`;
+}
+function getPreviewCache(convoId) {
+  try { return JSON.parse(localStorage.getItem(`renex_preview_${convoId}`) || "null"); }
+  catch { return null; }
+}
+function buildPreviewText(cached, serverTs, myUser, fromUser, isGroup) {
+  if (!serverTs) return { text: lang.noMessages, muted: true };
+  if (cached && cached.ts >= serverTs) {
+    // Letzter bekannter Text
+    const from = cached.from || "";
+    if (from === "__system__") return { text: cached.text, muted: false };
+    const fromMe = from === myUser;
+    const prefix = fromMe ? lang.youPrefix : (isGroup && from ? `${from}: ` : "");
+    return { text: `${prefix}${cached.text}`, muted: false };
+  }
+  // Neuere Nachricht auf Server → noch nicht entschlüsselt
+  return { text: `🔒 ${lang.newMessage}`, muted: false };
+}
+
+// ================================
+// AVATAR + TIME HELPERS
+// ================================
+const _AVATAR_COLORS = ["#5865F2","#3ba55c","#eb459e","#faa61a","#57F287","#5865F2","#ED4245","#9B59B6"];
+function stringToColor(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  return _AVATAR_COLORS[Math.abs(hash) % _AVATAR_COLORS.length];
+}
+
+function formatTime(ts) {
+  if (!ts) return "";
+  const date = new Date(ts);
+  const now  = new Date();
+  const isToday     = date.toDateString() === now.toDateString();
+  const yesterday   = new Date(now); yesterday.setDate(now.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+  if (isToday)     return date.toLocaleTimeString(lang.locale || "de-CH", { hour: "2-digit", minute: "2-digit" });
+  if (isYesterday) return lang.yesterday || "Gestern";
+  const diffDays = Math.floor((now - date) / 86400000);
+  if (diffDays < 7) return date.toLocaleDateString(lang.locale || "de-CH", { weekday: "short" });
+  return date.toLocaleDateString(lang.locale || "de-CH", { day: "2-digit", month: "2-digit" });
+}
 
 let contactRequestInFlight = false;
 
@@ -225,11 +290,13 @@ const langBtn = document.getElementById("dropdown-lang");
 const langSubmenu = document.getElementById("lang-submenu");
 const langOptDe = document.getElementById("lang-opt-de");
 const langOptEn = document.getElementById("lang-opt-en");
+const langOptEs = document.getElementById("lang-opt-es");
 
 if (langBtn && langSubmenu) {
   const active = getLang();
   if (active === "de") langOptDe.style.fontWeight = "700";
   if (active === "en") langOptEn.style.fontWeight = "700";
+  if (active === "es") langOptEs.style.fontWeight = "700";
 
   langBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -238,6 +305,7 @@ if (langBtn && langSubmenu) {
 
   langOptDe.addEventListener("click", () => { setLang("de"); location.reload(); });
   langOptEn.addEventListener("click", () => { setLang("en"); location.reload(); });
+  langOptEs.addEventListener("click", () => { setLang("es"); location.reload(); });
 }
 
     console.log("✅ Inbox E2E Init OK");
@@ -250,15 +318,83 @@ if (langBtn && langSubmenu) {
   loadContacts();
   loadGroups();
   // 🔄 Inbox automatisch aktualisieren
-window._contactsInterval = setInterval(loadContacts, 8000);
-setInterval(loadGroups, 8000);
+  window._contactsInterval = setInterval(loadContacts, 8000);
+  setInterval(loadGroups, 8000);
+
+  // 🔔 Echtzeit: Kontaktanfrage akzeptiert → sofort neu laden (kein Warten auf Poll)
+  if ("BroadcastChannel" in window) {
+    const bc = new BroadcastChannel("renex-control");
+    bc.onmessage = (e) => {
+      if (e.data?.type === "CONTACT_ACCEPTED" || e.data?.type === "CONTACT_UPDATE") loadContacts();
+    };
+  } else {
+    window.addEventListener("storage", (e) => {
+      if (e.key === "renex-control-event") {
+        try {
+          const ev = JSON.parse(e.newValue || "{}");
+          if (ev.type === "CONTACT_ACCEPTED" || ev.type === "CONTACT_UPDATE") loadContacts();
+        } catch {}
+      }
+    });
+  }
+
+  // ── Tab-Navigation ───────────────────────────────────────
+  const tabBtns   = document.querySelectorAll(".tab-btn");
+  const tabPanels = document.querySelectorAll(".tab-panel");
+
+  function switchTab(tab) {
+    tabBtns.forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+    tabPanels.forEach(p => p.classList.toggle("active", p.id === `panel-${tab}`));
+    localStorage.setItem("inbox_tab", tab);
+    // FAB nur im Gruppen-Tab anzeigen
+    if (createGroupBtn) {
+      createGroupBtn.style.display = tab === "groups" ? "flex" : "none";
+    }
+  }
+
+  tabBtns.forEach(btn => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
+
+  // Letzten Tab wiederherstellen
+  const savedTab = localStorage.getItem("inbox_tab");
+  if (savedTab) switchTab(savedTab);
 });
 
 // ================================
 // LOAD CONTACTS
 // ================================
+// Tab-Badge Helper
+function updateTabBadge(tab, count) {
+  const el = document.getElementById(`tab-badge-${tab}`);
+  if (!el) return;
+  if (count > 0) {
+    el.textContent = count > 99 ? "99+" : count;
+    el.classList.add("visible");
+  } else {
+    el.classList.remove("visible");
+  }
+}
+
 // Cache für letzten Render-Stand (verhindert unnötiges DOM-Blinken)
 let _lastContactsKey = null;
+// Cache akzeptierter Kontakte für Invite-Autocomplete + Gruppen-Detail-Popup
+let _acceptedContactHandles = [];
+let _cachedAcceptedContacts = null;
+async function fetchAcceptedContacts() {
+  if (_cachedAcceptedContacts) return _cachedAcceptedContacts;
+  // _acceptedContactHandles wird von loadContacts() befüllt — direkt verwenden
+  if (_acceptedContactHandles.length) {
+    _cachedAcceptedContacts = _acceptedContactHandles;
+    return _cachedAcceptedContacts;
+  }
+  try {
+    const data = await apiFetch("/contacts/list");
+    _cachedAcceptedContacts = (data.contacts || [])
+      .filter(c => c.status === "accepted")
+      .map(c => c.handle || "")
+      .filter(Boolean);
+  } catch { _cachedAcceptedContacts = []; }
+  return _cachedAcceptedContacts;
+}
 
 async function loadContacts() {
 
@@ -288,6 +424,13 @@ async function loadContacts() {
       return;
     }
 
+    // Akzeptierte Kontakte für Invite-Autocomplete cachen
+    _cachedAcceptedContacts = null; // invalidieren damit Popup immer frisch lädt
+    _acceptedContactHandles = contacts
+      .filter(c => c.status === "accepted")
+      .map(c => c.contact_handle || c.handle || "")
+      .filter(Boolean);
+
     contacts.forEach(contact => {
       if (contact.status === "pending") {
         pendingEl.appendChild(renderPending(contact));
@@ -299,6 +442,12 @@ async function loadContacts() {
         acceptedEl.appendChild(renderDeleted(contact));
       }
     });
+
+    // Tab-Badges aktualisieren
+    const totalUnread = Object.values(unreadMap).reduce((s, n) => s + (n || 0), 0);
+    const pendingCount = contacts.filter(c => c.status === "pending" && c.direction === "in").length;
+    updateTabBadge("chats", totalUnread);
+    updateTabBadge("contacts", pendingCount);
 
     if (!pendingEl.children.length) {
       pendingEl.appendChild(emptyLi(lang.noPendingRequests));
@@ -340,9 +489,12 @@ function renderPending(contact) {
   }
 
   // 👉 EINGEHENDE Anfrage
+  li.dataset.pendingIn = "1";
   const acceptBtn = document.createElement("button");
   acceptBtn.textContent = lang.acceptBtn;
   acceptBtn.onclick = async () => {
+    li.remove(); // sofort aus DOM entfernen
+    updateTabBadge("contacts", document.querySelectorAll("#pending li[data-pending-in]").length);
     await apiFetch("/contacts/accept", {
       method: "POST",
       body: JSON.stringify({ contact: contact.handle })
@@ -353,6 +505,8 @@ function renderPending(contact) {
   const rejectBtn = document.createElement("button");
   rejectBtn.textContent = lang.rejectBtn;
   rejectBtn.onclick = async () => {
+    li.remove(); // sofort aus DOM entfernen
+    updateTabBadge("contacts", document.querySelectorAll("#pending li[data-pending-in]").length);
     await apiFetch("/contacts/reject", {
       method: "POST",
       body: JSON.stringify({ contact: contact.handle })
@@ -367,80 +521,84 @@ function renderPending(contact) {
 }
 
 function renderAccepted(contact) {
+  const handle  = contact.display_handle || contact.handle;
+  const unread  = unreadMap[contact.handle] || 0;
+  const myUser  = (localStorage.getItem("my_user") || "").toLowerCase();
+  const convoId = dmConvoId(myUser, contact.handle);
+  const cached  = getPreviewCache(convoId);
+  const { text: previewText, muted: previewMuted } = buildPreviewText(cached, contact.last_ts, myUser, contact.handle, false);
 
   const li = document.createElement("li");
+  li.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border-subtle);cursor:pointer;transition:background 0.1s;border-radius:8px;";
+  li.addEventListener("mouseenter", () => li.style.background = "var(--bg-panel-alt)");
+  li.addEventListener("mouseleave", () => li.style.background = "");
+  li.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    window.location.href = `/chat?with=${encodeURIComponent(contact.handle)}`;
+  });
 
-  const name = document.createElement("span");
-  name.textContent = contact.display_handle || contact.handle;
+  // Avatar
+  const avatar = document.createElement("div");
+  avatar.style.cssText = "width:40px;height:40px;min-width:40px;border-radius:50%;background:#404249;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;color:#fff;";
+  avatar.textContent = handle[0].toUpperCase();
 
-  // 🔔 unread badge
-const unread = unreadMap[contact.handle] || 0;
+  // Content
+  const content = document.createElement("div");
+  content.style.cssText = "flex:1;min-width:0;";
 
-if (unread > 0) {
+  const topRow = document.createElement("div");
+  topRow.style.cssText = "display:flex;align-items:baseline;justify-content:space-between;gap:4px;";
 
-  const badge = document.createElement("span");
+  const nameEl = document.createElement("span");
+  nameEl.style.cssText = "font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  nameEl.textContent = handle;
 
-  badge.textContent = ` (${unread})`;
+  const timeMeta = document.createElement("span");
+  timeMeta.style.cssText = `font-size:11px;white-space:nowrap;flex-shrink:0;color:${unread > 0 ? "var(--accent-voice)" : "var(--text-secondary)"};${unread > 0 ? "font-weight:600;" : ""}`;
+  timeMeta.textContent = formatTime(contact.last_ts);
 
-  badge.style.color = "var(--accent-voice)";
-  badge.style.fontWeight = "600";
-  badge.style.marginLeft = "4px";
+  topRow.appendChild(nameEl);
+  topRow.appendChild(timeMeta);
 
-  name.appendChild(badge);
+  const previewRow = document.createElement("div");
+  previewRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-top:2px;gap:4px;";
 
-}
+  const preview = document.createElement("span");
+  preview.style.cssText = "font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  preview.textContent = previewText;
+  if (previewMuted) preview.style.opacity = "0.45";
 
-  const chatBtn = document.createElement("a");
-  chatBtn.href = `/chat?with=${encodeURIComponent(contact.handle)}`;
-  chatBtn.textContent = "Chat";
-  chatBtn.className = "chat-link";
-  chatBtn.style.marginLeft = "10px";
+  previewRow.appendChild(preview);
 
+  if (unread > 0) {
+    const badge = document.createElement("span");
+    badge.textContent = unread > 99 ? "99+" : unread;
+    badge.style.cssText = "background:var(--accent-voice);color:#fff;border-radius:10px;font-size:11px;font-weight:700;padding:1px 6px;flex-shrink:0;";
+    previewRow.appendChild(badge);
+  }
+
+  content.appendChild(topRow);
+  content.appendChild(previewRow);
+
+  // Remove button
   const removeBtn = document.createElement("button");
   removeBtn.textContent = "✕";
-  removeBtn.style.marginLeft = "10px";
-  removeBtn.style.color = "var(--text-muted)";
-  removeBtn.style.background = "transparent";
-  removeBtn.style.border = "none";
-  removeBtn.style.cursor = "pointer";
-  removeBtn.style.fontSize = "14px";
-  removeBtn.style.padding = "2px 6px";
-  removeBtn.style.borderRadius = "4px";
-  removeBtn.style.transition = "color 0.15s ease";
+  removeBtn.title = lang.removeFromList;
+  removeBtn.style.cssText = "background:transparent;border:none;color:var(--text-muted);font-size:14px;cursor:pointer;padding:4px 6px;border-radius:4px;flex-shrink:0;transition:color 0.15s;";
   removeBtn.onmouseenter = () => removeBtn.style.color = "var(--status-error)";
   removeBtn.onmouseleave = () => removeBtn.style.color = "var(--text-muted)";
-
-
-  removeBtn.onclick = async () => {
-
-    if (!confirm(lang.confirmRemoveContact(contact.handle))) {
-      return;
-    }
-
+  removeBtn.onclick = async (e) => {
+    e.stopPropagation();
+    if (!confirm(lang.confirmRemoveContact(contact.handle))) return;
     try {
-
-      await apiFetch("/contacts/remove", {
-        method: "POST",
-        body: JSON.stringify({
-          contact: contact.handle
-        })
-      });
-
+      await apiFetch("/contacts/remove", { method: "POST", body: JSON.stringify({ contact: contact.handle }) });
       loadContacts();
-
-    } catch (err) {
-
-      console.error("Kontakt entfernen fehlgeschlagen", err);
-      alert(lang.removeContactFailed);
-
-    }
-
+    } catch { alert(lang.removeContactFailed); }
   };
 
-  li.appendChild(name);
-  li.appendChild(chatBtn);
+  li.appendChild(avatar);
+  li.appendChild(content);
   li.appendChild(removeBtn);
-
   return li;
 }
 
@@ -508,9 +666,11 @@ async function loadGroups() {
     if (cacheKey === _lastGroupsKey) return;
     _lastGroupsKey = cacheKey;
 
+    _currentGroups = groups;
+    refreshGroupBadge();
     groupsEl.innerHTML = "";
     if (groups.length === 0) {
-      groupsEl.appendChild(emptyLi("Noch keine Gruppen."));
+      groupsEl.appendChild(emptyLi(lang.noGroups));
       return;
     }
     groups.forEach(g => groupsEl.appendChild(renderGroup(g)));
@@ -520,100 +680,140 @@ async function loadGroups() {
 }
 
 function renderGroup(group) {
+  const seen     = getSeenGroups();
+  const isUnread = !seen.has(group.id);
+
   const li = document.createElement("li");
-  li.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--border-subtle);";
+  li.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border-subtle);cursor:pointer;transition:background 0.1s;border-radius:8px;";
+  li.addEventListener("mouseenter", () => li.style.background = "var(--bg-panel-alt)");
+  li.addEventListener("mouseleave", () => li.style.background = "");
+  li.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    markGroupSeen(group.id);
+    refreshGroupBadge();
+    window.location.href = `/chat?with=${encodeURIComponent(group.id)}&name=${encodeURIComponent(group.name)}`;
+  });
 
-  const name = document.createElement("span");
-  name.style.cssText = "font-weight:600;flex:1;min-width:100px;";
-  name.textContent = `${group.name}`;
+  // Avatar
+  const avatar = document.createElement("div");
+  avatar.style.cssText = "width:40px;height:40px;min-width:40px;border-radius:30%;background:#404249;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;color:#fff;";
+  avatar.textContent = group.name[0].toUpperCase();
 
-  const count = document.createElement("span");
-  count.style.cssText = "font-size:12px;color:var(--text-secondary);margin-left:4px;";
-  count.textContent = `👥 ${group.member_count}`;
-  name.appendChild(count);
+  // Content
+  const content = document.createElement("div");
+  content.style.cssText = "flex:1;min-width:0;";
 
-  const chatBtn = document.createElement("a");
-  chatBtn.href = `/chat?with=${encodeURIComponent(group.id)}`;
-  chatBtn.textContent = "Chat";
-  chatBtn.className = "chat-link";
+  const topRow = document.createElement("div");
+  topRow.style.cssText = "display:flex;align-items:baseline;justify-content:space-between;gap:4px;";
 
-  // Invite input + button (inline)
-  const inviteInput = document.createElement("input");
-  inviteInput.type = "text";
-  inviteInput.placeholder = "Handle einladen…";
-  inviteInput.autocomplete = "off";
-  inviteInput.style.cssText = "font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);width:130px;";
+  const nameEl = document.createElement("span");
+  nameEl.style.cssText = "font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  nameEl.textContent = group.name;
+  if (isUnread) nameEl.style.color = "var(--accent-voice)";
 
-  const inviteBtn = document.createElement("button");
-  inviteBtn.textContent = "+ Einladen";
-  inviteBtn.style.cssText = "font-size:12px;padding:4px 10px;border-radius:6px;";
-  inviteBtn.onclick = async () => {
-    const handle = inviteInput.value.trim().toLowerCase();
-    if (!handle) return;
-    inviteBtn.disabled = true;
-    try {
-      const res = await apiFetch("/groups/invite", {
-        method: "POST",
-        body: JSON.stringify({ groupId: group.id, handle })
-      });
-      if (res.alreadyMember) { alert(`${handle} ist bereits Mitglied.`); return; }
-      inviteInput.value = "";
-      _lastGroupsKey = null; // force re-render
-      await loadGroups();
-    } catch (e) {
-      let msg = e.message || "";
-      try { msg = JSON.parse(msg).error || msg; } catch {}
-      if (msg.includes("not found") || msg.includes("404")) {
-        alert(`Nutzer „${handle}" existiert nicht.`);
-      } else if (msg.includes("Not in your contacts") || msg.includes("contacts")) {
-        alert(`„${handle}" ist nicht in deinen Kontakten. Füge ihn/sie zuerst als Kontakt hinzu.`);
-      } else {
-        alert("Einladen fehlgeschlagen: " + msg);
-      }
-    } finally {
-      inviteBtn.disabled = false;
-    }
-  };
-  inviteInput.addEventListener("keydown", (e) => { if (e.key === "Enter") inviteBtn.click(); });
+  const timeMeta = document.createElement("span");
+  timeMeta.style.cssText = `font-size:11px;white-space:nowrap;flex-shrink:0;color:${isUnread ? "var(--accent-voice)" : "var(--text-secondary)"};${isUnread ? "font-weight:600;" : ""}`;
+  timeMeta.textContent = formatTime(group.last_ts);
 
-  // Leave button
+  topRow.appendChild(nameEl);
+  topRow.appendChild(timeMeta);
+
+  const previewRow = document.createElement("div");
+  previewRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-top:2px;gap:4px;";
+
+  const preview = document.createElement("span");
+  preview.style.cssText = "font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  {
+    const myUser  = (localStorage.getItem("my_user") || "").toLowerCase();
+    const cached  = getPreviewCache(group.id);
+    // Für System-Nachrichten: Server-Text als Fallback wenn kein Cache
+    const fallbackTs   = group.last_type === "system" ? group.last_ts : null;
+    const fallbackText = group.last_type === "system" ? (group.last_text || "") : null;
+    const effectiveCached = cached || (fallbackText !== null ? { text: fallbackText, ts: fallbackTs, from: "__system__" } : null);
+    const { text: previewText, muted: previewMuted } = buildPreviewText(effectiveCached, group.last_ts, myUser, group.last_from, true);
+    preview.textContent = previewText;
+    if (previewMuted) preview.style.opacity = "0.45";
+  }
+
+  const memberCount = document.createElement("span");
+  memberCount.style.cssText = "font-size:11px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap;";
+  memberCount.textContent = `👥 ${group.member_count}`;
+
+  previewRow.appendChild(preview);
+  previewRow.appendChild(memberCount);
+
+  content.appendChild(topRow);
+  content.appendChild(previewRow);
+
+  // ✕ Verlassen-Button (identisch zum Kontakt-Remove-Button)
   const leaveBtn = document.createElement("button");
-  leaveBtn.textContent = "Verlassen";
-  leaveBtn.style.cssText = "font-size:12px;color:var(--status-error);background:transparent;border:1px solid var(--border-subtle);border-radius:6px;padding:4px 10px;cursor:pointer;margin-left:auto;";
-  leaveBtn.onclick = async () => {
-    if (!confirm(`Gruppe "${group.name}" verlassen?`)) return;
+  leaveBtn.textContent = "✕";
+  leaveBtn.title = lang.leaveGroupBtn;
+  leaveBtn.style.cssText = "background:transparent;border:none;color:var(--text-muted);font-size:14px;cursor:pointer;padding:4px 6px;border-radius:4px;flex-shrink:0;transition:color 0.15s;";
+  leaveBtn.onmouseenter = () => leaveBtn.style.color = "var(--status-error)";
+  leaveBtn.onmouseleave = () => leaveBtn.style.color = "var(--text-muted)";
+  leaveBtn.onclick = async (e) => {
+    e.stopPropagation();
+    if (!confirm(lang.confirmLeaveGroup(group.name))) return;
     leaveBtn.disabled = true;
     try {
       await apiFetch("/groups/leave", { method: "POST", body: JSON.stringify({ groupId: group.id }) });
       _lastGroupsKey = null;
       await loadGroups();
     } catch (e) {
-      alert("Verlassen fehlgeschlagen: " + e.message);
+      alert(lang.leaveFailed + e.message);
       leaveBtn.disabled = false;
     }
   };
 
-  li.appendChild(name);
-  li.appendChild(chatBtn);
-  li.appendChild(inviteInput);
-  li.appendChild(inviteBtn);
+  li.appendChild(avatar);
+  li.appendChild(content);
   li.appendChild(leaveBtn);
   return li;
 }
 
-createGroupBtn?.addEventListener("click", async () => {
+// FAB + Popup: Gruppe erstellen
+const createGroupPopup = document.getElementById("create-group-popup");
+
+async function doCreateGroup() {
   const name = groupNameInput?.value.trim();
   if (!name) return;
   createGroupBtn.disabled = true;
   try {
-    await apiFetch("/groups/create", { method: "POST", body: JSON.stringify({ name }) });
+    const res = await apiFetch("/groups/create", { method: "POST", body: JSON.stringify({ name }) });
+    if (res.groupId) markGroupSeen(res.groupId);
     groupNameInput.value = "";
+    createGroupPopup.style.display = "none";
     _lastGroupsKey = null;
     await loadGroups();
   } catch (e) {
-    alert("Gruppe erstellen fehlgeschlagen: " + e.message);
+    alert(lang.createGroupFailed + e.message);
   } finally {
     createGroupBtn.disabled = false;
+  }
+}
+
+createGroupBtn?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const isOpen = createGroupPopup?.style.display === "block";
+  if (isOpen) {
+    createGroupPopup.style.display = "none";
+  } else {
+    createGroupPopup.style.display = "block";
+    setTimeout(() => groupNameInput?.focus(), 50);
+  }
+});
+
+groupNameInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); doCreateGroup(); }
+  if (e.key === "Escape") { createGroupPopup.style.display = "none"; }
+});
+
+document.addEventListener("click", (e) => {
+  if (createGroupPopup?.style.display === "block"
+      && !createGroupPopup.contains(e.target)
+      && e.target !== createGroupBtn) {
+    createGroupPopup.style.display = "none";
   }
 });
 

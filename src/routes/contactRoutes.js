@@ -1,5 +1,5 @@
 import { json, readJson } from '../utils.js';
-import { requireSession, rateLimit } from '../auth.js';
+import { requireSession, rateLimit, pushToUserDO } from '../auth.js';
 
 // ======================================================
 // CONTACT ROUTES: /contacts, /contacts/list,
@@ -21,9 +21,17 @@ export async function handleContactRoutes(request, env, path, params) {
 
         const handle = session.handle;
 
-        const { results } = await env.RENEX_DB.prepare(
-          "SELECT contact_handle, display_handle, status, direction FROM contacts WHERE user_handle = ? AND status != 'removed'"
-        ).bind(handle).all();
+        const { results } = await env.RENEX_DB.prepare(`
+          SELECT c.contact_handle, c.display_handle, c.status, c.direction,
+            (SELECT MAX(ts) FROM messages
+             WHERE convo_id = IIF(? < c.contact_handle,
+               ? || ':' || c.contact_handle,
+               c.contact_handle || ':' || ?)
+            ) as last_ts
+          FROM contacts c
+          WHERE c.user_handle = ? AND c.status NOT IN ('removed', 'rejected')
+          ORDER BY COALESCE(last_ts, 0) DESC
+        `).bind(handle, handle, handle, handle).all();
 
         return json(request, {
           contacts: results.map(r => ({
@@ -31,6 +39,7 @@ export async function handleContactRoutes(request, env, path, params) {
             display_handle: r.display_handle || r.contact_handle,
             status: r.status,
             direction: r.direction ?? undefined,
+            last_ts: r.last_ts || null,
           }))
         });
       }
@@ -80,6 +89,15 @@ export async function handleContactRoutes(request, env, path, params) {
 
         const now = Date.now();
 
+        // 7-Tage-Cooldown: Hat targetHandle meine Anfrage kürzlich abgelehnt?
+        const COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+        const rejectedEntry = await env.RENEX_DB.prepare(
+          "SELECT updated_at FROM contacts WHERE user_handle = ? AND contact_handle = ? AND status = 'rejected' LIMIT 1"
+        ).bind(me, targetHandle).first();
+        if (rejectedEntry && (now - rejectedEntry.updated_at) < COOLDOWN_MS) {
+          return json(request, { status: "cooldown" }, 429);
+        }
+
         // Cross-request Guard: hat targetHandle schon einen pending-Request an mich?
         const reverse = await env.RENEX_DB.prepare(
           "SELECT status FROM contacts WHERE user_handle = ? AND contact_handle = ? LIMIT 1"
@@ -105,10 +123,14 @@ export async function handleContactRoutes(request, env, path, params) {
           if (existing.status === "pending")  return json(request, { status: "already_pending" });
           if (existing.status === "accepted") return json(request, { status: "already_exists" });
           if (existing.status === "removed") {
-            // Wieder aktivieren
+            // Empfänger (bob→alice): eingehende Anfrage
             await env.RENEX_DB.prepare(
               "UPDATE contacts SET status = 'pending', direction = 'in', updated_at = ? WHERE user_handle = ? AND contact_handle = ?"
             ).bind(now, targetHandle, me).run();
+            // Sender (alice→bob): ausgehende Anfrage — war 'removed', muss auf 'pending/out'
+            await env.RENEX_DB.prepare(
+              "UPDATE contacts SET status = 'pending', direction = 'out', updated_at = ? WHERE user_handle = ? AND contact_handle = ?"
+            ).bind(now, me, targetHandle).run();
             return json(request, { status: "requested", contact });
           }
         }
@@ -119,13 +141,18 @@ export async function handleContactRoutes(request, env, path, params) {
         ).bind(targetHandle, me, me, now, now).run();
 
         const mySide = await env.RENEX_DB.prepare(
-          "SELECT 1 FROM contacts WHERE user_handle = ? AND contact_handle = ? LIMIT 1"
+          "SELECT status FROM contacts WHERE user_handle = ? AND contact_handle = ? LIMIT 1"
         ).bind(me, targetHandle).first();
 
         if (!mySide) {
           await env.RENEX_DB.prepare(
             "INSERT INTO contacts (user_handle, contact_handle, status, direction, display_handle, created_at, updated_at) VALUES (?, ?, 'pending', 'out', ?, ?, ?)"
           ).bind(me, targetHandle, targetHandle, now, now).run();
+        } else if (mySide.status === "rejected") {
+          // Nach Cooldown-Ablauf: rejected → pending/out zurücksetzen
+          await env.RENEX_DB.prepare(
+            "UPDATE contacts SET status = 'pending', direction = 'out', updated_at = ? WHERE user_handle = ? AND contact_handle = ?"
+          ).bind(now, me, targetHandle).run();
         }
 
         return json(request, { status: "requested", contact });
@@ -169,6 +196,14 @@ export async function handleContactRoutes(request, env, path, params) {
           "INSERT INTO contacts (user_handle, contact_handle, status, direction, display_handle, created_at, updated_at) VALUES (?, ?, 'accepted', NULL, ?, ?, ?) ON CONFLICT(user_handle, contact_handle) DO UPDATE SET status = 'accepted', direction = NULL, updated_at = excluded.updated_at"
         ).bind(contact, me, me, now, now).run();
 
+        // Antragssteller live benachrichtigen → Badge + Liste sofort aktualisieren
+        await pushToUserDO(env, contact, {
+          id:   crypto.randomUUID(),
+          type: "contact_accepted",
+          from: me,
+          ts:   now
+        }).catch(() => {});
+
         return json(request, { status: "accepted", contact });
       }
       break;
@@ -197,6 +232,19 @@ export async function handleContactRoutes(request, env, path, params) {
         ).bind(me, contact).run();
 
         if (!deleted.meta?.changes) return json(request, { error: "No contacts" }, 404);
+
+        // Sender-Eintrag auf 'rejected' setzen → 7-Tage-Cooldown + stille Ablehnung
+        const now = Date.now();
+        await env.RENEX_DB.prepare(
+          "UPDATE contacts SET status = 'rejected', direction = NULL, updated_at = ? WHERE user_handle = ? AND contact_handle = ?"
+        ).bind(now, contact, me).run();
+
+        // Stiller Push → Requester aktualisiert sofort seine Kontaktliste (kein "rejected"-Hinweis)
+        await pushToUserDO(env, contact, {
+          id:   crypto.randomUUID(),
+          type: "contact_update",
+          ts:   now
+        }).catch(() => {});
 
         return json(request, { status: "rejected", contact });
       }

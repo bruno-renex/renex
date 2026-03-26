@@ -9,7 +9,7 @@ export default {
   // ── inbox.html ──────────────────────────────────────
   inboxPageTitle:           "RENEX – Inbox",
   addContactHeading:        "Add contact",
-  addContactPlaceholder:    "Handle (e.g. bob)",
+  addContactPlaceholder:    "Username",
   addContactBtn:            "Send request",
   pendingHeading:           "Pending requests",
   contactsHeading:          "Contacts",
@@ -17,6 +17,52 @@ export default {
   logout:                   "Logout",
   langToggleLabel:          "Language",
   settings:                 "Settings",
+
+  // ── Tabs ─────────────────────────────────────────────
+  tabChats:             "Chats",
+  tabGroups:            "Groups",
+  tabContacts:          "Contacts",
+
+  // ── Groups ───────────────────────────────────────────
+  groupNamePlaceholder: "Group name",
+  createGroupBtn:       "Create group",
+  noGroups:             "No groups yet.",
+  loadingText:          "Loading…",
+  youSuffix:            " (You)",
+  loadError:            "Failed to load",
+  memberLabel:          "(Member)",
+  inviteBtn:            "+ Invite",
+  invitePlaceholder:    "Username…",
+  alreadyMember:        (handle) => `${handle} is already a member.`,
+  userNotFound:         (handle) => `User "${handle}" does not exist.`,
+  notInContacts:        (handle) => `"${handle}" is not in your contacts. Add them as a contact first.`,
+  inviteFailed:         "Invite failed: ",
+  leaveGroupBtn:        "Leave",
+  confirmLeaveGroup:    (name) => `Leave group "${name}"?`,
+  leaveFailed:          "Leave failed: ",
+  createGroupFailed:    "Create group failed: ",
+  groupDetails:         "Group details",
+  newMessage:           "New message",
+  noMessages:           "No messages yet",
+  yesterday:            "Yesterday",
+  youPrefix:            "You: ",
+
+  // ── Chat menu ─────────────────────────────────────────
+  autoDeleteOff:        "Off",
+  autoDeleteOneDay:     "1 day",
+  autoDeleteOneWeek:    "1 week",
+  autoDeleteFourWeeks:  "4 weeks",
+  autoDeleteNinetyDays: "90 days",
+  membersHeading:       "Members",
+
+  // ── Chat messages ─────────────────────────────────────
+  decryptFailed:          "🔒 Message could not be decrypted",
+  deleteMessageTitle:     "Delete message",
+  confirmDeleteMessage:   "Delete message for everyone?",
+  statusDelivered:        "Delivered",
+  statusSent:             "Sent",
+  messageDeleted:         "🗑️ Message deleted",
+  noPeerKey:              "🔐 Peer has no public key yet",
 
   // ── Delete-Account-Dialog ───────────────────────────
   deleteAccountDialogTitle:   "Delete account",

@@ -151,6 +151,8 @@ sendBtn.click();
 // ======================================================
 const params = new URLSearchParams(window.location.search);
 withUser = params.get("with");
+// Gruppenname sofort aus URL-Param setzen (verhindert UUID-Flash)
+const _initialGroupName = params.get("name") ? decodeURIComponent(params.get("name")) : null;
 console.log("withUser =", withUser);
 
 if (!withUser) {
@@ -481,9 +483,36 @@ const renderedMessageIds = new Set();   // echte Server-IDs
 const pendingByTempId = new Map();      // tempId -> div
 // 🔥 Status Tracking (verhindert verlorene Updates)
 const renderedMessageStatus = new Map(); // messageId -> status
+// 🗑️ Bereits gelöschte Nachrichten (verhindert Render nach Delete-Event)
+const deletedMessageIds = new Set();
+// 🔁 Retry-Zähler für deferred inbound Messages (GSK-Wartezeit)
+const deferredInboundRetryCount = new Map(); // messageId → retryCount
+const MAX_INBOUND_RETRIES = 4; // nach 4 Flush-Runden → permanent failed
 // 🔐 Decrypt Cache: verhindert doppelte Crypto + doppelte Logs
+// LRU-Eviction: ältesten Eintrag löschen statt ganzen Cache (Map iteriert in Einfügereihenfolge)
 const decryptedCache = new Map(); // msg.id -> plaintext
 const MAX_DECRYPT_CACHE = 2000;
+
+// ── Inbox Preview Cache ──────────────────────────────────
+// Speichert die letzte entschlüsselte Nachricht pro Konversation in localStorage
+// → Inbox kann Vorschau anzeigen ohne erneuten Decrypt
+function savePreviewCache(convoId, { text, ts, from }) {
+  if (!convoId || !ts || typeof text !== "string") return;
+  try {
+    localStorage.setItem(`renex_preview_${convoId}`, JSON.stringify({
+      text: text.slice(0, 80),
+      ts,
+      from: from || ""
+    }));
+  } catch {}
+}
+function lruCacheSet(key, value) {
+  if (decryptedCache.has(key)) decryptedCache.delete(key); // ans Ende verschieben (LRU)
+  decryptedCache.set(key, value);
+  if (decryptedCache.size > MAX_DECRYPT_CACHE) {
+    decryptedCache.delete(decryptedCache.keys().next().value); // ältesten löschen
+  }
+}
 
 
 // ======================================================
@@ -554,6 +583,20 @@ export function invalidateInboxKeyCache(handle) {
   inboxKeyCache.delete(handle);
 }
 
+// Akzeptierte Kontakte für Invite-Autocomplete (lazy, gecacht pro Session)
+let _cachedAcceptedContacts = null;
+async function fetchAcceptedContacts() {
+  if (_cachedAcceptedContacts) return _cachedAcceptedContacts;
+  try {
+    const data = await apiFetch("/contacts/list");
+    _cachedAcceptedContacts = (data.contacts || [])
+      .filter(c => c.status === "accepted")
+      .map(c => c.contact_handle || c.handle || "")
+      .filter(Boolean);
+  } catch { _cachedAcceptedContacts = []; }
+  return _cachedAcceptedContacts;
+}
+
 async function fetchInboxKeys(peerHandle) {
   // Cache-Hit?
   const cached = inboxKeyCache.get(peerHandle);
@@ -609,7 +652,7 @@ async function decryptMessageIfNeeded(msg, otherHandle) {
         const chainIndex = typeof msg.rotationIndex === "number" ? msg.rotationIndex : 0;
         const result = await decryptGroupMessage(withUser, getMyUser(), msg.ivB64, msg.ctB64, chainIndex);
         if (typeof result === "string" && result !== "__decrypt_failed__" && msg?.id) {
-          decryptedCache.set(msg.id, result);
+          lruCacheSet(msg.id, result);
         }
         return result;
       }
@@ -624,8 +667,7 @@ async function decryptMessageIfNeeded(msg, otherHandle) {
     if (result === null) return null;
     // Erfolg: in Decrypt-Cache aufnehmen
     if (typeof result === "string" && result !== "__decrypt_failed__" && msg?.id) {
-      decryptedCache.set(msg.id, result);
-      if (decryptedCache.size > MAX_DECRYPT_CACHE) decryptedCache.clear();
+      lruCacheSet(msg.id, result);
     }
     return result; // Plaintext oder "__decrypt_failed__"
   }
@@ -724,14 +766,9 @@ if (typeof decrypted === "string") {
     // kein sigPub → alte Nachricht oder Upload ausstehend → nicht warnen
   }
 
-  // ✅ Cache setzen (vor return)
+  // ✅ Cache setzen (vor return) — LRU-Eviction via lruCacheSet
   if (msg?.id) {
-    decryptedCache.set(msg.id, finalText);
-
-    // simple cap
-    if (decryptedCache.size > MAX_DECRYPT_CACHE) {
-      decryptedCache.clear();
-    }
+    lruCacheSet(msg.id, finalText);
   }
 
   console.log("🔐 MK-DECRYPT success", {
@@ -970,44 +1007,56 @@ if (deferredInboundMessages.length === 0) return;
   const queue = [...deferredInboundMessages];
   deferredInboundMessages.length = 0;
 
-  for (const m of queue) {
-    try {
-      const text = await decryptMessageIfNeeded(m, withUser);
+  // Phase 1: alle Decryptions parallel ausführen (Crypto ist CPU-bound, kein Vorteil aus Sequenz)
+  const decrypted = await Promise.allSettled(
+    queue.map(m => decryptMessageIfNeeded(m, withUser).catch(e => {
+      console.warn("Deferred inbound decrypt failed", e);
+      return "__decrypt_failed__";
+    }))
+  );
 
-      if (text === null || text === "__control__") {
-        // GSK noch nicht verfügbar → zurück in Deferred-Queue
-        deferredInboundMessages.push(m);
-        continue;
-      }
+  // Phase 2: Ergebnisse sequenziell verarbeiten (DOM-Reihenfolge + Re-Queue)
+  for (let i = 0; i < queue.length; i++) {
+    const m = queue[i];
+    const text = decrypted[i].status === "fulfilled" ? decrypted[i].value : "__decrypt_failed__";
 
-      // Permanenter Decrypt-Fehler: Placeholder durch Fehlermeldung ersetzen
-      if (text === "__decrypt_failed__") {
+    if (text === null || text === "__control__") {
+      // GSK noch nicht verfügbar → Retry-Zähler erhöhen
+      const retries = (deferredInboundRetryCount.get(m.id) || 0) + 1;
+      deferredInboundRetryCount.set(m.id, retries);
+      if (retries >= MAX_INBOUND_RETRIES) {
+        // Nach MAX_INBOUND_RETRIES Versuchen → permanent failed
         const el = document.querySelector(`[data-id="${m.id}"]`);
         if (el) {
-          const textEl = el.querySelector("div:first-child");
-          if (textEl) textEl.textContent = "🔒 Nachricht konnte nicht entschlüsselt werden";
+          const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
+          if (textEl) textEl.textContent = lang.decryptFailed;
         }
-        if (m?.id) deferredInboundIds.delete(m.id);
-        continue;
-      }
-
-      // 🔥 FINAL markieren JETZT – nicht vorher
-      if (m?.id) {
-        renderedMessageIds.add(m.id);
         deferredInboundIds.delete(m.id);
+        deferredInboundRetryCount.delete(m.id);
+      } else {
+        deferredInboundMessages.push(m); // nochmal versuchen
       }
-
-renderMessage({
-  id: m.id,
-  from: m.from,
-  message: text,
-  ts: m.ts,
-  status: m.status
-});
-
-    } catch (e) {
-      console.warn("Deferred inbound decrypt failed", e);
+      continue;
     }
+
+    if (text === "__decrypt_failed__") {
+      const el = document.querySelector(`[data-id="${m.id}"]`);
+      if (el) {
+        // .sender-name überspringen → eigentlichen Text-Div treffen
+        const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
+        if (textEl) textEl.textContent = lang.decryptFailed;
+      }
+      if (m?.id) deferredInboundIds.delete(m.id);
+      deferredInboundRetryCount.delete(m.id);
+      continue;
+    }
+
+    if (m?.id) {
+      renderedMessageIds.add(m.id);
+      deferredInboundIds.delete(m.id);
+    }
+
+    renderMessage({ id: m.id, from: m.from, message: text, ts: m.ts, status: m.status });
   }
 
   scrollToBottom();
@@ -1035,7 +1084,11 @@ async function requestGSKFrom(groupId, senderHandle) {
     console.log("📩 GSK angefordert von:", senderHandle, "in Gruppe:", groupId);
   } catch (e) {
     console.warn("⚠️ requestGSKFrom fehlgeschlagen:", e);
-    pendingGskRequests.delete(key); // Retry erlauben bei Netzwerkfehler
+    // 429 (Rate-Limit) oder 403 (nicht Mitglied) → kein Retry
+    const status = e?.status ?? e?.code;
+    if (!status || (status !== 429 && status !== 403)) {
+      pendingGskRequests.delete(key); // Retry nur bei echtem Netzwerkfehler
+    }
   }
 }
 
@@ -1070,7 +1123,7 @@ console.log("🔄 Chat UI State reset");
   if (sendBtn.dataset.bound === "1") return;
 sendBtn.dataset.bound = "1";
 
-  titleEl.textContent = withUser;
+  titleEl.textContent = _initialGroupName || withUser;
 if (firstLoad) {
   messagesEl.innerHTML = "";
 }
@@ -1238,6 +1291,7 @@ const saved = res.message;
 
 if (saved?.id) {
   cacheSentMessage(saved.id, text);
+  savePreviewCache(withUser, { text, ts: saved.ts || Date.now(), from: getMyUser() });
 
   // 🔄 CMK Rotation-Trigger (nur DMs, nur Authority, alle ROTATION_THRESHOLD Nachrichten)
   if (!isGroupConversation(withUser)) {
@@ -1254,8 +1308,22 @@ const div = pendingByTempId.get(tempId);
 if (div) {
   div.classList.remove("pending");
   div.dataset.id = saved.id;          // echte Server-ID
+  div.dataset.status = "sent";
   renderedMessageIds.add(saved.id);   // gegen Duplikate beim Polling
   pendingByTempId.delete(tempId);     // ⬅️ DAS IST DER SCHLÜSSEL
+
+  // 🗑️ Delete-Button nachträglich hinzufügen (war während "pending" blockiert)
+  if (!div.querySelector(".delete-btn")) {
+    const delBtn = document.createElement("button");
+    delBtn.className = "delete-btn";
+    delBtn.title = lang.deleteMessageTitle;
+    delBtn.textContent = "🗑";
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (confirm(lang.confirmDeleteMessage)) deleteMessage(saved.id);
+    });
+    div.appendChild(delBtn);
+  }
 }
 
 // 🕒 Timestamp nachträglich setzen
@@ -1462,16 +1530,20 @@ async function initAutoDeleteUI() {
   const adSubmenu = document.getElementById("chat-autodelete-submenu");
 
   if (menuBtn && menuDropdown) {
+    const openMenu  = () => { menuDropdown.style.display = "block"; };
+    const closeMenu = () => { menuDropdown.style.display = "none"; if (adSubmenu) adSubmenu.style.display = "none"; };
+
+    // Klick / Tap → Toggle
     menuBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const isOpen = menuDropdown.style.display === "block";
-      menuDropdown.style.display = isOpen ? "none" : "block";
-      if (isOpen && adSubmenu) adSubmenu.style.display = "none";
+      menuDropdown.style.display === "block" ? closeMenu() : openMenu();
     });
-    document.addEventListener("click", () => {
-      menuDropdown.style.display = "none";
-      if (adSubmenu) adSubmenu.style.display = "none";
-    });
+
+    // Klicks INNERHALB des Dropdowns nicht nach oben propagieren → verhindert ungewolltes Schliessen
+    menuDropdown.addEventListener("click", (e) => e.stopPropagation());
+
+    // Klick ausserhalb → schliessen
+    document.addEventListener("click", closeMenu);
   }
 
   // Auto-Delete Submenu toggle
@@ -1511,14 +1583,35 @@ async function initGroupMembersUI(groupId) {
   const inviteItem   = document.getElementById("group-invite-item");
   const inviteInput  = document.getElementById("group-invite-input");
   const inviteBtn    = document.getElementById("group-invite-btn");
+  const leaveItem    = document.getElementById("group-leave-item");
+  const leaveBtn     = document.getElementById("group-leave-btn");
 
   if (!membersItem || !memberList || !inviteItem) return;
 
   // Sichtbar machen (nur für Gruppen)
   membersItem.style.display = "block";
   inviteItem.style.display  = "block";
+  if (leaveItem) leaveItem.style.display = "block";
+
+  // Gruppe verlassen
+  if (leaveBtn) {
+    leaveBtn.onclick = async () => {
+      const groupName = titleEl?.textContent || groupId;
+      if (!confirm(lang.confirmLeaveGroup(groupName))) return;
+      leaveBtn.disabled = true;
+      try {
+        await apiFetch("/groups/leave", { method: "POST", body: JSON.stringify({ groupId }) });
+        window.location.href = "/inbox.html";
+      } catch (e) {
+        alert(lang.leaveFailed + (e.message || ""));
+        leaveBtn.disabled = false;
+      }
+    };
+  }
 
   // Mitgliederliste laden
+  let _memberHandles = []; // Array für Autocomplete-Dedup
+
   async function refreshMembers() {
     try {
       const res = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
@@ -1529,14 +1622,66 @@ async function initGroupMembersUI(groupId) {
         titleEl.textContent = res.group.name;
       }
 
+      _memberHandles = members.map(m => m.member_handle);
+
+      const myContacts = await fetchAcceptedContacts();
+      const myHandle   = getMyUser();
+
       memberList.innerHTML = "";
       for (const m of members) {
         const li = document.createElement("li");
-        li.style.cssText = "font-size:13px;padding:3px 0;display:flex;align-items:center;gap:6px;";
-        const isMe = m.member_handle === getMyUser();
+        li.style.cssText = "font-size:13px;padding:4px 0;display:flex;align-items:center;gap:6px;justify-content:space-between;";
+
+        const isMe = m.member_handle === myHandle;
         const isMeStr = isMe ? " (Du)" : "";
         const roleIcon = m.role === "admin" ? "⭐ " : "";
-        li.textContent = `${roleIcon}${m.member_handle}${isMeStr}`;
+
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = `${roleIcon}${m.member_handle}${isMeStr}`;
+        li.appendChild(nameSpan);
+
+        if (!isMe) {
+          const isContact = myContacts.includes(m.member_handle);
+          const addBtn = document.createElement("button");
+          addBtn.style.cssText = "font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-muted);cursor:pointer;white-space:nowrap;flex-shrink:0;transition:opacity 0.15s;";
+
+          if (isContact) {
+            addBtn.textContent = "✓ Kontakt";
+            addBtn.disabled = true;
+            addBtn.style.opacity = "0.45";
+          } else {
+            addBtn.textContent = "+ Anfragen";
+            addBtn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              addBtn.disabled = true;
+              addBtn.textContent = "…";
+              try {
+                const r = await apiFetch("/contacts/request", {
+                  method: "POST",
+                  body: JSON.stringify({ contact: m.member_handle })
+                });
+                if (r.status === "already_exists" || r.status === "accepted") {
+                  addBtn.textContent = "✓ Kontakt";
+                  _cachedAcceptedContacts = null; // Cache invalidieren
+                } else if (r.status === "already_pending") {
+                  addBtn.textContent = "✓ Ausstehend";
+                } else {
+                  addBtn.textContent = "✓ Gesendet";
+                }
+                addBtn.style.opacity = "0.5";
+              } catch {
+                addBtn.textContent = "✗ Fehler";
+                setTimeout(() => {
+                  addBtn.textContent = "+ Anfragen";
+                  addBtn.disabled = false;
+                  addBtn.style.opacity = "1";
+                }, 2000);
+              }
+            });
+          }
+          li.appendChild(addBtn);
+        }
+
         memberList.appendChild(li);
       }
     } catch (e) {
@@ -1556,7 +1701,7 @@ async function initGroupMembersUI(groupId) {
         method: "POST",
         body: JSON.stringify({ groupId, handle })
       });
-      if (res.alreadyMember) { alert(`${handle} ist bereits Mitglied.`); return; }
+      if (res.alreadyMember) { alert(lang.alreadyMember(handle)); return; }
       inviteInput.value = "";
       await refreshMembers();
       // GSK an neues Mitglied distribuieren
@@ -1570,11 +1715,11 @@ async function initGroupMembersUI(groupId) {
       let msg = e.message || "";
       try { msg = JSON.parse(msg).error || msg; } catch {}
       if (msg.includes("not found") || msg.includes("404")) {
-        alert(`Nutzer „${handle}" existiert nicht.`);
+        alert(lang.userNotFound(handle));
       } else if (msg.includes("Not in your contacts") || msg.includes("contacts")) {
-        alert(`„${handle}" ist nicht in deinen Kontakten. Füge ihn/sie zuerst als Kontakt hinzu.`);
+        alert(lang.notInContacts(handle));
       } else {
-        alert("Einladen fehlgeschlagen: " + msg);
+        alert(lang.inviteFailed + msg);
       }
     } finally {
       inviteBtn.disabled = false;
@@ -1584,6 +1729,58 @@ async function initGroupMembersUI(groupId) {
   inviteInput?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); inviteBtn?.click(); }
   });
+
+  // Autocomplete-Dropdown für Invite-Input (Kontakte, Mitglieder ausgegraut)
+  if (inviteInput && inviteBtn) {
+    // Dropdown an body hängen → kein Overflow-Clipping durch Parent
+    const acDrop = document.createElement("div");
+    acDrop.style.cssText = "display:none;position:fixed;min-width:170px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);z-index:9999;max-height:200px;overflow-y:auto;";
+    document.body.appendChild(acDrop);
+
+    function positionAcDrop() {
+      const r = inviteInput.getBoundingClientRect();
+      acDrop.style.left = r.left + "px";
+      acDrop.style.top  = (r.bottom + 4) + "px";
+      acDrop.style.width = Math.max(r.width, 170) + "px";
+    }
+
+    async function renderAcDropdown(query) {
+      const contacts = await fetchAcceptedContacts();
+      const q = query.trim().toLowerCase();
+      const matches = contacts.filter(h => !q || h.includes(q));
+      if (!matches.length) { acDrop.style.display = "none"; return; }
+
+      acDrop.innerHTML = "";
+      matches.forEach(handle => {
+        const isMember = _memberHandles.includes(handle);
+        const item = document.createElement("div");
+        item.style.cssText = `padding:8px 12px;font-size:13px;cursor:${isMember ? "default" : "pointer"};` +
+          `color:${isMember ? "var(--text-secondary)" : "var(--text-primary)"};` +
+          `opacity:${isMember ? ".5" : "1"};display:flex;align-items:center;gap:8px;`;
+        item.innerHTML = `<span>👤</span><span>${handle}</span>` +
+          (isMember ? '<span style="font-size:11px;margin-left:auto">(Mitglied)</span>' : "");
+        if (!isMember) {
+          item.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            inviteInput.value = handle;
+            acDrop.style.display = "none";
+            inviteBtn.click();
+          });
+          item.addEventListener("mouseover", () => item.style.background = "var(--bg-panel-alt)");
+          item.addEventListener("mouseout",  () => item.style.background = "");
+        }
+        acDrop.appendChild(item);
+      });
+      positionAcDrop();
+      acDrop.style.display = "block";
+    }
+
+    inviteInput.addEventListener("focus", () => renderAcDropdown(inviteInput.value));
+    inviteInput.addEventListener("input", () => renderAcDropdown(inviteInput.value));
+    inviteInput.addEventListener("blur",  () => setTimeout(() => { acDrop.style.display = "none"; }, 150));
+    window.addEventListener("scroll", positionAcDrop, { passive: true });
+    window.addEventListener("resize", () => { acDrop.style.display = "none"; }, { passive: true });
+  }
 }
 
 function scrollToBottom() {
@@ -1710,6 +1907,19 @@ div.appendChild(timeEl);
 if (id) div.dataset.id = id;
 if (tempId) div.dataset.tempId = tempId;
 
+// 🗑️ Delete-Event kam vor Render → sofort als gelöscht anzeigen
+if (id && deletedMessageIds.has(id)) {
+  const textEl = div.querySelector("div:not(.sender-name):not(.timestamp)");
+  if (textEl) {
+    textEl.textContent = lang.messageDeleted;
+    textEl.style.opacity = "0.5";
+    textEl.style.fontStyle = "italic";
+  }
+  div.dataset.deleted = "1";
+  messagesEl.appendChild(div);
+  return div;
+}
+
 if (status) {
   div.dataset.status = status;
 }
@@ -1727,11 +1937,11 @@ if (status === "failed") div.classList.add("failed");
 if (id && from === getMyUser() && status !== "pending" && status !== "failed") {
   const delBtn = document.createElement("button");
   delBtn.className = "delete-btn";
-  delBtn.title = "Nachricht löschen";
+  delBtn.title = lang.deleteMessageTitle;
   delBtn.textContent = "🗑";
   delBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (confirm("Nachricht für alle löschen?")) deleteMessage(id);
+    if (confirm(lang.confirmDeleteMessage)) deleteMessage(id);
   });
   div.appendChild(delBtn);
 }
@@ -1765,9 +1975,9 @@ if (currentStatus === "delivered") return;
   let meta = ts;
 
 if (status === "delivered") {
-  meta += " · Zugestellt";
+  meta += " · " + lang.statusDelivered;
 } else if (status === "sent") {
-  meta += " · Gesendet";
+  meta += " · " + lang.statusSent;
 }
 
 el.dataset.status = status;  
@@ -1781,11 +1991,20 @@ renderedMessageStatus.set(messageId, status);
 // ======================================================
 
 function markMessageDeleted(messageId) {
+  // Immer in Set eintragen — auch wenn DOM-Element noch nicht da ist
+  deletedMessageIds.add(messageId);
+
   const el = document.querySelector(`[data-id="${messageId}"]`);
   if (!el) return;
-  const textEl = el.querySelector("div:first-child");
+
+  // Schon als gelöscht markiert → nochmal ist ok
+  if (el.dataset.deleted === "1") return;
+
+  // Absender-Name (.sender-name) und Timestamp (.timestamp) überspringen →
+  // nur den eigentlichen Text-Div treffen (hat keine Klasse)
+  const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
   if (textEl) {
-    textEl.textContent = "🗑️ Nachricht gelöscht";
+    textEl.textContent = lang.messageDeleted;
     textEl.style.opacity = "0.5";
     textEl.style.fontStyle = "italic";
   }
@@ -1820,7 +2039,9 @@ async function processMessage(m) {
   if (m.type === "system") {
     if (renderedMessageIds.has(m.id)) return false;
     renderedMessageIds.add(m.id);
-    showSystemMessage(m.message || m.text || "");
+    const sysText = m.message || m.text || "";
+    showSystemMessage(sysText);
+    savePreviewCache(withUser, { text: sysText, ts: m.ts || Date.now(), from: "__system__" });
     return true;
   }
 
@@ -1890,6 +2111,7 @@ async function processMessage(m) {
     ts: m.ts,
     status: m.status
   });
+  savePreviewCache(withUser, { text, ts: m.ts || Date.now(), from: m.from });
 
   if (m.from === getMyUser()) {
     const pending = document.querySelector(".me.pending");
@@ -2130,31 +2352,29 @@ async function ensureGroupChatReady(groupId, myHandle) {
   }
 
   // Pro Mitglied: Devices laden + eigenen GSK senden + fehlende GSKs anfordern
-  let distributed = 0;
-  let requested = 0;
-  for (const member of members) {
-    try {
-      const devices = await fetchInboxKeys(member.member_handle);
-      if (!devices?.length) continue;
+  // Promise.allSettled → alle Members parallel, kein sequenzielles Warten
+  const results = await Promise.allSettled(members.map(async (member) => {
+    const devices = await fetchInboxKeys(member.member_handle);
+    if (!devices?.length) return { handle: member.member_handle, distributed: false, requested: false };
 
-      // 1) Eigenen GSK an Member senden (Push)
-      const tagged = devices.map(d => ({ ...d, memberHandle: member.member_handle }));
-      await distributeGroupSK(groupId, myHandle, tagged, apiFetch);
-      distributed++;
+    // 1) Eigenen GSK an Member senden (Push)
+    const tagged = devices.map(d => ({ ...d, memberHandle: member.member_handle }));
+    await distributeGroupSK(groupId, myHandle, tagged, apiFetch);
 
-      // 2) Falls wir ihren GSK noch nicht haben → anfordern (Pull)
-      const existingGsk = await getGroupSK(groupId, member.member_handle);
-      if (!existingGsk) {
-        await requestGSKFrom(groupId, member.member_handle);
-        requested++;
-      }
-    } catch (e) {
-      console.warn("⚠️ GSK distribute fehlgeschlagen für:", member.member_handle, e);
-    }
-  }
+    // 2) Falls wir ihren GSK noch nicht haben → anfordern (Pull)
+    const existingGsk = await getGroupSK(groupId, member.member_handle);
+    if (!existingGsk) await requestGSKFrom(groupId, member.member_handle);
+
+    return { handle: member.member_handle, distributed: true, requested: !existingGsk };
+  }));
+
+  const distributed = results.filter(r => r.status === "fulfilled" && r.value?.distributed).length;
+  const requested   = results.filter(r => r.status === "fulfilled" && r.value?.requested).length;
+  const failed      = results.filter(r => r.status === "rejected").length;
+  if (failed > 0) console.warn("⚠️ GSK distribute fehlgeschlagen für", failed, "Members");
 
   sessionStorage.setItem(distKey, "1");
-  console.log("✅ GSK distribuiert:", { groupId, members: members.length, distributed, requested });
+  console.log("✅ GSK distribuiert:", { groupId, members: members.length, distributed, requested, failed });
 }
 
 // ======================================================
@@ -2199,6 +2419,13 @@ window.__chatStartupDone = true;
     ensureGroupChatReady(withUser, getMyUser())
       .catch(e => console.warn("⚠️ ensureGroupChatReady failed", e));
 
+    // Gruppe als gesehen markieren → Badge auf Inbox-Seite verschwindet
+    try {
+      const seen = new Set(JSON.parse(localStorage.getItem("renex_seen_groups") || "[]"));
+      seen.add(withUser);
+      localStorage.setItem("renex_seen_groups", JSON.stringify([...seen]));
+    } catch {}
+
     initAutoDeleteUI().catch(() => {});
     initGroupMembersUI(withUser).catch(() => {});
     startPolling();
@@ -2210,7 +2437,7 @@ window.__chatStartupDone = true;
   const peerOk = await fetchAndStorePeerPublicKey(withUser);
   if (!peerOk) {
     e2eReady = false;
-    alert("🔐 Peer hat noch keinen Public Key");
+    alert(lang.noPeerKey);
     return;
   }
   console.log("📦 hasInboxKeys nach Fetch:", hasInboxKeys);

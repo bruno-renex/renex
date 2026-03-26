@@ -243,11 +243,86 @@
   }
 
   /* ============================= */
+  /* TABS */
+  /* ============================= */
+
+  .tab-bar {
+    display: flex;
+    gap: 2px;
+    background: var(--bg-panel);
+    border-radius: 12px;
+    padding: 4px;
+    margin-bottom: 24px;
+  }
+
+  .tab-btn {
+    flex: 1;
+    padding: 9px 0;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    margin: 0;
+    transition: background 0.15s, color 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    position: relative;
+  }
+
+  .tab-btn:hover {
+    background: var(--bg-panel-alt);
+    color: var(--text-primary);
+  }
+
+  .tab-btn.active {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .tab-badge {
+    background: var(--status-error);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    border-radius: 999px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+
+  .tab-badge.visible {
+    display: flex;
+  }
+
+  .tab-panel {
+    display: none;
+  }
+
+  .tab-panel.active {
+    display: block;
+  }
+
+  /* ============================= */
   /* CONTENT */
   /* ============================= */
 
   h2 {
-    margin-top: 32px;
+    margin-top: 24px;
+    margin-bottom: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
   }
 
   ul {
@@ -261,6 +336,23 @@
 
   button {
     margin-left: 8px;
+  }
+
+  #add-btn, #create-group-btn {
+    margin-left: 0;
+  }
+
+  #add-btn:hover {
+    opacity: 0.85;
+    transform: scale(1.08);
+  }
+
+  #create-group-btn:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+  }
+  #create-group-btn:active {
+    transform: scale(0.96);
   }
 
   #add-handle {
@@ -288,8 +380,9 @@
       <div id="dropdown-lang" class="dropdown-item has-sub">
         <span data-i18n="langToggleLabel">Sprache</span>
         <div id="lang-submenu" class="dropdown" style="top:0;right:calc(100% + 6px);position:absolute;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:100px;padding:8px 0;display:none;z-index:102;">
-          <div id="lang-opt-de" class="dropdown-item">DE – Deutsch</div>
-          <div id="lang-opt-en" class="dropdown-item">EN – English</div>
+          <div id="lang-opt-de" class="dropdown-item">🇩🇪 DE – Deutsch</div>
+          <div id="lang-opt-en" class="dropdown-item">🇬🇧 EN – English</div>
+          <div id="lang-opt-es" class="dropdown-item">🇪🇸 ES – Español</div>
         </div>
       </div>
       <div class="dropdown-divider"></div>
@@ -300,34 +393,54 @@
   </div>
 </div>
 
-  <hr />
+  <!-- TAB BAR -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-tab="chats">
+      💬 <span data-i18n="tabChats">Chats</span>
+      <span id="tab-badge-chats" class="tab-badge"></span>
+    </button>
+    <button class="tab-btn" data-tab="groups">
+      👥 <span data-i18n="tabGroups">Groups</span>
+      <span id="tab-badge-groups" class="tab-badge"></span>
+    </button>
+    <button class="tab-btn" data-tab="contacts">
+      👤 <span data-i18n="tabContacts">Contacts</span>
+      <span id="tab-badge-contacts" class="tab-badge"></span>
+    </button>
+  </nav>
 
-  <h2 data-i18n="addContactHeading">Kontakt hinzufügen</h2>
+  <!-- TAB 1: CHATS (DMs) -->
+  <div class="tab-panel active" id="panel-chats">
+    <ul id="accepted"></ul>
+  </div>
 
-  <input
-    id="add-handle"
-    type="text"
-    placeholder="Handle (z. B. bob)"
-    data-i18n-placeholder="addContactPlaceholder"
-    autocomplete="off"
-  />
-  <button id="add-btn" data-i18n="addContactBtn">Anfrage senden</button>
+  <!-- TAB 2: GRUPPEN -->
+  <div class="tab-panel" id="panel-groups">
+    <ul id="groups"></ul>
+    <!-- FAB: Gruppe erstellen -->
+    <button id="create-group-btn" data-i18n-title="createGroupBtn" title="Gruppe erstellen"
+      style="position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;font-size:26px;border:none;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,0.35);display:none;align-items:center;justify-content:center;transition:transform 0.15s,box-shadow 0.15s;z-index:200;line-height:1;">＋</button>
+    <!-- FAB Popup -->
+    <div id="create-group-popup" style="display:none;position:fixed;bottom:90px;right:28px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,0.4);padding:12px;z-index:201;width:230px;">
+      <input id="group-name-input" type="text" data-i18n-placeholder="groupNamePlaceholder" placeholder="Gruppenname" autocomplete="off" autocorrect="off" autocapitalize="off"
+        style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;" />
+    </div>
+  </div>
 
-  <hr />
-
-  <h2 data-i18n="pendingHeading">Offene Anfragen</h2>
-  <ul id="pending"></ul>
-
-  <h2 data-i18n="contactsHeading">Kontakte</h2>
-  <ul id="accepted"></ul>
-
-<hr />
-<h2>Gruppen</h2>
-<div style="display:flex;gap:8px;margin-bottom:12px;">
-  <input id="group-name-input" type="text" placeholder="Gruppenname" autocomplete="off" style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;" />
-  <button id="create-group-btn">Gruppe erstellen</button>
-</div>
-<ul id="groups"></ul>
+  <!-- TAB 3: KONTAKTE -->
+  <div class="tab-panel" id="panel-contacts">
+    <h2 data-i18n="addContactHeading">Kontakt hinzufügen</h2>
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <input id="add-handle" type="search" placeholder="Handle (z. B. bob)"
+        data-i18n-placeholder="addContactPlaceholder" autocomplete="off"
+        autocorrect="off" autocapitalize="off" spellcheck="false" name="renex-contact"
+        style="margin:0;flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;-webkit-appearance:none;" />
+      <button id="add-btn" data-i18n-title="addContactBtn" title="Anfrage senden"
+        style="margin-left:0;width:42px;height:42px;min-width:42px;border-radius:50%;background:var(--accent);color:#fff;font-size:22px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform 0.15s,opacity 0.15s;flex-shrink:0;">＋</button>
+    </div>
+    <h2 data-i18n="pendingHeading">Offene Anfragen</h2>
+    <ul id="pending"></ul>
+  </div>
 
 <!-- Bestätigungsdialog Account löschen -->
 <div id="delete-overlay">

@@ -1,5 +1,5 @@
 import { json, readJson, param, dmConvoId } from '../utils.js';
-import { requireSession, rateLimit, pushToUserDO } from '../auth.js';
+import { requireSession, rateLimit, pushToUserDO, pushToGroupMembers } from '../auth.js';
 import { handleChatSend } from '../helpers/chatSend.js';
 
 // ======================================================
@@ -257,15 +257,22 @@ export async function handleChatRoutes(request, env, path, params) {
         await env.RENEX_DB.prepare("DELETE FROM messages WHERE id = ?").bind(msgId).run();
 
         // Peer via DO benachrichtigen
-        const peer = row.to_user === me ? row.from_user : row.to_user;
-        await pushToUserDO(env, peer, {
+        const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.convo_id);
+        const deleteEvent = {
           id: crypto.randomUUID(),
           type: "message_deleted",
           messageId: msgId,
           from: me,
-          to: peer,
           ts: Date.now()
-        });
+        };
+        if (isGroup) {
+          // Gruppen: alle Mitglieder benachrichtigen (exkl. Sender)
+          await pushToGroupMembers(env, env.RENEX_DB, row.convo_id, me, deleteEvent);
+        } else {
+          // DM: nur den Peer benachrichtigen
+          const peer = row.to_user === me ? row.from_user : row.to_user;
+          await pushToUserDO(env, peer, { ...deleteEvent, to: peer });
+        }
 
         return json(request, { ok: true });
       }

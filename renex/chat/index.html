@@ -188,27 +188,32 @@ textarea::placeholder {
     <div id="chat-menu-dropdown" style="display:none;position:absolute;left:50%;transform:translateX(-50%);top:38px;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:190px;padding:6px 0;z-index:50;">
       <div id="chat-menu-autodelete" style="padding:10px 16px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;position:relative;">
         <span>🗑️ Auto-Delete</span>
-        <span id="chat-autodelete-label" style="color:var(--accent);font-size:12px;font-weight:600;">Aus</span>
+        <span id="chat-autodelete-label" data-i18n="autoDeleteOff" style="color:var(--accent);font-size:12px;font-weight:600;">Off</span>
         <div id="chat-autodelete-submenu" style="display:none;position:absolute;left:calc(100% + 6px);top:0;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:130px;padding:6px 0;z-index:60;">
-          <div class="chat-ad-opt" data-days="" style="padding:8px 16px;cursor:pointer;font-size:13px;">Aus</div>
-          <div class="chat-ad-opt" data-days="1" style="padding:8px 16px;cursor:pointer;font-size:13px;">1 Tag</div>
-          <div class="chat-ad-opt" data-days="7" style="padding:8px 16px;cursor:pointer;font-size:13px;">1 Woche</div>
-          <div class="chat-ad-opt" data-days="28" style="padding:8px 16px;cursor:pointer;font-size:13px;">4 Wochen</div>
-          <div class="chat-ad-opt" data-days="90" style="padding:8px 16px;cursor:pointer;font-size:13px;">90 Tage</div>
+          <div class="chat-ad-opt" data-days="" data-i18n="autoDeleteOff" style="padding:8px 16px;cursor:pointer;font-size:13px;">Off</div>
+          <div class="chat-ad-opt" data-days="1" data-i18n="autoDeleteOneDay" style="padding:8px 16px;cursor:pointer;font-size:13px;">1 day</div>
+          <div class="chat-ad-opt" data-days="7" data-i18n="autoDeleteOneWeek" style="padding:8px 16px;cursor:pointer;font-size:13px;">1 week</div>
+          <div class="chat-ad-opt" data-days="28" data-i18n="autoDeleteFourWeeks" style="padding:8px 16px;cursor:pointer;font-size:13px;">4 weeks</div>
+          <div class="chat-ad-opt" data-days="90" data-i18n="autoDeleteNinetyDays" style="padding:8px 16px;cursor:pointer;font-size:13px;">90 days</div>
         </div>
       </div>
       <!-- Gruppen: Mitglieder anzeigen (nur für Gruppen sichtbar) -->
       <div id="group-members-item" style="display:none;padding:8px 16px 4px;border-top:1px solid var(--border-subtle);margin-top:4px;">
-        <div style="font-size:11px;font-weight:600;opacity:0.5;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">Mitglieder</div>
+        <div data-i18n="membersHeading" style="font-size:11px;font-weight:600;opacity:0.5;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">Members</div>
         <ul id="group-member-list" style="list-style:none;padding:0;margin:0;max-height:180px;overflow-y:auto;"></ul>
       </div>
       <!-- Gruppen: Mitglied einladen -->
       <div id="group-invite-item" style="display:none;padding:4px 16px 10px;">
         <div style="display:flex;gap:6px;margin-top:6px;">
-          <input id="group-invite-input" type="text" placeholder="Handle einladen…" autocomplete="off"
-            style="flex:1;font-size:12px;padding:5px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);" />
-          <button id="group-invite-btn" style="font-size:12px;padding:5px 10px;border-radius:6px;">+ Einladen</button>
+          <input id="group-invite-input" type="search" data-i18n-placeholder="invitePlaceholder" placeholder="Invite handle…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+            style="flex:1;font-size:12px;padding:5px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);-webkit-appearance:none;" />
+          <button id="group-invite-btn" data-i18n-title="inviteBtn" title="Einladen"
+            style="width:32px;height:32px;min-width:32px;border-radius:50%;background:var(--accent);color:#fff;font-size:18px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:transform 0.15s,opacity 0.15s;padding:0;">＋</button>
         </div>
+      </div>
+      <!-- Gruppen: Verlassen -->
+      <div id="group-leave-item" style="display:none;border-top:1px solid var(--border-subtle);margin-top:4px;padding:4px 16px 8px;">
+        <button id="group-leave-btn" data-i18n="leaveGroupBtn" style="width:100%;font-size:13px;padding:7px 12px;border-radius:7px;background:transparent;border:1px solid var(--border-subtle);color:var(--status-error);cursor:pointer;text-align:left;">Verlassen</button>
       </div>
     </div>
   </div>

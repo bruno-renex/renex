@@ -1,7 +1,8 @@
 import de from "./lang/de.js";
 import en from "./lang/en.js";
+import es from "./lang/es.js";
 
-const LANGS = { de, en };
+const LANGS = { de, en, es };
 const STORAGE_KEY = "renex_lang";
 
 // ── Aktive Sprache ermitteln ──────────────────────────

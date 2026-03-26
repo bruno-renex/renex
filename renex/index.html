@@ -98,6 +98,9 @@
   <button id="lang-en" class="lang-btn">
     <span class="lang-flag">🇬🇧</span> EN
   </button>
+  <button id="lang-es" class="lang-btn">
+    <span class="lang-flag">🇪🇸</span> ES
+  </button>
 </div>
 
 
@@ -163,6 +166,7 @@ if (!handle) {
 // ── Sprachumschalter ──────────────────────────────────
 document.getElementById("lang-de").onclick = () => setLang("de");
 document.getElementById("lang-en").onclick = () => setLang("en");
+document.getElementById("lang-es").onclick = () => setLang("es");
 // Aktive Sprache hervorheben
 document.getElementById("lang-" + getLang()).classList.add("active");
 </script>

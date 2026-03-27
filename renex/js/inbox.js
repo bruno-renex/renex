@@ -352,6 +352,16 @@ if (langBtn && langSubmenu) {
     }
   });
 
+  // Tab-Wechsel / App-Vordergrund: Seite wieder sichtbar → sofort aktualisieren
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      _lastContactsKey = null;
+      _lastGroupsKey   = null;
+      loadContacts();
+      loadGroups();
+    }
+  });
+
   // Preview-Cache Update: chat.js schreibt renex_preview_* →
   // Inbox muss Kontakt-/Gruppen-Liste neu rendern (gleiche oder andere Tab)
   window.addEventListener("storage", (e) => {
@@ -437,7 +447,13 @@ async function loadContacts() {
     const contacts = Array.isArray(data.contacts) ? data.contacts : [];
 
     // 🚫 Kein Re-Render wenn sich nichts geändert hat → kein Blinken
-    const cacheKey = JSON.stringify(contacts) + JSON.stringify(unreadMap);
+    // Preview-Cache-State einbeziehen: wenn chat.js preview aktualisiert → Re-Render
+    const myUser = (localStorage.getItem("my_user") || "").toLowerCase();
+    const previewState = contacts
+      .filter(c => c.status === "accepted")
+      .map(c => localStorage.getItem(`renex_preview_${dmConvoId(myUser, c.handle)}`) || "")
+      .join("|");
+    const cacheKey = JSON.stringify(contacts) + JSON.stringify(unreadMap) + "|" + previewState;
     if (cacheKey === _lastContactsKey) return;
     _lastContactsKey = cacheKey;
 
@@ -687,7 +703,9 @@ async function loadGroups() {
   try {
     const data = await apiFetch("/groups/list");
     const groups = Array.isArray(data.groups) ? data.groups : [];
-    const cacheKey = JSON.stringify(groups);
+    // Preview-Cache-State einbeziehen: wenn chat.js preview aktualisiert → Re-Render
+    const previewState = groups.map(g => localStorage.getItem(`renex_preview_${g.id}`) || "").join("|");
+    const cacheKey = JSON.stringify(groups) + "|" + previewState;
     if (cacheKey === _lastGroupsKey) return;
     _lastGroupsKey = cacheKey;
 

@@ -885,6 +885,13 @@ function getMyUser() {
 function isGroupConversation(id) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id));
 }
+// Inbox-Preview-Cache-Key: Gruppen → UUID, DMs → "alice:bob" (alphabetisch sortiert)
+function previewConvoId(peer) {
+  if (isGroupConversation(peer)) return peer;
+  const me = (getMyUser() || "").toLowerCase();
+  const p  = peer.toLowerCase();
+  return me < p ? `${me}:${p}` : `${p}:${me}`;
+}
 // ======================================================
 // DEVICE ID (STABIL PRO GERÄT)
 // ======================================================
@@ -1291,7 +1298,7 @@ const saved = res.message;
 
 if (saved?.id) {
   cacheSentMessage(saved.id, text);
-  savePreviewCache(withUser, { text, ts: saved.ts || Date.now(), from: getMyUser() });
+  savePreviewCache(previewConvoId(withUser), { text, ts: saved.ts || Date.now(), from: getMyUser() });
 
   // 🔄 CMK Rotation-Trigger (nur DMs, nur Authority, alle ROTATION_THRESHOLD Nachrichten)
   if (!isGroupConversation(withUser)) {
@@ -2041,7 +2048,7 @@ async function processMessage(m) {
     renderedMessageIds.add(m.id);
     const sysText = m.message || m.text || "";
     showSystemMessage(sysText);
-    savePreviewCache(withUser, { text: sysText, ts: m.ts || Date.now(), from: "__system__" });
+    savePreviewCache(previewConvoId(withUser), { text: sysText, ts: m.ts || Date.now(), from: "__system__" });
     return true;
   }
 
@@ -2111,7 +2118,7 @@ async function processMessage(m) {
     ts: m.ts,
     status: m.status
   });
-  savePreviewCache(withUser, { text, ts: m.ts || Date.now(), from: m.from });
+  savePreviewCache(previewConvoId(withUser), { text, ts: m.ts || Date.now(), from: m.from });
 
   if (m.from === getMyUser()) {
     const pending = document.querySelector(".me.pending");

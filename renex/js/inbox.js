@@ -99,17 +99,20 @@ function getPreviewCache(convoId) {
   catch { return null; }
 }
 function buildPreviewText(cached, serverTs, myUser, fromUser, isGroup) {
-  if (!serverTs) return { text: lang.noMessages, muted: true };
-  if (cached && cached.ts >= serverTs) {
-    // Letzter bekannter Text
+  const sTs = Number(serverTs) || 0;
+  if (!sTs) return { text: lang.noMessages, muted: true };
+
+  console.debug("[preview]", { fromUser, sTs, cached });
+
+  if (cached && Number(cached.ts) >= sTs) {
     const from = cached.from || "";
-    if (from === "__system__") return { text: cached.text, muted: false };
+    if (from === "__system__") return { text: cached.text || "", muted: false };
     const fromMe = from === myUser;
-    const prefix = fromMe ? lang.youPrefix : (isGroup && from ? `${from}: ` : "");
-    return { text: `${prefix}${cached.text}`, muted: false };
+    const prefix = fromMe ? (lang.youPrefix || "Du: ") : (isGroup && from ? `${from}: ` : "");
+    return { text: `${prefix}${cached.text || ""}`, muted: false };
   }
   // Neuere Nachricht auf Server → noch nicht entschlüsselt
-  return { text: `🔒 ${lang.newMessage}`, muted: false };
+  return { text: `🔒 ${lang.newMessage || "Neue Nachricht"}`, muted: false };
 }
 
 // ================================

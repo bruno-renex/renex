@@ -498,12 +498,12 @@ const MAX_DECRYPT_CACHE = 2000;
 // → Inbox kann Vorschau anzeigen ohne erneuten Decrypt
 function savePreviewCache(convoId, { text, ts, from }) {
   if (!convoId || !ts || typeof text !== "string") return;
+  const numTs = Number(ts);
+  if (!numTs) return;
   try {
-    localStorage.setItem(`renex_preview_${convoId}`, JSON.stringify({
-      text: text.slice(0, 80),
-      ts,
-      from: from || ""
-    }));
+    const entry = { text: text.slice(0, 80), ts: numTs, from: from || "" };
+    localStorage.setItem(`renex_preview_${convoId}`, JSON.stringify(entry));
+    console.debug("[savePreviewCache]", convoId, entry);
   } catch {}
 }
 function lruCacheSet(key, value) {

@@ -501,9 +501,12 @@ function savePreviewCache(convoId, { text, ts, from }) {
   const numTs = Number(ts);
   if (!numTs) return;
   try {
-    const entry = { text: text.slice(0, 80), ts: numTs, from: from || "" };
-    localStorage.setItem(`renex_preview_${convoId}`, JSON.stringify(entry));
-    console.debug("[savePreviewCache]", convoId, entry);
+    // Nie eine neuere Nachricht mit einer älteren überschreiben
+    const existing = JSON.parse(localStorage.getItem(`renex_preview_${convoId}`) || "null");
+    if (existing && Number(existing.ts) > numTs) return;
+    localStorage.setItem(`renex_preview_${convoId}`, JSON.stringify({
+      text: text.slice(0, 80), ts: numTs, from: from || ""
+    }));
   } catch {}
 }
 function lruCacheSet(key, value) {
@@ -2134,6 +2137,13 @@ async function loadMessages() {
     const url = "/chat/list?with=" + withUser;
     const { messages = [] } = await apiFetch(url);
     console.warn("📥 SERVER MESSAGES:", messages.length, "withUser:", withUser);
+
+    // 📌 Für Gruppen: "letzte gelesene ts" speichern → Inbox-Badge zeigt neue Nachrichten
+    if (isGroupConversation(withUser) && messages.length > 0) {
+      const newestTs = messages[messages.length - 1]?.ts || 0;
+      if (newestTs) localStorage.setItem(`renex_group_read_${withUser}`, String(newestTs));
+    }
+
     const wasAtBottom = isUserAtBottom();
 
     let added = false;

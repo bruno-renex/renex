@@ -72,18 +72,18 @@ const createGroupBtn = document.getElementById("create-group-btn");
 let _lastGroupsKey = null;
 let _currentGroups  = []; // für Badge-Neuberechnung nach Klick
 
-function getSeenGroups() {
-  try { return new Set(JSON.parse(localStorage.getItem("renex_seen_groups") || "[]")); }
-  catch { return new Set(); }
+// Gruppe hat ungelesene Nachrichten wenn last_ts > zuletzt gelesene ts
+function isGroupUnread(group) {
+  if (!group.last_ts) return false;
+  const lastRead = Number(localStorage.getItem(`renex_group_read_${group.id}`) || 0);
+  return Number(group.last_ts) > lastRead;
 }
-function markGroupSeen(groupId) {
-  const seen = getSeenGroups();
-  seen.add(groupId);
-  localStorage.setItem("renex_seen_groups", JSON.stringify([...seen]));
+function markGroupSeen(groupId, lastTs) {
+  // Wird aus chat.js gesetzt; hier nur als Fallback wenn lastTs fehlt
+  if (lastTs) localStorage.setItem(`renex_group_read_${groupId}`, String(lastTs));
 }
 function refreshGroupBadge() {
-  const seen = getSeenGroups();
-  const count = _currentGroups.filter(g => !seen.has(g.id)).length;
+  const count = _currentGroups.filter(g => isGroupUnread(g)).length;
   updateTabBadge("groups", count);
 }
 
@@ -683,8 +683,7 @@ async function loadGroups() {
 }
 
 function renderGroup(group) {
-  const seen     = getSeenGroups();
-  const isUnread = !seen.has(group.id);
+  const isUnread = isGroupUnread(group);
 
   const li = document.createElement("li");
   li.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border-subtle);cursor:pointer;transition:background 0.1s;border-radius:8px;";
@@ -692,7 +691,7 @@ function renderGroup(group) {
   li.addEventListener("mouseleave", () => li.style.background = "");
   li.addEventListener("click", (e) => {
     if (e.target.closest("button")) return;
-    markGroupSeen(group.id);
+    markGroupSeen(group.id, group.last_ts);
     refreshGroupBadge();
     window.location.href = `/chat?with=${encodeURIComponent(group.id)}&name=${encodeURIComponent(group.name)}`;
   });
@@ -784,7 +783,7 @@ async function doCreateGroup() {
   createGroupBtn.disabled = true;
   try {
     const res = await apiFetch("/groups/create", { method: "POST", body: JSON.stringify({ name }) });
-    if (res.groupId) markGroupSeen(res.groupId);
+    if (res.groupId) markGroupSeen(res.groupId, Date.now());
     groupNameInput.value = "";
     createGroupPopup.style.display = "none";
     _lastGroupsKey = null;

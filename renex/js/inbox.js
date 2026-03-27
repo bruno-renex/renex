@@ -341,6 +341,28 @@ if (langBtn && langSubmenu) {
     });
   }
 
+  // BFCache-Restore: Browser-Back stellt alten JS-Zustand wieder her →
+  // _lastContactsKey/_lastGroupsKey sind veraltet → Neu-Render erzwingen
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) {
+      _lastContactsKey = null;
+      _lastGroupsKey   = null;
+      loadContacts();
+      loadGroups();
+    }
+  });
+
+  // Preview-Cache Update: chat.js schreibt renex_preview_* →
+  // Inbox muss Kontakt-/Gruppen-Liste neu rendern (gleiche oder andere Tab)
+  window.addEventListener("storage", (e) => {
+    if (e.key && e.key.startsWith("renex_preview_")) {
+      _lastContactsKey = null;
+      _lastGroupsKey   = null;
+      loadContacts();
+      loadGroups();
+    }
+  });
+
   // ── Tab-Navigation ───────────────────────────────────────
   const tabBtns   = document.querySelectorAll(".tab-btn");
   const tabPanels = document.querySelectorAll(".tab-panel");

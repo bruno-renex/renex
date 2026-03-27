@@ -1064,6 +1064,7 @@ if (deferredInboundMessages.length === 0) return;
     }
 
     renderMessage({ id: m.id, from: m.from, message: text, ts: m.ts, status: m.status });
+    savePreviewCache(previewConvoId(withUser), { text, ts: m.ts || Date.now(), from: m.from });
   }
 
   scrollToBottom();

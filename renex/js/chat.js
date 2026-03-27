@@ -1030,6 +1030,8 @@ if (deferredInboundMessages.length === 0) return;
     const m = queue[i];
     const text = decrypted[i].status === "fulfilled" ? decrypted[i].value : "__decrypt_failed__";
 
+    console.debug("[flush]", { from: m.from, ts: m.ts, result: text === null ? "null(deferred)" : text === "__decrypt_failed__" ? "FAILED" : text === "__control__" ? "control" : "OK:"+String(text).slice(0,20) });
+
     if (text === null || text === "__control__") {
       // GSK noch nicht verfügbar → Retry-Zähler erhöhen
       const retries = (deferredInboundRetryCount.get(m.id) || 0) + 1;

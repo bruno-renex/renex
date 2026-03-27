@@ -2104,6 +2104,7 @@ async function processMessage(m) {
 
   // Permanenter Decrypt-Fehler (falscher CMK / anderes Gerät / alter Key)
   if (text === "__decrypt_failed__") {
+    console.debug("[processMsg] DECRYPT_FAILED", { from: m.from, ts: m.ts, id: messageId });
     renderedMessageIds.add(messageId);
     renderMessage({
       id: messageId,
@@ -2115,6 +2116,7 @@ async function processMessage(m) {
   }
 
   // Normale Nachricht rendern
+  console.debug("[processMsg] OK", { from: m.from, ts: m.ts, preview: String(text).slice(0,20) });
   renderedMessageIds.add(messageId);
   deferredInboundIds.delete(messageId);
   renderMessage({

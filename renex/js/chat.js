@@ -1052,9 +1052,18 @@ if (deferredInboundMessages.length === 0) return;
     }
 
     if (text === "__decrypt_failed__") {
+      // Gruppen: nochmal GSK anfordern (bis MAX_INBOUND_RETRIES)
+      if (isGroupConversation(withUser) && m.from && m.from !== getMyUser()) {
+        const retries = deferredInboundRetryCount.get(m.id) || 0;
+        if (retries < MAX_INBOUND_RETRIES) {
+          deferredInboundRetryCount.set(m.id, retries + 1);
+          deferredInboundMessages.push(m); // erneut in Queue
+          requestGSKFrom(withUser, m.from).catch(() => {});
+          continue;
+        }
+      }
       const el = document.querySelector(`[data-id="${m.id}"]`);
       if (el) {
-        // .sender-name überspringen → eigentlichen Text-Div treffen
         const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
         if (textEl) textEl.textContent = lang.decryptFailed;
       }
@@ -1066,9 +1075,17 @@ if (deferredInboundMessages.length === 0) return;
     if (m?.id) {
       renderedMessageIds.add(m.id);
       deferredInboundIds.delete(m.id);
+      deferredInboundRetryCount.delete(m.id);
     }
 
-    renderMessage({ id: m.id, from: m.from, message: text, ts: m.ts, status: m.status });
+    // Existierende Platzhalter-Bubble updaten (kein Duplikat)
+    const existingBubble = m.id ? document.querySelector(`[data-id="${m.id}"]`) : null;
+    if (existingBubble) {
+      const textEl = existingBubble.querySelector("div:not(.sender-name):not(.timestamp)");
+      if (textEl) textEl.textContent = text;
+    } else {
+      renderMessage({ id: m.id, from: m.from, message: text, ts: m.ts, status: m.status });
+    }
     savePreviewCache(previewConvoId(withUser), { text, ts: m.ts || Date.now(), from: m.from });
   }
 
@@ -2108,16 +2125,25 @@ async function processMessage(m) {
     return false;
   }
 
-  // Permanenter Decrypt-Fehler (falscher CMK / anderes Gerät / alter Key)
+  // Decrypt-Fehler: Gruppen → GSK anfordern + in Deferred-Queue (Retry nach GSK_READY)
+  //                 DMs     → permanent (falscher CMK / anderes Gerät)
   if (text === "__decrypt_failed__") {
     console.debug("[processMsg] DECRYPT_FAILED", { from: m.from, ts: m.ts, id: messageId });
+    if (isGroupConversation(withUser) && m.from && m.from !== getMyUser()) {
+      const retries = deferredInboundRetryCount.get(messageId) || 0;
+      if (retries < MAX_INBOUND_RETRIES) {
+        deferredInboundRetryCount.set(messageId, retries + 1);
+        deferredInboundMessages.push(m);
+        deferredInboundIds.add(messageId);
+        renderedMessageIds.add(messageId); // Verhindert Re-Render durch processMessage
+        requestGSKFrom(withUser, m.from).catch(() => {});
+        // Platzhalter rendern (wird durch flush-Update ersetzt)
+        renderMessage({ id: messageId, from: m.from, message: "🔒 Schlüssel wird angefordert…", ts: m.ts });
+        return false;
+      }
+    }
     renderedMessageIds.add(messageId);
-    renderMessage({
-      id: messageId,
-      from: m.from,
-      message: "🔒 Nachricht konnte nicht entschlüsselt werden",
-      ts: m.ts
-    });
+    renderMessage({ id: messageId, from: m.from, message: "🔒 Nachricht konnte nicht entschlüsselt werden", ts: m.ts });
     return true;
   }
 

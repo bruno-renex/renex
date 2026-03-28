@@ -111,16 +111,16 @@ function buildPreviewText(cached, serverTs, myUser, fromUser, isGroup) {
 
   console.debug("[preview]", { fromUser, sTs, cached });
 
-  if (cached) {
+  if (cached && Number(cached.ts) >= sTs) {
+    // Cache ist aktuell → Text zeigen
     const from = cached.from || "";
     if (from === "__system__") return { text: cached.text || "", muted: false };
     const fromMe = from === myUser;
     const prefix = fromMe ? (lang.youPrefix || "Du: ") : (isGroup && from ? `${from}: ` : "");
-    // Auch veralteten Cache zeigen — Badge kommuniziert neue Nachrichten
     return { text: `${prefix}${cached.text || ""}`, muted: false };
   }
-  // Kein Cache: Chat noch nie geöffnet → verschlüsselt
-  return { text: `🔒 ${lang.newMessage || "Neue Nachricht"}`, muted: false };
+  // Neue ungelesene Nachricht (kein Cache oder veraltet)
+  return { text: `💬 ${lang.newMessage || "Neue Nachricht"}`, muted: false };
 }
 
 // ================================

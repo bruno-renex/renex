@@ -248,25 +248,26 @@
 
   .tab-bar {
     display: flex;
-    gap: 2px;
-    background: var(--bg-panel);
-    border-radius: 12px;
-    padding: 4px;
-    margin-bottom: 24px;
+    gap: 0;
+    background: transparent;
+    border-bottom: 2px solid var(--border-subtle);
+    padding: 0;
+    margin-bottom: 20px;
   }
 
   .tab-btn {
     flex: 1;
-    padding: 9px 0;
+    padding: 10px 0 9px;
     border: none;
-    border-radius: 8px;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    border-radius: 0;
     background: transparent;
     color: var(--text-secondary);
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    margin: 0;
-    transition: background 0.15s, color 0.15s;
+    transition: color 0.15s, border-color 0.15s;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -275,13 +276,15 @@
   }
 
   .tab-btn:hover {
-    background: var(--bg-panel-alt);
     color: var(--text-primary);
+    background: transparent;
   }
 
   .tab-btn.active {
-    background: var(--accent);
-    color: #fff;
+    color: var(--accent-voice);
+    font-weight: 700;
+    border-bottom-color: var(--accent-voice);
+    background: transparent;
   }
 
   .tab-badge {

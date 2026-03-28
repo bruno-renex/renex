@@ -1353,7 +1353,7 @@ if (div) {
     const delBtn = document.createElement("button");
     delBtn.className = "delete-btn";
     delBtn.title = lang.deleteMessageTitle;
-    delBtn.textContent = "🗑";
+    delBtn.textContent = "×";
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (confirm(lang.confirmDeleteMessage)) deleteMessage(saved.id);
@@ -1974,7 +1974,7 @@ if (id && from === getMyUser() && status !== "pending" && status !== "failed") {
   const delBtn = document.createElement("button");
   delBtn.className = "delete-btn";
   delBtn.title = lang.deleteMessageTitle;
-  delBtn.textContent = "🗑";
+  delBtn.textContent = "×";
   delBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (confirm(lang.confirmDeleteMessage)) deleteMessage(id);

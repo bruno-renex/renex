@@ -1306,6 +1306,12 @@ if (saved?.id) {
   cacheSentMessage(saved.id, text);
   savePreviewCache(previewConvoId(withUser), { text, ts: saved.ts || Date.now(), from: getMyUser() });
 
+  // 📖 Gruppen: eigene gesendete Nachrichten als "gelesen" markieren
+  // → Inbox zeigt keinen Badge für eigene Nachrichten
+  if (isGroupConversation(withUser) && saved.ts) {
+    localStorage.setItem(`renex_group_read_${withUser}`, String(saved.ts));
+  }
+
   // 🔄 CMK Rotation-Trigger (nur DMs, nur Authority, alle ROTATION_THRESHOLD Nachrichten)
   if (!isGroupConversation(withUser)) {
     sentMessageCount++;

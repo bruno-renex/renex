@@ -73,17 +73,24 @@ let _lastGroupsKey = null;
 let _currentGroups  = []; // für Badge-Neuberechnung nach Klick
 
 // Gruppe hat ungelesene Nachrichten wenn last_ts > zuletzt gelesene ts
+// UND die letzte Nachricht nicht von mir selbst stammt
 function isGroupUnread(group) {
   if (!group.last_ts) return false;
+  // Kein Badge für eigene letzte Nachricht (ich habe sie selbst geschrieben)
+  const myUser = (localStorage.getItem("my_user") || "").toLowerCase();
+  if (group.last_from && group.last_from.toLowerCase() === myUser) return false;
   const lastRead = Number(localStorage.getItem(`renex_group_read_${group.id}`) || 0);
   return Number(group.last_ts) > lastRead;
 }
 function markGroupSeen(groupId, lastTs) {
-  // Wird aus chat.js gesetzt; hier nur als Fallback wenn lastTs fehlt
   if (lastTs) localStorage.setItem(`renex_group_read_${groupId}`, String(lastTs));
 }
 function refreshGroupBadge() {
   const count = _currentGroups.filter(g => isGroupUnread(g)).length;
+  console.debug("[groupBadge]", count, _currentGroups.map(g => ({
+    id: g.id.slice(0,8), last_ts: g.last_ts, last_from: g.last_from,
+    lastRead: localStorage.getItem(`renex_group_read_${g.id}`)
+  })));
   updateTabBadge("groups", count);
 }
 
@@ -703,8 +710,11 @@ async function loadGroups() {
   try {
     const data = await apiFetch("/groups/list");
     const groups = Array.isArray(data.groups) ? data.groups : [];
-    // Preview-Cache-State einbeziehen: wenn chat.js preview aktualisiert → Re-Render
-    const previewState = groups.map(g => localStorage.getItem(`renex_preview_${g.id}`) || "").join("|");
+    // Preview- UND Lesestatus-State einbeziehen → Re-Render bei jeder Änderung
+    const previewState = groups.map(g =>
+      (localStorage.getItem(`renex_preview_${g.id}`) || "") + ";" +
+      (localStorage.getItem(`renex_group_read_${g.id}`) || "")
+    ).join("|");
     const cacheKey = JSON.stringify(groups) + "|" + previewState;
     if (cacheKey === _lastGroupsKey) return;
     _lastGroupsKey = cacheKey;

@@ -6,6 +6,7 @@ import { handleAuthRoutes } from './src/routes/authRoutes.js';
 import { handleContactRoutes } from './src/routes/contactRoutes.js';
 import { handleAutoDeleteRoutes } from './src/routes/autoDeleteRoutes.js';
 import { handleGroupRoutes } from './src/routes/groupRoutes.js';
+import { handleNotificationRoutes } from './src/routes/notificationRoutes.js';
 import { scheduled } from './src/cron.js';
 
 // Cloudflare Durable Object binding requirement — must be re-exported from entry point
@@ -45,6 +46,9 @@ async function fetch(request, env) {
     }
     if (path.startsWith('/groups')) {
       return handleGroupRoutes(request, env, path, params);
+    }
+    if (path.startsWith('/notifications')) {
+      return handleNotificationRoutes(request, env, path);
     }
     return json(request, { error: 'Not found' }, 404);
 

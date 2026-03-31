@@ -1,5 +1,13 @@
-import { json, readJson } from '../utils.js';
+import { json, readJson, corsHeaders, checkCsrf } from '../utils.js';
 import { requireSession, rateLimit, pushToUserDO } from '../auth.js';
+
+// Bumpt contacts_v KV-Token für beide beteiligten User → ETag wird ungültig
+async function bumpContactsVersion(env, ...handles) {
+  const ts = String(Date.now());
+  await Promise.all(handles.map(h =>
+    env.RENEX_KV.put(`contacts_v:${h}`, ts, { expirationTtl: 86400 })
+  ));
+}
 
 // ======================================================
 // CONTACT ROUTES: /contacts, /contacts/list,
@@ -7,6 +15,9 @@ import { requireSession, rateLimit, pushToUserDO } from '../auth.js';
 //                 /contacts/reject, /contacts/remove
 // ======================================================
 export async function handleContactRoutes(request, env, path, params) {
+  const csrfErr = checkCsrf(request);
+  if (csrfErr) return csrfErr;
+
   switch (path) {
 
     // =========================
@@ -21,6 +32,16 @@ export async function handleContactRoutes(request, env, path, params) {
 
         const handle = session.handle;
 
+        // ── ETag via KV-Versions-Token ────────────────────────────
+        // Jede Kontakt-Mutation (request/accept/reject/remove) bump dieses Token.
+        // Wenn Token unverändert → 304 ohne DB-Query.
+        const kvKey     = `contacts_v:${handle}`;
+        const version   = (await env.RENEX_KV.get(kvKey)) || "0";
+        const clientEtag = request.headers.get("If-None-Match");
+        if (clientEtag && clientEtag === version) {
+          return new Response(null, { status: 304 });
+        }
+
         const { results } = await env.RENEX_DB.prepare(`
           SELECT c.contact_handle, c.display_handle, c.status, c.direction,
             (SELECT MAX(ts) FROM messages
@@ -33,7 +54,7 @@ export async function handleContactRoutes(request, env, path, params) {
           ORDER BY COALESCE(last_ts, 0) DESC
         `).bind(handle, handle, handle, handle).all();
 
-        return json(request, {
+        const body = JSON.stringify({
           contacts: results.map(r => ({
             handle: r.contact_handle,
             display_handle: r.display_handle || r.contact_handle,
@@ -41,6 +62,10 @@ export async function handleContactRoutes(request, env, path, params) {
             direction: r.direction ?? undefined,
             last_ts: r.last_ts || null,
           }))
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "application/json", "ETag": version, ...corsHeaders(request) }
         });
       }
       break;
@@ -95,7 +120,7 @@ export async function handleContactRoutes(request, env, path, params) {
           "SELECT updated_at FROM contacts WHERE user_handle = ? AND contact_handle = ? AND status = 'rejected' LIMIT 1"
         ).bind(me, targetHandle).first();
         if (rejectedEntry && (now - rejectedEntry.updated_at) < COOLDOWN_MS) {
-          return json(request, { status: "cooldown" }, 429);
+          return json(request, { status: "cooldown", error: "cooldown" }, 429);
         }
 
         // Cross-request Guard: hat targetHandle schon einen pending-Request an mich?
@@ -111,6 +136,7 @@ export async function handleContactRoutes(request, env, path, params) {
           await env.RENEX_DB.prepare(
             "INSERT INTO contacts (user_handle, contact_handle, status, direction, display_handle, created_at, updated_at) VALUES (?, ?, 'accepted', NULL, ?, ?, ?) ON CONFLICT(user_handle, contact_handle) DO UPDATE SET status = 'accepted', direction = NULL, updated_at = excluded.updated_at"
           ).bind(me, targetHandle, targetHandle, now, now).run();
+          await bumpContactsVersion(env, me, targetHandle);
           return json(request, { status: "accepted" });
         }
 
@@ -131,6 +157,7 @@ export async function handleContactRoutes(request, env, path, params) {
             await env.RENEX_DB.prepare(
               "UPDATE contacts SET status = 'pending', direction = 'out', updated_at = ? WHERE user_handle = ? AND contact_handle = ?"
             ).bind(now, me, targetHandle).run();
+            await bumpContactsVersion(env, me, targetHandle);
             return json(request, { status: "requested", contact });
           }
         }
@@ -155,6 +182,7 @@ export async function handleContactRoutes(request, env, path, params) {
           ).bind(now, me, targetHandle).run();
         }
 
+        await bumpContactsVersion(env, me, targetHandle);
         return json(request, { status: "requested", contact });
       }
       break;
@@ -204,6 +232,7 @@ export async function handleContactRoutes(request, env, path, params) {
           ts:   now
         }).catch(() => {});
 
+        await bumpContactsVersion(env, me, contact);
         return json(request, { status: "accepted", contact });
       }
       break;
@@ -246,6 +275,7 @@ export async function handleContactRoutes(request, env, path, params) {
           ts:   now
         }).catch(() => {});
 
+        await bumpContactsVersion(env, me, contact);
         return json(request, { status: "rejected", contact });
       }
       break;
@@ -283,7 +313,52 @@ export async function handleContactRoutes(request, env, path, params) {
           "UPDATE contacts SET status = 'removed', updated_at = ? WHERE user_handle = ? AND contact_handle = ?"
         ).bind(now, contact, me).run();
 
+        await bumpContactsVersion(env, me, contact);
         return json(request, { status: "removed", contact });
+      }
+      break;
+    }
+
+    // =========================
+    // CONTACTS / CANCEL  (ausgehende Anfrage zurückziehen)
+    // =========================
+    case "/contacts/cancel": {
+      if (request.method === "POST") {
+        const session = await requireSession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+        const me = String(session.handle || "").toLowerCase();
+        const body = await readJson(request);
+        if (!body) return json(request, { error: "Invalid JSON" }, 400);
+
+        const { contact } = body;
+        if (!contact || contact === me) return json(request, { error: "Invalid contact" }, 400);
+
+        // Nur eigene ausgehende Anfragen dürfen zurückgezogen werden
+        const row = await env.RENEX_DB.prepare(
+          "SELECT 1 FROM contacts WHERE user_handle = ? AND contact_handle = ? AND status = 'pending' AND direction = 'out'"
+        ).bind(me, contact).first();
+        if (!row) return json(request, { error: "No pending outgoing request" }, 404);
+
+        const now = Date.now();
+        // Eigenen Eintrag löschen
+        await env.RENEX_DB.prepare(
+          "DELETE FROM contacts WHERE user_handle = ? AND contact_handle = ?"
+        ).bind(me, contact).run();
+        // Empfänger-Eintrag ebenfalls löschen (war direction='in')
+        await env.RENEX_DB.prepare(
+          "DELETE FROM contacts WHERE user_handle = ? AND contact_handle = ?"
+        ).bind(contact, me).run();
+
+        // Stiller Push → Empfänger aktualisiert sofort seine Kontaktliste
+        await pushToUserDO(env, contact, {
+          id:   crypto.randomUUID(),
+          type: "contact_update",
+          ts:   now
+        }).catch(() => {});
+
+        await bumpContactsVersion(env, me, contact);
+        return json(request, { status: "cancelled", contact });
       }
       break;
     }

@@ -43,32 +43,35 @@
   overflow-y: auto;
   background: var(--bg-body);
   position: relative;
+  display: flex;
+  flex-direction: column;
   }
 
   /* Basis für jede Nachricht */
-    #messages div {
+  .me, .other {
   max-width: 70%;
   margin: 6px 0;
   padding: 8px 12px;
   border-radius: 12px;
   word-wrap: break-word;
   }
-      .me {
-      margin-left: auto;
-      background: var(--chat-self-bg);
-      color: var(--chat-self-text);
-      border: 1px solid var(--chat-self-border);
-      text-align: right;
-      position: relative;
-      padding-top: 14px;
-    }
 
-    .other {
-      margin-right: auto;
-      background: var(--chat-peer-bg);
-      color: var(--chat-peer-text);
-      text-align: left;
-    }
+  .me {
+    align-self: flex-end;
+    background: var(--chat-self-bg);
+    color: var(--chat-self-text);
+    border: 1px solid var(--chat-self-border);
+    text-align: right;
+    position: relative;
+    padding-top: 14px;
+  }
+
+  .other {
+    align-self: flex-start;
+    background: var(--chat-peer-bg);
+    color: var(--chat-peer-text);
+    text-align: left;
+  }
 #length-warning {
   font-size: 12px;
   margin-top: 4px;
@@ -164,6 +167,184 @@
   color: var(--status-error);
 }
 
+.edit-btn {
+  display: block;
+  position: absolute;
+  top: 4px;
+  right: 24px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-secondary);
+  opacity: 0.18;
+  padding: 0;
+  margin: 0;
+  transition: opacity 0.15s, color 0.15s;
+  font-family: inherit;
+}
+
+.edit-btn:hover {
+  opacity: 0.8;
+  color: var(--accent-voice);
+}
+
+.edited-badge {
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  font-style: italic;
+  margin-left: 4px;
+}
+
+/* ── Highlight-Flash beim Scroll zu Original ── */
+@keyframes highlightFlash {
+  0%   { background: rgba(56,189,248,0.25); }
+  100% { background: transparent; }
+}
+.highlight-flash { animation: highlightFlash 1.2s ease-out; border-radius: 8px; }
+
+/* ── Reply-Bar (über dem Eingabefeld) ────────── */
+#reply-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-panel-alt);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+#reply-bar.visible { display: flex; }
+#reply-bar .reply-bar-preview {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+#reply-bar .reply-bar-from {
+  color: var(--accent-voice);
+  font-weight: 600;
+  margin-right: 4px;
+}
+#reply-bar-cancel {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+#reply-bar-cancel:hover { color: var(--text-primary); }
+
+/* ── Quote-Block in Bubble ───────────────────── */
+.reply-quote {
+  border-left: 3px solid var(--accent-voice);
+  padding: 4px 8px;
+  margin-bottom: 5px;
+  border-radius: 0 6px 6px 0;
+  background: rgba(56,189,248,0.07);
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+}
+.reply-quote:hover { background: rgba(56,189,248,0.13); }
+.reply-quote-from {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-voice);
+  margin-bottom: 2px;
+}
+.reply-quote-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+/* ── Reaktionen ──────────────────────────────── */
+.reaction-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.reaction-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 12px;
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border-subtle);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  user-select: none;
+}
+.reaction-pill:hover { background: var(--bg-panel); border-color: var(--accent-voice); }
+.reaction-pill.mine  { border-color: var(--accent-voice); background: rgba(56,189,248,0.12); }
+.reaction-pill .reaction-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* ── Emoji-Picker ────────────────────────────── */
+.reaction-picker {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  gap: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-panel);
+  border-radius: 24px;
+  padding: 5px 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  z-index: 300;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.12s, transform 0.12s;
+}
+.me .reaction-picker { left: auto; right: 0; }
+.reaction-picker.visible { opacity: 1; pointer-events: all; transform: translateY(0); }
+.reaction-picker button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px;
+  border-radius: 6px;
+  transition: transform 0.1s;
+}
+.reaction-picker button:hover { transform: scale(1.3); }
+
+/* Inline-Edit Textarea in Bubble */
+.edit-textarea {
+  width: 100%;
+  min-width: 160px;
+  background: var(--bg-panel-alt);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-voice);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: none;
+  outline: none;
+  box-sizing: border-box;
+  line-height: 1.4;
+}
+
 /* =========================
    Input
    ========================= */
@@ -191,7 +372,7 @@ textarea::placeholder {
     </button>
     <div id="chat-menu-dropdown" style="display:none;position:absolute;left:50%;transform:translateX(-50%);top:38px;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:190px;padding:6px 0;z-index:50;">
       <div id="chat-menu-autodelete" style="padding:10px 16px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;position:relative;">
-        <span>🗑️ Auto-Delete</span>
+        <span>🗑️ Auto-Delete<span id="chat-autodelete-readonly-hint" style="display:none;font-size:10px;color:var(--text-secondary);margin-left:4px;">(Admin)</span></span>
         <span id="chat-autodelete-label" data-i18n="autoDeleteOff" style="color:var(--accent);font-size:12px;font-weight:600;">Off</span>
         <div id="chat-autodelete-submenu" style="display:none;position:absolute;left:calc(100% + 6px);top:0;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:130px;padding:6px 0;z-index:60;">
           <div class="chat-ad-opt" data-days="" data-i18n="autoDeleteOff" style="padding:8px 16px;cursor:pointer;font-size:13px;">Off</div>
@@ -200,6 +381,15 @@ textarea::placeholder {
           <div class="chat-ad-opt" data-days="28" data-i18n="autoDeleteFourWeeks" style="padding:8px 16px;cursor:pointer;font-size:13px;">4 weeks</div>
           <div class="chat-ad-opt" data-days="90" data-i18n="autoDeleteNinetyDays" style="padding:8px 16px;cursor:pointer;font-size:13px;">90 days</div>
         </div>
+      </div>
+      <!-- Notifications Mute Toggle -->
+      <div id="chat-menu-mute" style="padding:10px 16px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-subtle);margin-top:4px;">
+        <span id="chat-mute-label">🔔 Benachrichtigungen</span>
+        <span id="chat-mute-status" style="font-size:12px;font-weight:600;color:var(--accent);">An</span>
+      </div>
+      <!-- Gruppen: Umbenennen (nur Admin, nur Gruppen) -->
+      <div id="chat-menu-rename" style="display:none;padding:10px 16px;cursor:pointer;font-size:13px;border-top:1px solid var(--border-subtle);margin-top:4px;">
+        ✏️ Gruppe umbenennen
       </div>
       <!-- Gruppen: Mitglieder anzeigen (nur für Gruppen sichtbar) -->
       <div id="group-members-item" style="display:none;padding:8px 16px 4px;border-top:1px solid var(--border-subtle);margin-top:4px;">
@@ -227,6 +417,15 @@ textarea::placeholder {
 
 <div id="new-indicator">
   <span id="unread-count">0</span><span id="new-messages-suffix" data-i18n="newMessagesSuffix"> neue Nachrichten ↓</span>
+</div>
+
+<!-- Reply-Bar: erscheint wenn Nutzer auf ↩️ klickt -->
+<div id="reply-bar">
+  <span>↩️</span>
+  <span class="reply-bar-preview">
+    <span class="reply-bar-from" id="reply-bar-from"></span><span id="reply-bar-text"></span>
+  </span>
+  <button id="reply-bar-cancel" title="Abbrechen">✕</button>
 </div>
 
 <textarea

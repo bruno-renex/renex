@@ -63,27 +63,83 @@ const acceptedEl = document.getElementById("accepted");
 const addInput  = document.getElementById("add-handle");
 const addBtn    = document.getElementById("add-btn");
 
+// ── Suchfelder ───────────────────────────────────────────
+const searchChats  = document.getElementById("search-chats");
+const searchGroups = document.getElementById("search-groups");
+const SEARCH_MIN   = 8; // ab dieser Anzahl erscheint die Suchleiste
+
+function applySearch(input, listEl) {
+  const q = (input?.value || "").trim().toLowerCase();
+  Array.from(listEl?.children || []).forEach(li => {
+    if (!li.dataset.searchName) return; // leere States überspringen
+    // "flex" explizit setzen — "" würde display:flex aus cssText löschen → Layout bricht
+    li.style.display = !q || li.dataset.searchName.includes(q) ? "flex" : "none";
+  });
+}
+
+searchChats?.addEventListener("input",  () => applySearch(searchChats,  acceptedEl));
+searchGroups?.addEventListener("input", () => applySearch(searchGroups, groupsEl));
+
+// ── Anfragen-Modal ─────────────────────────────────────
+const requestsModal     = document.getElementById("requests-modal");
+const requestsModalClose = document.getElementById("requests-modal-close");
+const pendingBannerEl   = document.getElementById("pending-banner");
+
+function openRequestsModal()  {
+  if (requestsModal) { requestsModal.style.display = "flex"; document.body.style.overflow = "hidden"; }
+}
+function closeRequestsModal() {
+  if (requestsModal) { requestsModal.style.display = "none"; document.body.style.overflow = ""; }
+}
+
+pendingBannerEl?.addEventListener("click", openRequestsModal);
+requestsModalClose?.addEventListener("click", closeRequestsModal);
+requestsModal?.addEventListener("click", (e) => { if (e.target === requestsModal) closeRequestsModal(); });
+
 let unreadMap = {};
 
 const groupsEl = document.getElementById("groups");
 const groupNameInput = document.getElementById("group-name-input");
 const createGroupBtn = document.getElementById("create-group-btn");
 
-let _lastGroupsKey = null;
+let _lastGroupsKey  = null;
 let _currentGroups  = []; // für Badge-Neuberechnung nach Klick
+let _contactsEtag   = null; // ETag für /contacts/list → spart DB-Query bei 304
+let _mutedConvos     = new Set(); // vom Backend geladen
+let _mutedLoadedAt   = 0;
+const MUTED_TTL_MS   = 10 * 60 * 1000; // 10 Minuten
+
+async function loadMutedConvos(force = false) {
+  // Cache-Invalidierung durch chat.js (nach Mute-Toggle)
+  const externalReset = Number(localStorage.getItem("renex_muted_cache_ts") || 1);
+  if (!force && externalReset !== 0 && Date.now() - _mutedLoadedAt < MUTED_TTL_MS) return;
+  try {
+    const { muted } = await apiFetch("/notifications/muted");
+    _mutedConvos   = new Set(muted || []);
+    _mutedLoadedAt = Date.now();
+    localStorage.removeItem("renex_muted_cache_ts"); // Reset-Flag löschen
+  } catch { _mutedConvos = new Set(); }
+}
 
 // Gruppe hat ungelesene Nachrichten wenn last_ts > zuletzt gelesene ts
 // UND die letzte Nachricht nicht von mir selbst stammt
+// UND die Gruppe nicht stummgeschaltet ist
 function isGroupUnread(group) {
   if (!group.last_ts) return false;
-  // Kein Badge für eigene letzte Nachricht (ich habe sie selbst geschrieben)
+  if (_mutedConvos.has(group.id)) return false;
   const myUser = (localStorage.getItem("my_user") || "").toLowerCase();
   if (group.last_from && group.last_from.toLowerCase() === myUser) return false;
   const lastRead = Number(localStorage.getItem(`renex_group_read_${group.id}`) || 0);
   return Number(group.last_ts) > lastRead;
 }
 function markGroupSeen(groupId, lastTs) {
-  if (lastTs) localStorage.setItem(`renex_group_read_${groupId}`, String(lastTs));
+  if (!lastTs) return;
+  localStorage.setItem(`renex_group_read_${groupId}`, String(lastTs));
+  // Backend informieren → unread_count in /groups/list wird korrekt berechnet
+  apiFetch("/groups/mark-read", {
+    method: "POST",
+    body: JSON.stringify({ groupId, lastReadTs: lastTs })
+  }).catch(() => {}); // Fire-and-forget, kein await nötig
 }
 function refreshGroupBadge() {
   const count = _currentGroups.filter(g => isGroupUnread(g)).length;
@@ -120,7 +176,8 @@ function buildPreviewText(cached, serverTs, myUser, fromUser, isGroup) {
     return { text: `${prefix}${cached.text || ""}`, muted: false };
   }
   // Neue ungelesene Nachricht (kein Cache oder veraltet)
-  return { text: `💬 ${lang.newMessage || "Neue Nachricht"}`, muted: false };
+  const prefix = (isGroup && fromUser && fromUser !== myUser) ? `${fromUser}: ` : "";
+  return { text: `${prefix}💬 ${lang.newMessage || "Neue Nachricht"}`, muted: false };
 }
 
 // ================================
@@ -149,19 +206,16 @@ function formatTime(ts) {
 
 let contactRequestInFlight = false;
 
-// Enter im Input löst Anfrage aus (spam-safe)
+// Enter / Escape im Add-Contact Input
 addInput?.addEventListener("keydown", (e) => {
-
+  if (e.key === "Escape") {
+    document.getElementById("add-contact-popup")?.style.setProperty("display", "none");
+    return;
+  }
   if (e.key !== "Enter") return;
-
-  // verhindert Form Submit / mehrfaches Triggern
   e.preventDefault();
-
-  // verhindert Spam während Request läuft
   if (contactRequestInFlight) return;
-
   addBtn?.click();
-
 });
 
 const profileCircle = document.getElementById("profile-circle");
@@ -326,17 +380,30 @@ if (langBtn && langSubmenu) {
     return;
   }
 
+  await loadMutedConvos();
   loadContacts();
   loadGroups();
   // 🔄 Inbox automatisch aktualisieren
   window._contactsInterval = setInterval(loadContacts, 8000);
   setInterval(loadGroups, 8000);
+  setInterval(loadMutedConvos, MUTED_TTL_MS); // Mute-Status alle 10min sync
 
   // 🔔 Echtzeit: Kontaktanfrage akzeptiert → sofort neu laden (kein Warten auf Poll)
   if ("BroadcastChannel" in window) {
     const bc = new BroadcastChannel("renex-control");
     bc.onmessage = (e) => {
-      if (e.data?.type === "CONTACT_ACCEPTED" || e.data?.type === "CONTACT_UPDATE") loadContacts();
+      // Signatur-Prüfung: nur Events vom eigenen Tab akzeptieren
+      const bcToken = sessionStorage.getItem("renex_bc_token");
+      if (!bcToken || e.data?._bcToken !== bcToken) return;
+      const type = e.data?.type;
+      if (type === "CONTACT_ACCEPTED" || type === "CONTACT_UPDATE") loadContacts();
+      if (type === "NEW_MESSAGE" || type === "GSK_READY" || type === "GROUP_MEMBER_JOINED" || type === "GROUP_MEMBER_LEFT") {
+        _lastContactsKey = null;
+        _lastGroupsKey   = null;
+        loadContacts();
+        loadGroups();
+        // muted: kein visuelles Aufblinken / Popup (Badge erscheint trotzdem)
+      }
     };
   } else {
     window.addEventListener("storage", (e) => {
@@ -344,6 +411,12 @@ if (langBtn && langSubmenu) {
         try {
           const ev = JSON.parse(e.newValue || "{}");
           if (ev.type === "CONTACT_ACCEPTED" || ev.type === "CONTACT_UPDATE") loadContacts();
+          if (ev.type === "NEW_MESSAGE") {
+            _lastContactsKey = null;
+            _lastGroupsKey   = null;
+            loadContacts();
+            loadGroups();
+          }
         } catch {}
       }
     });
@@ -385,21 +458,35 @@ if (langBtn && langSubmenu) {
   const tabBtns   = document.querySelectorAll(".tab-btn");
   const tabPanels = document.querySelectorAll(".tab-panel");
 
+  const addContactBtn   = document.getElementById("add-contact-btn");
+  const addContactPopup = document.getElementById("add-contact-popup");
+
   function switchTab(tab) {
     tabBtns.forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
     tabPanels.forEach(p => p.classList.toggle("active", p.id === `panel-${tab}`));
     localStorage.setItem("inbox_tab", tab);
-    // FAB nur im Gruppen-Tab anzeigen
-    if (createGroupBtn) {
-      createGroupBtn.style.display = tab === "groups" ? "flex" : "none";
-    }
+    // FABs je nach Tab anzeigen
+    if (createGroupBtn) createGroupBtn.style.display = tab === "groups" ? "flex" : "none";
+    if (addContactBtn)  addContactBtn.style.display  = tab === "chats"  ? "flex" : "none";
+    // Popups beim Tab-Wechsel schliessen
+    if (addContactPopup && tab !== "chats")  addContactPopup.style.display  = "none";
+    if (createGroupPopup && tab !== "groups") closeGroupPopup();
   }
+
+  // Add-Contact-FAB toggle
+  addContactBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!addContactPopup) return;
+    const isOpen = addContactPopup.style.display === "block";
+    addContactPopup.style.display = isOpen ? "none" : "block";
+    if (!isOpen) setTimeout(() => addInput?.focus(), 50);
+  });
 
   tabBtns.forEach(btn => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
 
-  // Letzten Tab wiederherstellen
+  // Letzten Tab wiederherstellen (contacts-Tab existiert nicht mehr → chats)
   const savedTab = localStorage.getItem("inbox_tab");
-  if (savedTab) switchTab(savedTab);
+  switchTab(savedTab === "groups" ? "groups" : "chats");
 });
 
 // ================================
@@ -451,7 +538,19 @@ async function loadContacts() {
   }
 
   try {
-    const data = await apiFetch("/contacts/list");
+    // ETag: 304 → kein Re-Render nötig
+    const API = window._API || "https://api.renex.id";
+    const contactsRes = await fetch(API + "/contacts/list", {
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(_contactsEtag ? { "If-None-Match": _contactsEtag } : {})
+      }
+    });
+    if (contactsRes.status === 304) return; // nichts geändert
+    if (!contactsRes.ok) throw new Error(contactsRes.statusText);
+    _contactsEtag = contactsRes.headers.get("ETag") || _contactsEtag;
+    const data = await contactsRes.json();
     const contacts = Array.isArray(data.contacts) ? data.contacts : [];
 
     // 🚫 Kein Re-Render wenn sich nichts geändert hat → kein Blinken
@@ -465,10 +564,13 @@ async function loadContacts() {
     if (cacheKey === _lastContactsKey) return;
     _lastContactsKey = cacheKey;
 
+    const pendingBanner = document.getElementById("pending-banner");
+    const pendingCountEl = document.getElementById("pending-count");
     pendingEl.innerHTML = "";
     acceptedEl.innerHTML = "";
 
     if (contacts.length === 0) {
+      if (pendingBanner) pendingBanner.style.display = "none";
       acceptedEl.appendChild(emptyLi(lang.noContacts));
       return;
     }
@@ -492,19 +594,46 @@ async function loadContacts() {
       }
     });
 
-    // Tab-Badges aktualisieren
-    const totalUnread = Object.values(unreadMap).reduce((s, n) => s + (n || 0), 0);
-    const pendingCount = contacts.filter(c => c.status === "pending" && c.direction === "in").length;
-    updateTabBadge("chats", totalUnread);
-    updateTabBadge("contacts", pendingCount);
-
-    if (!pendingEl.children.length) {
-      pendingEl.appendChild(emptyLi(lang.noPendingRequests));
+    // Banner: bei jeglichen pending Anfragen (in + out) anzeigen
+    const incomingCount = contacts.filter(c => c.status === "pending" && c.direction === "in").length;
+    const outgoingCount = contacts.filter(c => c.status === "pending" && c.direction === "out").length;
+    const pendingCount  = incomingCount + outgoingCount;
+    if (pendingBanner) {
+      if (pendingCount > 0) {
+        pendingBanner.style.display = "flex";
+        // Bannertext je nach Typ anpassen
+        const bannerTextEl = pendingBanner.querySelector("span");
+        const pendingStrong = pendingBanner.querySelector("strong");
+        if (pendingStrong) pendingStrong.textContent = pendingCount;
+        if (bannerTextEl && incomingCount > 0 && outgoingCount > 0) {
+          bannerTextEl.childNodes[0] && (bannerTextEl.childNodes[0].textContent = "📩 ");
+        }
+        if (pendingCountEl) pendingCountEl.textContent = pendingCount;
+      } else {
+        pendingBanner.style.display = "none";
+      }
     }
 
     if (!acceptedEl.children.length) {
       acceptedEl.appendChild(emptyLi(lang.noContacts));
     }
+
+    // Suchfeld: ab SEARCH_MIN akzeptierten Kontakten einblenden
+    const acceptedCount = contacts.filter(c => c.status === "accepted").length;
+    if (searchChats) {
+      searchChats.style.display = acceptedCount >= SEARCH_MIN ? "block" : "none";
+      if (acceptedCount < SEARCH_MIN) searchChats.value = "";
+      else applySearch(searchChats, acceptedEl);
+    }
+
+    // Tab-Badge: Anzahl nicht-stummgeschalteter Kontakte mit ungelesenen Nachrichten
+    const myUserBadge = (localStorage.getItem("my_user") || "").toLowerCase();
+    const unreadContacts = contacts
+      .filter(c => c.status === "accepted")
+      .filter(c => (unreadMap[c.handle] || 0) > 0)
+      .filter(c => !_mutedConvos.has(dmConvoId(myUserBadge, c.handle)))
+      .length;
+    updateTabBadge("chats", unreadContacts); // pendingCount bewusst ausgeschlossen — Banner im Tab ist ausreichend
 
   } catch (err) {
     if (!localStorage.getItem("my_user")) return;
@@ -526,14 +655,30 @@ function renderPending(contact) {
 
   // 👉 AUSGEHENDE Anfrage
   if (contact.direction === "out") {
-
     const sent = document.createElement("span");
-    sent.textContent = lang.requestSent;
-    sent.style.opacity = "0.6";
-    sent.style.marginLeft = "6px";
-
+    sent.textContent = lang.requestSent || "Anfrage gesendet";
+    sent.style.cssText = "opacity:0.6;font-size:12px;margin-left:6px;";
     li.appendChild(sent);
 
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "✕ Zurückziehen";
+    cancelBtn.style.cssText = "margin-left:auto;padding:3px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-secondary);font-size:12px;cursor:pointer;flex-shrink:0;transition:color 0.15s,border-color 0.15s;";
+    cancelBtn.onmouseenter = () => { cancelBtn.style.color = "var(--status-error)"; cancelBtn.style.borderColor = "var(--status-error)"; };
+    cancelBtn.onmouseleave = () => { cancelBtn.style.color = "var(--text-secondary)"; cancelBtn.style.borderColor = "var(--border-subtle)"; };
+    cancelBtn.onclick = async () => {
+      cancelBtn.disabled = true;
+      try {
+        await apiFetch("/contacts/cancel", { method: "POST", body: JSON.stringify({ contact: contact.handle }) });
+        li.remove();
+        _lastContactsKey = null;
+        loadContacts();
+      } catch (e) {
+        console.warn("Cancel failed:", e);
+        cancelBtn.disabled = false;
+      }
+    };
+    li.style.cssText += ";display:flex;align-items:center;";
+    li.appendChild(cancelBtn);
     return li;
   }
 
@@ -542,24 +687,42 @@ function renderPending(contact) {
   const acceptBtn = document.createElement("button");
   acceptBtn.textContent = lang.acceptBtn;
   acceptBtn.onclick = async () => {
-    li.remove(); // sofort aus DOM entfernen
-    updateTabBadge("contacts", document.querySelectorAll("#pending li[data-pending-in]").length);
-    await apiFetch("/contacts/accept", {
-      method: "POST",
-      body: JSON.stringify({ contact: contact.handle })
-    });
+    li.remove();
+    if (!pendingEl.children.length) closeRequestsModal();
+    // Badge sofort optimistisch aktualisieren
+    const remainingAcc = pendingEl.children.length;
+    const pendingCountElAcc = document.getElementById("pending-count");
+    if (pendingCountElAcc) pendingCountElAcc.textContent = remainingAcc;
+    if (remainingAcc === 0 && pendingBannerEl) pendingBannerEl.style.display = "none";
+    // API-Call abwarten, dann Cache invalidieren + neu laden
+    try {
+      await apiFetch("/contacts/accept", {
+        method: "POST",
+        body: JSON.stringify({ contact: contact.handle })
+      });
+    } catch (e) { console.warn("Accept failed:", e); }
+    _lastContactsKey = null;
     loadContacts();
   };
 
   const rejectBtn = document.createElement("button");
   rejectBtn.textContent = lang.rejectBtn;
   rejectBtn.onclick = async () => {
-    li.remove(); // sofort aus DOM entfernen
-    updateTabBadge("contacts", document.querySelectorAll("#pending li[data-pending-in]").length);
-    await apiFetch("/contacts/reject", {
-      method: "POST",
-      body: JSON.stringify({ contact: contact.handle })
-    });
+    li.remove();
+    if (!pendingEl.children.length) closeRequestsModal();
+    // Badge sofort optimistisch aktualisieren
+    const remaining = pendingEl.children.length;
+    const pendingCountEl = document.getElementById("pending-count");
+    if (pendingCountEl) pendingCountEl.textContent = remaining;
+    if (remaining === 0 && pendingBannerEl) pendingBannerEl.style.display = "none";
+    // API-Call abwarten, dann Cache invalidieren + neu laden
+    try {
+      await apiFetch("/contacts/reject", {
+        method: "POST",
+        body: JSON.stringify({ contact: contact.handle })
+      });
+    } catch (e) { console.warn("Reject failed:", e); }
+    _lastContactsKey = null;
     loadContacts();
   };
 
@@ -571,14 +734,16 @@ function renderPending(contact) {
 
 function renderAccepted(contact) {
   const handle  = contact.display_handle || contact.handle;
-  const unread  = unreadMap[contact.handle] || 0;
   const myUser  = (localStorage.getItem("my_user") || "").toLowerCase();
   const convoId = dmConvoId(myUser, contact.handle);
+  const isMuted = _mutedConvos.has(convoId);
+  const unread  = isMuted ? 0 : (unreadMap[contact.handle] || 0);
   const cached  = getPreviewCache(convoId);
   const { text: previewText, muted: previewMuted } = buildPreviewText(cached, contact.last_ts, myUser, contact.handle, false);
 
   const li = document.createElement("li");
   li.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border-subtle);cursor:pointer;transition:background 0.1s;border-radius:8px;";
+  li.dataset.searchName = (handle + " " + contact.handle).toLowerCase();
   li.addEventListener("mouseenter", () => li.style.background = "var(--bg-panel-alt)");
   li.addEventListener("mouseleave", () => li.style.background = "");
   li.addEventListener("click", (e) => {
@@ -619,7 +784,12 @@ function renderAccepted(contact) {
 
   previewRow.appendChild(preview);
 
-  if (unread > 0) {
+  if (isMuted) {
+    const muteIcon = document.createElement("span");
+    muteIcon.textContent = "🔕";
+    muteIcon.style.cssText = "font-size:12px;flex-shrink:0;opacity:0.5;";
+    previewRow.appendChild(muteIcon);
+  } else if (unread > 0) {
     const badge = document.createElement("span");
     badge.textContent = unread > 99 ? "99+" : unread;
     badge.style.cssText = "background:var(--accent-voice);color:#fff;border-radius:10px;font-size:11px;font-weight:700;padding:1px 6px;flex-shrink:0;";
@@ -725,9 +895,16 @@ async function loadGroups() {
     groupsEl.innerHTML = "";
     if (groups.length === 0) {
       groupsEl.appendChild(emptyLi(lang.noGroups));
+      if (searchGroups) { searchGroups.style.display = "none"; searchGroups.value = ""; }
       return;
     }
     groups.forEach(g => groupsEl.appendChild(renderGroup(g)));
+    // Suchfeld: ab SEARCH_MIN Gruppen einblenden
+    if (searchGroups) {
+      searchGroups.style.display = groups.length >= SEARCH_MIN ? "block" : "none";
+      if (groups.length < SEARCH_MIN) searchGroups.value = "";
+      else applySearch(searchGroups, groupsEl);
+    }
   } catch (e) {
     console.warn("loadGroups fehlgeschlagen", e);
   }
@@ -738,6 +915,7 @@ function renderGroup(group) {
 
   const li = document.createElement("li");
   li.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border-subtle);cursor:pointer;transition:background 0.1s;border-radius:8px;";
+  li.dataset.searchName = group.name.toLowerCase();
   li.addEventListener("mouseenter", () => li.style.background = "var(--bg-panel-alt)");
   li.addEventListener("mouseleave", () => li.style.background = "");
   li.addEventListener("click", (e) => {
@@ -788,12 +966,27 @@ function renderGroup(group) {
     if (previewMuted) preview.style.opacity = "0.45";
   }
 
-  const memberCount = document.createElement("span");
-  memberCount.style.cssText = "font-size:11px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap;";
-  memberCount.textContent = `👥 ${group.member_count}`;
-
-  previewRow.appendChild(preview);
-  previewRow.appendChild(memberCount);
+  const isMutedGroup = _mutedConvos.has(group.id);
+  if (isMutedGroup) {
+    const muteIcon = document.createElement("span");
+    muteIcon.textContent = "🔕";
+    muteIcon.style.cssText = "font-size:12px;flex-shrink:0;opacity:0.5;";
+    previewRow.appendChild(preview);
+    previewRow.appendChild(muteIcon);
+  } else if (isUnread) {
+    const badge = document.createElement("span");
+    const unreadCount = Number(group.unread_count) || 0;
+    badge.textContent = unreadCount > 99 ? "99+" : (unreadCount > 0 ? String(unreadCount) : "●");
+    badge.style.cssText = "background:var(--accent-voice);color:#fff;border-radius:10px;font-size:11px;font-weight:700;padding:1px 6px;flex-shrink:0;min-width:18px;text-align:center;";
+    previewRow.appendChild(preview);
+    previewRow.appendChild(badge);
+  } else {
+    const memberCount = document.createElement("span");
+    memberCount.style.cssText = "font-size:11px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap;";
+    memberCount.textContent = `👥 ${group.member_count}`;
+    previewRow.appendChild(preview);
+    previewRow.appendChild(memberCount);
+  }
 
   content.appendChild(topRow);
   content.appendChild(previewRow);
@@ -825,52 +1018,213 @@ function renderGroup(group) {
   return li;
 }
 
-// FAB + Popup: Gruppe erstellen
-const createGroupPopup = document.getElementById("create-group-popup");
+// FAB + Popup: Gruppe erstellen (2-Schritt-Flow)
+const createGroupPopup   = document.getElementById("create-group-popup");
+const groupStep1         = document.getElementById("group-step-1");
+const groupStep2         = document.getElementById("group-step-2");
+const groupCreateConfirm = document.getElementById("group-create-confirm-btn");
+const groupInviteSearch  = document.getElementById("group-invite-search");
+const groupInviteAddBtn  = document.getElementById("group-invite-add-btn");
+const groupInvitedChips  = document.getElementById("group-invited-chips");
+const groupInviteDoneBtn = document.getElementById("group-invite-done-btn");
+
+let _pendingGroupId   = null;
+let _invitedHandles   = new Set(); // bereits eingeladene im aktuellen Flow
+
+function closeGroupPopup() {
+  createGroupPopup.style.display = "none";
+  groupStep1.style.display = "block";
+  groupStep2.style.display = "none";
+  groupNameInput.value = "";
+  if (groupInviteSearch) groupInviteSearch.value = "";
+  if (groupInvitedChips) groupInvitedChips.innerHTML = "";
+  _pendingGroupId = null;
+  _invitedHandles = new Set();
+  if (_inviteAcDrop) _inviteAcDrop.style.display = "none";
+}
 
 async function doCreateGroup() {
   const name = groupNameInput?.value.trim();
   if (!name) return;
-  createGroupBtn.disabled = true;
+  groupCreateConfirm.disabled = true;
   try {
     const res = await apiFetch("/groups/create", { method: "POST", body: JSON.stringify({ name }) });
-    if (res.groupId) markGroupSeen(res.groupId, Date.now());
-    groupNameInput.value = "";
-    createGroupPopup.style.display = "none";
+    if (res.groupId) {
+      markGroupSeen(res.groupId, Date.now());
+      _pendingGroupId = res.groupId;
+    }
     _lastGroupsKey = null;
     await loadGroups();
+    showInviteStep();
   } catch (e) {
     alert(lang.createGroupFailed + e.message);
   } finally {
-    createGroupBtn.disabled = false;
+    groupCreateConfirm.disabled = false;
   }
 }
+
+function showInviteStep() {
+  groupStep1.style.display = "none";
+  groupStep2.style.display = "block";
+  // Kontaktliste frisch laden damit Validierung zuverlässig funktioniert
+  _cachedAcceptedContacts = null;
+  fetchAcceptedContacts().then(() => {
+    setTimeout(() => groupInviteSearch?.focus(), 50);
+  });
+}
+
+function doInviteOne() {
+  const handle = groupInviteSearch?.value.trim().toLowerCase();
+  if (!handle || _invitedHandles.has(handle)) {
+    if (groupInviteSearch) groupInviteSearch.value = "";
+    return;
+  }
+  // Sicherheitsprüfung: nur akzeptierte Kontakte dürfen eingeladen werden
+  if (!_acceptedContactHandles.includes(handle)) {
+    const errEl = document.getElementById("group-invite-error");
+    if (errEl) { errEl.style.display = "block"; setTimeout(() => errEl.style.display = "none", 2500); }
+    groupInviteSearch.style.outline = "2px solid var(--status-error)";
+    setTimeout(() => { if (groupInviteSearch) groupInviteSearch.style.outline = ""; }, 1500);
+    groupInviteSearch.value = "";
+    return;
+  }
+  // Nur Chip hinzufügen — kein API-Call yet
+  _invitedHandles.add(handle);
+  const chip = document.createElement("span");
+  chip.style.cssText = "display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:20px;background:var(--bg-panel-alt);border:1px solid var(--border-subtle);font-size:12px;color:var(--text-primary);";
+  const label = document.createElement("span");
+  label.textContent = handle;
+  const removeBtn = document.createElement("button");
+  removeBtn.textContent = "×";
+  removeBtn.style.cssText = "background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:14px;line-height:1;padding:0;margin:0;opacity:0.6;";
+  removeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    _invitedHandles.delete(handle);
+    chip.remove();
+  });
+  chip.appendChild(label);
+  chip.appendChild(removeBtn);
+  groupInvitedChips.appendChild(chip);
+  if (groupInviteSearch) groupInviteSearch.value = "";
+  if (_inviteAcDrop) _inviteAcDrop.style.display = "none";
+  groupInviteSearch?.focus();
+}
+
+async function doInviteAll() {
+  if (!_pendingGroupId) { closeGroupPopup(); return; }
+  if (_invitedHandles.size === 0) { closeGroupPopup(); return; }
+  groupInviteDoneBtn.disabled = true;
+  groupInviteDoneBtn.textContent = "…";
+  const errors = [];
+  try {
+    await Promise.all([..._invitedHandles].map(async handle => {
+      try {
+        await apiFetch("/groups/invite", { method: "POST", body: JSON.stringify({ groupId: _pendingGroupId, handle }) });
+      } catch (err) {
+        errors.push(`${handle}: ${err.message || err}`);
+      }
+    }));
+  } finally {
+    groupInviteDoneBtn.disabled = false;
+    groupInviteDoneBtn.textContent = "Fertig";
+    if (errors.length) {
+      alert("Einige Einladungen fehlgeschlagen:\n" + errors.join("\n"));
+    }
+    closeGroupPopup();
+  }
+}
+
+// Autocomplete-Dropdown für Invite-Search (gleiche Logik wie chat.js)
+let _inviteAcDrop = null;
+if (groupInviteSearch && groupInviteAddBtn) {
+  _inviteAcDrop = document.createElement("div");
+  _inviteAcDrop.style.cssText = "display:none;position:fixed;min-width:170px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);z-index:9999;max-height:200px;overflow-y:auto;";
+  // Alle clicks im Dropdown stoppen — verhindert dass der document-click-Handler das Popup schliesst
+  _inviteAcDrop.addEventListener("mousedown", (e) => e.stopPropagation());
+  _inviteAcDrop.addEventListener("click",     (e) => e.stopPropagation());
+  document.body.appendChild(_inviteAcDrop);
+
+  function positionInviteAcDrop() {
+    const r = groupInviteSearch.getBoundingClientRect();
+    _inviteAcDrop.style.left  = r.left + "px";
+    _inviteAcDrop.style.top   = (r.bottom + 4) + "px";
+    _inviteAcDrop.style.width = Math.max(r.width, 170) + "px";
+  }
+
+  async function renderInviteAcDropdown(query) {
+    const contacts = await fetchAcceptedContacts();
+    const q = query.trim().toLowerCase();
+    const matches = contacts.filter(h => !q || h.includes(q));
+    if (!matches.length) { _inviteAcDrop.style.display = "none"; return; }
+
+    _inviteAcDrop.innerHTML = "";
+    matches.forEach(handle => {
+      const alreadyInvited = _invitedHandles.has(handle);
+      const item = document.createElement("div");
+      item.style.cssText = `padding:8px 12px;font-size:13px;cursor:${alreadyInvited ? "default" : "pointer"};` +
+        `color:${alreadyInvited ? "var(--text-secondary)" : "var(--text-primary)"};` +
+        `opacity:${alreadyInvited ? ".5" : "1"};display:flex;align-items:center;gap:8px;`;
+      // XSS-safe: textContent statt innerHTML
+      const iconSpanInv = document.createElement("span");
+      iconSpanInv.textContent = "👤";
+      const nameSpanInv = document.createElement("span");
+      nameSpanInv.textContent = handle;
+      item.append(iconSpanInv, nameSpanInv);
+      if (alreadyInvited) {
+        const invitedSpan = document.createElement("span");
+        invitedSpan.style.cssText = "font-size:11px;margin-left:auto";
+        invitedSpan.textContent = "✓ eingeladen";
+        item.appendChild(invitedSpan);
+      }
+      if (!alreadyInvited) {
+        item.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          groupInviteSearch.value = handle;
+          _inviteAcDrop.style.display = "none";
+          doInviteOne();
+        });
+        item.addEventListener("mouseover", () => item.style.background = "var(--bg-panel-alt)");
+        item.addEventListener("mouseout",  () => item.style.background = "");
+      }
+      _inviteAcDrop.appendChild(item);
+    });
+    positionInviteAcDrop();
+    _inviteAcDrop.style.display = "block";
+  }
+
+  groupInviteSearch.addEventListener("focus", () => renderInviteAcDropdown(groupInviteSearch.value));
+  groupInviteSearch.addEventListener("input", () => renderInviteAcDropdown(groupInviteSearch.value));
+  groupInviteSearch.addEventListener("blur",  () => setTimeout(() => { _inviteAcDrop.style.display = "none"; }, 150));
+  groupInviteSearch.addEventListener("keydown", (e) => {
+    if (e.key === "Enter")  { e.preventDefault(); doInviteOne(); }
+    if (e.key === "Escape") { closeGroupPopup(); }
+  });
+  window.addEventListener("scroll", positionInviteAcDrop, { passive: true });
+  window.addEventListener("resize", () => { if (_inviteAcDrop) _inviteAcDrop.style.display = "none"; }, { passive: true });
+}
+
+groupNameInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter")  { e.preventDefault(); doCreateGroup(); }
+  if (e.key === "Escape") { closeGroupPopup(); }
+});
+
+groupCreateConfirm?.addEventListener("click", (e) => { e.stopPropagation(); doCreateGroup(); });
+groupInviteAddBtn?.addEventListener("click",  (e) => { e.stopPropagation(); doInviteOne(); });
+groupInviteDoneBtn?.addEventListener("click", (e) => { e.stopPropagation(); doInviteAll(); });
 
 createGroupBtn?.addEventListener("click", (e) => {
   e.stopPropagation();
   const isOpen = createGroupPopup?.style.display === "block";
   if (isOpen) {
-    createGroupPopup.style.display = "none";
+    closeGroupPopup();
   } else {
     createGroupPopup.style.display = "block";
     setTimeout(() => groupNameInput?.focus(), 50);
   }
 });
 
-groupNameInput?.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); doCreateGroup(); }
-  if (e.key === "Escape") { createGroupPopup.style.display = "none"; }
-});
-
-document.addEventListener("click", (e) => {
-  if (createGroupPopup?.style.display === "block"
-      && !createGroupPopup.contains(e.target)
-      && e.target !== createGroupBtn) {
-    createGroupPopup.style.display = "none";
-  }
-});
-
-groupNameInput?.addEventListener("keydown", (e) => { if (e.key === "Enter") createGroupBtn?.click(); });
+// Popup schliesst nur über Fertig-Button, Escape oder erneuten FAB-Klick
 
 // ================================
 // ADD CONTACT
@@ -892,6 +1246,9 @@ addBtn?.addEventListener("click", async () => {
     });
 
     addInput.value = "";
+    // Popup schliessen nach erfolgreicher Anfrage
+    const addContactPopup = document.getElementById("add-contact-popup");
+    if (addContactPopup) addContactPopup.style.display = "none";
     await loadContacts();
 
   } catch (err) {

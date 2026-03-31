@@ -30,7 +30,11 @@ export async function handleChatSend(request, env) {
     sid,
     epoch,
     sig,
-    deviceId: senderDeviceId
+    deviceId: senderDeviceId,
+    replyToId,      // ID der zitierten Nachricht
+    replyFrom,      // Absender der zitierten Nachricht
+    replyIv,        // IV für verschlüsselte Vorschau
+    replyCt,        // Ciphertext der verschlüsselten Vorschau
   } = body;
 
   // Recipient Validation (early guard)
@@ -52,6 +56,19 @@ export async function handleChatSend(request, env) {
   }
   if (typeof ctB64 === "string" && ctB64.length > MAX_CT_B64) {
     return json(request, { error: "ctB64 too large" }, 400);
+  }
+  // Reply-Felder validieren (alle optional, aber wenn vorhanden: Grösse prüfen)
+  if (replyToId !== undefined && (typeof replyToId !== "string" || replyToId.length > 64)) {
+    return json(request, { error: "replyToId invalid" }, 400);
+  }
+  if (replyFrom !== undefined && (typeof replyFrom !== "string" || replyFrom.length > 64)) {
+    return json(request, { error: "replyFrom invalid" }, 400);
+  }
+  if (replyIv !== undefined && (typeof replyIv !== "string" || replyIv.length > MAX_IV_B64)) {
+    return json(request, { error: "replyIv too large" }, 400);
+  }
+  if (replyCt !== undefined && (typeof replyCt !== "string" || replyCt.length > 1000)) {
+    return json(request, { error: "replyCt too large" }, 400);
   }
   if (typeof message === "string" && message.length > MAX_MSG_LEN) {
     return json(request, { error: "message too large" }, 400);
@@ -207,6 +224,14 @@ export async function handleChatSend(request, env) {
   // Gruppen-UUID in WS-Event einbetten (nötig für gsk-Handler + Chat-Routing)
   if (isGroupMessage) msg.groupId = cid;
 
+  // Reply-Felder (E2E-verschlüsselte Vorschau — Server sieht nur Ciphertext)
+  if (typeof replyToId === "string" && replyToId.length > 0) {
+    msg.replyToId  = replyToId;
+    msg.replyFrom  = typeof replyFrom === "string" ? replyFrom : null;
+    msg.replyIv    = typeof replyIv === "string" ? replyIv : null;
+    msg.replyCt    = typeof replyCt === "string" ? replyCt : null;
+  }
+
   // request_gsk: requestedFrom validieren + preservieren damit nur der Betroffene antwortet
   // SECURITY: requestedFrom muss gültiger Handle-String sein (1-64 Zeichen, kein leerstring)
   if (type === "request_gsk") {
@@ -266,8 +291,8 @@ export async function handleChatSend(request, env) {
   if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
     await env.RENEX_DB.prepare(
       `INSERT OR IGNORE INTO messages
-         (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id, reply_to_id, reply_from, reply_iv, reply_ct)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       msg.id, cid, msg.from, msg.to, msg.ts,
       msg.status ?? "sent",
@@ -282,7 +307,11 @@ export async function handleChatSend(request, env) {
       msg.payloads ? JSON.stringify(msg.payloads) : null,
       rotationIndex,
       (typeof sig === "string" && sig.length > 0) ? sig : null,
-      (typeof senderDeviceId === "string" && senderDeviceId.length > 0) ? senderDeviceId : null
+      (typeof senderDeviceId === "string" && senderDeviceId.length > 0) ? senderDeviceId : null,
+      (typeof replyToId === "string" && replyToId.length > 0) ? replyToId : null,
+      (typeof replyFrom === "string" && replyFrom.length > 0) ? replyFrom : null,
+      (typeof replyIv === "string" && replyIv.length > 0) ? replyIv : null,
+      (typeof replyCt === "string" && replyCt.length > 0) ? replyCt : null
     ).run();
   }
 

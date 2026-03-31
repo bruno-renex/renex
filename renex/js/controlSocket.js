@@ -14,19 +14,26 @@ let reconnectTimer = null;
 let backoff = 1000;
 const MAX_BACKOFF = 30000;
 
-// Verhindert doppelte Verarbeitung — als FIFO-Queue (max. 2000 Einträge)
+// Verhindert doppelte Verarbeitung — Map<id, seenAt> für age-based Eviction
 // Kein .clear() — verhindert Replay-Angriff via ID-Recycling
-const processedControlIds = new Set();
+const processedControlIds = new Map(); // id → timestamp (when we saw it)
 const PROCESSED_IDS_MAX   = 2000;
-const MAX_MSG_AGE_MS       = 5 * 60 * 1000; // 5 Minuten — ältere Nachrichten = Replay-Verdacht
+const MAX_MSG_AGE_MS       = 60 * 1000;      // 60 Sekunden — ältere Nachrichten = Replay-Verdacht
 const MAX_MSG_FUTURE_MS    = 60 * 1000;      // 1 Minute Toleranz für Clock-Skew
 
 function markProcessed(id) {
+  const now = Date.now();
   if (processedControlIds.size >= PROCESSED_IDS_MAX) {
-    // Ältesten Eintrag entfernen (FIFO-LRU)
-    processedControlIds.delete(processedControlIds.values().next().value);
+    // Age-based Eviction: ältesten Eintrag nach Timestamp entfernen
+    const cutoff = now - MAX_MSG_AGE_MS;
+    let evicted = false;
+    for (const [k, ts] of processedControlIds) {
+      if (ts < cutoff) { processedControlIds.delete(k); evicted = true; break; }
+    }
+    // Fallback: FIFO wenn alle Einträge noch frisch (sollte nicht vorkommen)
+    if (!evicted) processedControlIds.delete(processedControlIds.keys().next().value);
   }
-  processedControlIds.add(id);
+  processedControlIds.set(id, now);
 }
 
 // Gibt true zurück wenn die Nachricht als Replay abgelehnt werden soll
@@ -36,20 +43,47 @@ function isReplay(m) {
   // Timestamp-Guard: zu alt oder zu weit in der Zukunft → Replay-Verdacht
   if (typeof m.ts === "number") {
     const delta = Date.now() - m.ts;
-    if (delta > MAX_MSG_AGE_MS)    return true; // >5min alt
+    if (delta > MAX_MSG_AGE_MS)     return true; // >5min alt
     if (delta < -MAX_MSG_FUTURE_MS) return true; // >1min in Zukunft
   }
   return false;
 }
 
-// ── BroadcastChannel (gleich wie controlPoller.js) ───────
+// ── BroadcastChannel + Session-Token (verhindert cross-tab Injection) ────
+// Token wird einmalig pro Tab-Session generiert und in sessionStorage gespeichert.
+// Empfänger (inbox.js, chat.js) im selben Tab prüfen den Token vor der Verarbeitung.
 const bc = ("BroadcastChannel" in window)
   ? new BroadcastChannel("renex-control")
   : null;
 
+const BC_TOKEN_KEY = "renex_bc_token";
+function getBcToken() {
+  let t = sessionStorage.getItem(BC_TOKEN_KEY);
+  if (!t) { t = crypto.randomUUID(); sessionStorage.setItem(BC_TOKEN_KEY, t); }
+  return t;
+}
+// Token sofort beim Laden generieren
+getBcToken();
+
 function notify(event) {
-  if (bc) bc.postMessage(event);
+  if (bc) bc.postMessage({ ...event, _bcToken: getBcToken() });
   else localStorage.setItem("renex-control-event", JSON.stringify({ ...event, t: Date.now() }));
+}
+
+// ── Mute-Cache (60s TTL) ──────────────────────────────────
+let _mutedSet     = new Set();
+let _mutedLoaded  = 0;
+
+async function isMuted(convoId) {
+  const now = Date.now();
+  if (now - _mutedLoaded > 60_000) {
+    try {
+      const res = await apiFetch("/notifications/muted");
+      _mutedSet    = new Set(res.muted || []);
+      _mutedLoaded = now;
+    } catch {}
+  }
+  return _mutedSet.has(convoId);
 }
 
 // ── Helpers (1:1 aus controlPoller.js) ───────────────────
@@ -176,7 +210,7 @@ async function processControlMessage(m) {
   // 7) AUTO-DELETE PROPOSAL/ACCEPT/DECLINE
   if (m.type === "auto_delete_set" && m.from && m.action) {
     console.log("🗑️ AUTO-DELETE event:", m.action, "von", m.from, "days:", m.days);
-    notify({ type: "AUTO_DELETE_SET", peer: m.from, action: m.action, days: m.days ?? null });
+    notify({ type: "AUTO_DELETE_SET", peer: m.from, action: m.action, days: m.days ?? null, groupId: m.groupId ?? null });
     return;
   }
 
@@ -230,7 +264,14 @@ async function processControlMessage(m) {
     return;
   }
 
-  // 11) GROUP MEMBER LEFT
+  // 11) GROUP RENAMED
+  if (m.type === "group_renamed" && m.groupId) {
+    console.log("✏️ Gruppe umbenannt:", m.groupId, "→", m.newName);
+    notify({ type: "GROUP_RENAMED", groupId: m.groupId, newName: m.newName, renamedBy: m.renamedBy });
+    return;
+  }
+
+  // 11b) GROUP MEMBER LEFT
   if (m.type === "group_member_left" && m.groupId) {
     console.log("🚪 Gruppe:", m.groupId, "— Mitglied verlassen:", m.handle);
     notify({ type: "GROUP_MEMBER_LEFT", groupId: m.groupId, handle: m.handle });
@@ -277,7 +318,13 @@ async function processControlMessage(m) {
   // 13) LIVE MESSAGE
   if (!m.type && m.from) {
     console.log("💬 LIVE MESSAGE:", m);
-    notify({ type: "NEW_MESSAGE", message: m });
+    // Convo-ID bestimmen (Gruppe = groupId, DM = alphabetisch sortiert)
+    const liveMsgConvoId = m.groupId || (() => {
+      const [a, b] = [me, m.from].sort();
+      return `${a}:${b}`;
+    })();
+    const muted = await isMuted(liveMsgConvoId);
+    notify({ type: "NEW_MESSAGE", message: m, muted });
     return;
   }
 }
@@ -319,6 +366,7 @@ async function connect() {
   ws.onopen = () => {
     console.log("🟢 Control WebSocket connected");
     backoff = 1000; // Reset bei Erfolg
+    window.dispatchEvent(new CustomEvent("renex-ws-state", { detail: { connected: true } }));
   };
 
   ws.onmessage = async (event) => {
@@ -338,6 +386,7 @@ async function connect() {
   ws.onclose = (event) => {
     ws = null;
     console.log(`🔴 Control WebSocket closed (code: ${event.code})`);
+    window.dispatchEvent(new CustomEvent("renex-ws-state", { detail: { connected: false } }));
 
     // 1000 = Normal close, 1001 = Tab/Page close → kein Reconnect
     if (!running || event.code === 1000) return;
@@ -370,6 +419,10 @@ function scheduleReconnect() {
 }
 
 // ── Public API (gleiche Namen wie controlPoller.js) ───────
+export function isWSConnected() {
+  return ws !== null && ws.readyState === WebSocket.OPEN;
+}
+
 export function startGlobalControlPolling() {
   if (running) return;
   running = true;

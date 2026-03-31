@@ -26,6 +26,30 @@ export function corsHeaders(request) {
 }
 
 // =========================
+// CSRF ORIGIN CHECK
+// =========================
+// Prüft Origin-Header auf State-mutierenden Requests (POST/DELETE).
+// Gibt null zurück wenn OK, sonst einen 403 Response.
+export function checkCsrf(request) {
+  const method = request.method.toUpperCase();
+  if (method === "GET" || method === "OPTIONS" || method === "HEAD") return null;
+
+  const origin = request.headers.get("Origin");
+  const allowedOrigins = [
+    "https://app.renex.id",
+    "https://renex-static.pages.dev",
+  ];
+
+  if (!origin || !allowedOrigins.includes(origin)) {
+    return new Response(JSON.stringify({ error: "CSRF check failed" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  return null; // OK
+}
+
+// =========================
 // SAFE JSON HELPER
 // =========================
 export async function readJson(request) {

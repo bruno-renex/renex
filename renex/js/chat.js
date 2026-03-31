@@ -15,7 +15,8 @@ import {
   findCmkForRotationIndex,
   signMessage,
   verifyMessageSig,
-  getSigPubForDevice
+  getSigPubForDevice,
+  setRotationIndex
 } from "./e2e.js";
 
 import {
@@ -82,6 +83,25 @@ let sessionKeyBytes = null;   // Uint8Array(32) — current SK
 let sessionCmkBytes = null;   // Uint8Array(32) — CMK (für Re-Derivation alter Epochs)
 let sessionRotationIndex = 0; // aktueller Rotation-Index
 let sentMessageCount = 0;     // Zähler für Rotation-Trigger
+
+// Recovery nach IDB-Reset: falls rotationIndex=0 aber laut Backend höher → sync
+async function recoverRotationIndexIfNeeded(sid) {
+  if (sessionRotationIndex > 0 || isGroupConversation(withUser)) return; // nur DM + nur wenn 0
+  try {
+    const res = await apiFetch(`/chat/rotation-index?peer=${encodeURIComponent(withUser)}`);
+    const recovered = Number(res?.rotationIndex) || 0;
+    if (recovered > 0) {
+      console.warn(`[rotationIndex] IDB-Reset erkannt — recovery ${recovered} vom Backend`);
+      sessionRotationIndex = recovered;
+      await setRotationIndex(sid, recovered);
+      const skBytes = await deriveSessionKeyBytesForRotation(sessionCmkBytes, sid, recovered);
+      sessionKeyBytes = skBytes;
+      skCache.set(`${sid}:${recovered}`, skBytes);
+    }
+  } catch (e) {
+    console.warn("[rotationIndex] Recovery fehlgeschlagen:", e);
+  }
+}
 const ROTATION_THRESHOLD = 50;
 const ROTATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 let timeRotationTimer = null;
@@ -151,9 +171,24 @@ sendBtn.click();
 // ======================================================
 const params = new URLSearchParams(window.location.search);
 withUser = params.get("with");
+
+// ── Sicherheit: withUser nur erlaubte Zeichen (a-z0-9_:- oder UUID) ──────
+// Verhindert XSS/Injection via manipulierte URLs
+const _VALID_HANDLE = /^[a-z0-9_]{1,64}$/i;
+const _VALID_UUID   = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const _VALID_DM_ID  = /^[a-z0-9_]{1,32}:[a-z0-9_]{1,32}$/i;
+if (!withUser || !(_VALID_HANDLE.test(withUser) || _VALID_UUID.test(withUser) || _VALID_DM_ID.test(withUser))) {
+  alert(lang.noChatPartner);
+  throw new Error("withUser ungültig oder fehlt");
+}
+
 // Gruppenname sofort aus URL-Param setzen (verhindert UUID-Flash)
-const _initialGroupName = params.get("name") ? decodeURIComponent(params.get("name")) : null;
-console.log("withUser =", withUser);
+// decodeURIComponent kann werfen → absichern
+let _initialGroupName = null;
+try {
+  const rawName = params.get("name");
+  if (rawName) _initialGroupName = decodeURIComponent(rawName).slice(0, 64);
+} catch {}
 
 if (!withUser) {
   alert(lang.noChatPartner);
@@ -195,6 +230,9 @@ window.addEventListener("storage", (e) => {
 
 if (bc) {
   bc.onmessage = async (e) => {
+    // Signatur-Prüfung: nur Events vom eigenen Tab akzeptieren
+    const bcToken = sessionStorage.getItem("renex_bc_token");
+    if (!bcToken || e.data?._bcToken !== bcToken) return;
 
     const event = e.data;
 
@@ -225,6 +263,23 @@ if (event?.type === "MESSAGE_DELETED") {
   return;
 }
 
+// ✏️ MESSAGE EDITED (von Peer)
+if (event?.type === "MESSAGE_EDITED" || event?.type === "message_edited") {
+  handleMessageEdited(event).catch(() => {});
+  return;
+}
+
+// 😂 REACTION UPDATED (von Peer oder eigene Bestätigung via anderem Tab)
+if (event?.type === "REACTION_UPDATED" || event?.type === "reaction_updated") {
+  const { messageId, reactions } = event;
+  if (messageId && reactions) {
+    reactionsCache.set(messageId, reactions);
+    const el = document.querySelector(`[data-id="${messageId}"]`);
+    if (el) renderReactionBar(el, messageId);
+  }
+  return;
+}
+
 // 🔔 LIVE NEW MESSAGE
 if (event?.type === "NEW_MESSAGE") {
   const msg = event.message;
@@ -247,6 +302,10 @@ if (event?.type === "NEW_MESSAGE") {
           method: "POST",
           body: JSON.stringify({ with: withUser })
         }).catch(() => {});
+      }
+      // Gruppen: last_read_ts im Backend aktualisieren damit Inbox korrekte Zahl zeigt
+      if (isGroupConversation(withUser)) {
+        _markGroupReadDebounced();
       }
     }).catch(() => {});
   }
@@ -401,6 +460,13 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
+  // ✏️ GROUP_RENAMED: Titel sofort updaten + System-Message laden
+  if (event?.type === "GROUP_RENAMED" && event.groupId === withUser) {
+    if (titleEl && event.newName) titleEl.textContent = event.newName;
+    loadMessages().catch(() => {});
+    return;
+  }
+
   // 🔑 REQUEST_GSK: ein Gruppen-Mitglied fehlt unser GSK → sofort re-distribuieren
   if (event?.type === "REQUEST_GSK" && event.groupId === withUser) {
     const myHandle = getMyUser();
@@ -416,16 +482,19 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
-  // 🗑️ AUTO-DELETE: Vorschlag / Akzeptiert / Abgelehnt
-  if (event?.type === "AUTO_DELETE_SET" && event.peer === withUser) {
+  // 🗑️ AUTO-DELETE: Vorschlag / Akzeptiert / Abgelehnt / Gruppen-Admin-Änderung
+  const isAdEvent = event?.type === "AUTO_DELETE_SET" &&
+    (event.peer === withUser || event.groupId === withUser);
+  if (isAdEvent) {
     console.log("🗑️ AUTO_DELETE_SET:", event.action, "days:", event.days);
     if (event.action === "propose") {
       showAutoDeleteProposal(event.days);
     } else if (event.action === "accept") {
+      updateAutoDeleteHeaderLabel(event.days);
       showAutoDeleteBanner(`✅ Auto-Delete aktiv: ${autoDeleteLabel(event.days)}`, "success");
     } else if (event.action === "decline" || event.action === "cancel") {
       updateAutoDeleteHeaderLabel(null);
-      showAutoDeleteBanner("❌ Auto-Delete abgelehnt / deaktiviert", "info");
+      showAutoDeleteBanner("🗑️ Auto-Delete deaktiviert", "info");
     }
     return;
   }
@@ -457,6 +526,10 @@ if (event?.type === "NEW_MESSAGE") {
       sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
       sessionRotationIndex = entry.rotationIndex ?? 0;
       skCache.set(`${dmSessionId(getMyUser(), withUser)}:${sessionRotationIndex}`, sessionKeyBytes);
+
+      // Recovery nach IDB-Reset: falls rotationIndex=0 aber laut Backend höher
+      await recoverRotationIndexIfNeeded(dmSessionId(getMyUser(), withUser));
+
       e2eReady = true;
       updateSendButton();
 
@@ -480,6 +553,109 @@ if (event?.type === "NEW_MESSAGE") {
 }
 
 const renderedMessageIds = new Set();   // echte Server-IDs
+
+// ── Reply-State ───────────────────────────────────────────
+let _replyState = null; // { id, from, plaintext }
+
+const replyBar       = document.getElementById("reply-bar");
+const replyBarFrom   = document.getElementById("reply-bar-from");
+const replyBarText   = document.getElementById("reply-bar-text");
+const replyBarCancel = document.getElementById("reply-bar-cancel");
+
+function showReplyBar(id, from, plaintext) {
+  _replyState = { id, from, plaintext };
+  if (replyBarFrom) replyBarFrom.textContent = from + ": ";
+  if (replyBarText) replyBarText.textContent = plaintext.slice(0, 80) + (plaintext.length > 80 ? "…" : "");
+  replyBar?.classList.add("visible");
+  document.getElementById("msg-input")?.focus();
+}
+
+function clearReplyBar() {
+  _replyState = null;
+  replyBar?.classList.remove("visible");
+  if (replyBarFrom) replyBarFrom.textContent = "";
+  if (replyBarText) replyBarText.textContent = "";
+}
+
+replyBarCancel?.addEventListener("click", clearReplyBar);
+
+// ── Reaktionen ────────────────────────────────────────────
+const REACTION_EMOJIS = ["👍🏽","👎🏽","😂","🔥","💀","❤️"];
+// Cache: messageId → { emoji: [handles] }
+const reactionsCache = new Map();
+
+function renderReactionBar(div, messageId) {
+  let bar = div.querySelector(".reaction-bar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.className = "reaction-bar";
+    // Nach timestamp einfügen
+    const ts = div.querySelector(".timestamp");
+    if (ts) ts.after(bar); else div.appendChild(bar);
+  }
+  bar.innerHTML = "";
+  const data = reactionsCache.get(messageId) || {};
+  const me = getMyUser();
+  Object.entries(data).forEach(([emoji, handles]) => {
+    if (!handles.length) return;
+    const pill = document.createElement("button");
+    pill.className = "reaction-pill" + (handles.includes(me) ? " mine" : "");
+    pill.title = handles.join(", ");
+    const emojiSpan = document.createElement("span");
+    emojiSpan.textContent = emoji;
+    const countSpan = document.createElement("span");
+    countSpan.className = "reaction-count";
+    countSpan.textContent = handles.length > 1 ? String(handles.length) : "";
+    pill.append(emojiSpan, countSpan);
+    pill.addEventListener("click", (e) => { e.stopPropagation(); sendReaction(messageId, emoji, div); });
+    bar.appendChild(pill);
+  });
+}
+
+async function sendReaction(messageId, emoji, div) {
+  try {
+    const res = await apiFetch("/chat/react", {
+      method: "POST",
+      body: JSON.stringify({ messageId, emoji })
+    });
+    if (res.reactions) {
+      reactionsCache.set(messageId, res.reactions);
+      renderReactionBar(div, messageId);
+    }
+  } catch (e) { console.warn("React failed", e); }
+}
+
+function showReactionPicker(div, messageId) {
+  // Nur einen Picker gleichzeitig
+  document.querySelectorAll(".reaction-picker.visible").forEach(p => {
+    p.classList.remove("visible");
+  });
+  let picker = div.querySelector(".reaction-picker");
+  if (!picker) {
+    picker = document.createElement("div");
+    picker.className = "reaction-picker";
+    REACTION_EMOJIS.forEach(emoji => {
+      const btn = document.createElement("button");
+      btn.textContent = emoji;
+      btn.title = emoji;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        picker.classList.remove("visible");
+        sendReaction(messageId, emoji, div);
+      });
+      picker.appendChild(btn);
+    });
+    div.appendChild(picker);
+  }
+  picker.classList.toggle("visible");
+  // Klick ausserhalb schliesst Picker
+  setTimeout(() => {
+    document.addEventListener("click", function close() {
+      picker.classList.remove("visible");
+      document.removeEventListener("click", close);
+    }, { once: true });
+  }, 0);
+}
 const pendingByTempId = new Map();      // tempId -> div
 // 🔥 Status Tracking (verhindert verlorene Updates)
 const renderedMessageStatus = new Map(); // messageId -> status
@@ -1007,6 +1183,28 @@ if (deferredQueue.length === 0) return;
 // ======================================================
 // FLUSH DEFERRED INBOUND (Messages received before CMK)
 // ======================================================
+// ── Group mark-read debounced ─────────────────────────────
+// Verhindert DB-Spam bei vielen Nachrichten im Burst
+let _markGroupReadTimer = null;
+function _markGroupReadDebounced() {
+  if (!isGroupConversation(withUser)) return;
+  clearTimeout(_markGroupReadTimer);
+  _markGroupReadTimer = setTimeout(() => {
+    // Neueste ts aus dem DOM lesen
+    const bubbles = document.querySelectorAll("#messages [data-ts]");
+    let maxTs = 0;
+    bubbles.forEach(b => { const t = Number(b.dataset.ts || 0); if (t > maxTs) maxTs = t; });
+    if (!maxTs) return;
+    const prevTs = Number(localStorage.getItem(`renex_group_read_${withUser}`) || 0);
+    if (maxTs <= prevTs) return; // nichts Neues
+    localStorage.setItem(`renex_group_read_${withUser}`, String(maxTs));
+    apiFetch("/groups/mark-read", {
+      method: "POST",
+      body: JSON.stringify({ groupId: withUser, lastReadTs: maxTs })
+    }).catch(() => {});
+  }, 800); // 800ms nach letzter Aktivität
+}
+
 async function flushDeferredInboundMessages() {
 if (!e2eReady) return;
 // DMs brauchen sessionKeyBytes; Gruppen nutzen GSK (kein SK nötig)
@@ -1041,7 +1239,7 @@ if (deferredInboundMessages.length === 0) return;
         const el = document.querySelector(`[data-id="${m.id}"]`);
         if (el) {
           const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
-          if (textEl) textEl.textContent = lang.decryptFailed;
+          if (textEl) textEl.textContent = decryptFailedText(m.ts);
         }
         deferredInboundIds.delete(m.id);
         deferredInboundRetryCount.delete(m.id);
@@ -1065,7 +1263,7 @@ if (deferredInboundMessages.length === 0) return;
       const el = document.querySelector(`[data-id="${m.id}"]`);
       if (el) {
         const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
-        if (textEl) textEl.textContent = lang.decryptFailed;
+        if (textEl) textEl.textContent = decryptFailedText(m.ts);
       }
       if (m?.id) deferredInboundIds.delete(m.id);
       deferredInboundRetryCount.delete(m.id);
@@ -1090,6 +1288,12 @@ if (deferredInboundMessages.length === 0) return;
   }
 
   scrollToBottom();
+
+  // 📖 Gruppen: mark-read nach flush aktualisieren
+  // (für Nachrichten die via WebSocket ankamen, nicht via loadMessages)
+  if (isGroupConversation(withUser)) {
+    _markGroupReadDebounced();
+  }
 }
 
 // ======================================================
@@ -1229,6 +1433,7 @@ if (now - lastSendTime < SEND_COOLDOWN_MS) {
     if (pendingDiv) pendingByTempId.set(tempId, pendingDiv);
 
     inputEl.value = "";
+    clearReplyBar(); // Reply-State nach dem Senden zurücksetzen
     scrollToBottom();
 
     // 🔐 SAFETY: merkt, ob der Send-Vorgang sauber beendet wurde
@@ -1243,22 +1448,29 @@ let res;
 if (isGroupConversation(withUser)) {
 
   // ── GRUPPE ─────────────────────────────────────────
-  // O(1) Encrypt mit eigenem Group Sender Key (kein CMK)
   const encrypted = await encryptGroupMessage(withUser, getMyUser(), text);
+
+  // Reply-Preview E2E verschlüsseln (Gruppe: gleicher GSK)
+  let replyFields = {};
+  if (_replyState) {
+    const replyEncrypted = await encryptGroupMessage(withUser, getMyUser(), _replyState.plaintext.slice(0, 100));
+    replyFields = { replyToId: _replyState.id, replyFrom: _replyState.from, replyIv: replyEncrypted.ivB64, replyCt: replyEncrypted.ctB64 };
+  }
 
   res = await apiFetch("/chat/send", {
     method: "POST",
     body: JSON.stringify({
-      to:           getMyUser(),  // membership-hint: Sender ist immer Mitglied
-      convoId:      withUser,     // Gruppen-UUID → Backend fan-out via pushToGroupMembers
+      to:           getMyUser(),
+      convoId:      withUser,
       message:      "",
       e2e:          true,
       v:            2,
-      sid:          withUser,     // group UUID als sid → WS-Event-Routing
-      epoch:        Math.floor(Date.now() / EPOCH_MS), // nicht genutzt aber v2-Pflichtfeld
+      sid:          withUser,
+      epoch:        Math.floor(Date.now() / EPOCH_MS),
       ivB64:        encrypted.ivB64,
       ctB64:        encrypted.ctB64,
-      rotationIndex: encrypted.chainIndex  // chainIndex im rotation_index Feld gespeichert
+      rotationIndex: encrypted.chainIndex,
+      ...replyFields
     })
   });
 
@@ -1282,6 +1494,13 @@ if (isGroupConversation(withUser)) {
   // 4️⃣ Mit MK verschlüsseln
   const { ivB64, ctB64 } = await e2eEncrypt(mk, text);
 
+  // Reply-Preview E2E verschlüsseln (DM: gleicher MK)
+  let replyFieldsDM = {};
+  if (_replyState) {
+    const { ivB64: rIv, ctB64: rCt } = await e2eEncrypt(mk, _replyState.plaintext.slice(0, 100));
+    replyFieldsDM = { replyToId: _replyState.id, replyFrom: _replyState.from, replyIv: rIv, replyCt: rCt };
+  }
+
   res = await apiFetch("/chat/send", {
     method: "POST",
     body: JSON.stringify({
@@ -1294,6 +1513,7 @@ if (isGroupConversation(withUser)) {
       rotationIndex: sessionRotationIndex,
       ivB64,
       ctB64,
+      ...replyFieldsDM
     })
   });
 
@@ -1327,6 +1547,10 @@ if (saved?.id) {
   // → Inbox zeigt keinen Badge für eigene Nachrichten
   if (isGroupConversation(withUser) && saved.ts) {
     localStorage.setItem(`renex_group_read_${withUser}`, String(saved.ts));
+    apiFetch("/groups/mark-read", {
+      method: "POST",
+      body: JSON.stringify({ groupId: withUser, lastReadTs: saved.ts })
+    }).catch(() => {});
   }
 
   // 🔄 CMK Rotation-Trigger (nur DMs, nur Authority, alle ROTATION_THRESHOLD Nachrichten)
@@ -1514,11 +1738,23 @@ function showAutoDeleteProposal(days) {
   bar = document.createElement("div");
   bar.id = "auto-delete-proposal";
   bar.style.cssText = "position:sticky;top:0;z-index:10;padding:10px 16px;background:var(--bg-panel);border-bottom:1px solid var(--border-panel);display:flex;align-items:center;gap:10px;font-size:13px;";
-  bar.innerHTML = `
-    <span style="flex:1">🗑️ <strong>${withUser}</strong> schlägt Auto-Delete vor: <strong>${autoDeleteLabel(days)}</strong></span>
-    <button id="ad-accept" style="padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Akzeptieren</button>
-    <button id="ad-decline" style="padding:4px 12px;background:transparent;color:var(--text-secondary);border:1px solid var(--border-panel);border-radius:6px;cursor:pointer;">Ablehnen</button>
-  `;
+  // XSS-safe: DOM-Konstruktion statt innerHTML mit User-Daten
+  const adTextSpan = document.createElement("span");
+  adTextSpan.style.flex = "1";
+  const adStrong1 = document.createElement("strong");
+  adStrong1.textContent = withUser;
+  const adStrong2 = document.createElement("strong");
+  adStrong2.textContent = autoDeleteLabel(days);
+  adTextSpan.append("🗑️ ", adStrong1, " schlägt Auto-Delete vor: ", adStrong2);
+  const adAcceptBtn = document.createElement("button");
+  adAcceptBtn.id = "ad-accept";
+  adAcceptBtn.style.cssText = "padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;";
+  adAcceptBtn.textContent = "Akzeptieren";
+  const adDeclineBtn = document.createElement("button");
+  adDeclineBtn.id = "ad-decline";
+  adDeclineBtn.style.cssText = "padding:4px 12px;background:transparent;color:var(--text-secondary);border:1px solid var(--border-panel);border-radius:6px;cursor:pointer;";
+  adDeclineBtn.textContent = "Ablehnen";
+  bar.append(adTextSpan, adAcceptBtn, adDeclineBtn);
   document.getElementById("messages")?.prepend(bar);
 
   bar.querySelector("#ad-accept").addEventListener("click", async () => {
@@ -1539,7 +1775,19 @@ function showAutoDeleteProposal(days) {
   });
 }
 
+let _autoDeleteDays = null; // aktuelles Auto-Delete Setting (Tage)
+
+function isAutoDeleted(ts) {
+  if (!_autoDeleteDays || !ts) return false;
+  return (Date.now() - Number(ts)) > (_autoDeleteDays * 86_400_000);
+}
+
+function decryptFailedText(ts) {
+  return isAutoDeleted(ts) ? "🗑️ Nachricht gelöscht" : lang.decryptFailed;
+}
+
 function updateAutoDeleteHeaderLabel(days) {
+  _autoDeleteDays = days || null;
   const lbl = document.getElementById("chat-autodelete-label");
   if (lbl) lbl.textContent = days ? autoDeleteLabel(days) : "Aus";
 
@@ -1554,39 +1802,127 @@ function updateAutoDeleteHeaderLabel(days) {
 
 async function initAutoDeleteUI() {
   updateAutoDeleteHeaderLabel(null); // Default: Aus
+
+  const isGroup = isGroupConversation(withUser);
+  let amGroupAdmin = false;
+
+  // Aktuelles Setting laden
   try {
-    const s = await apiFetch(`/chat/auto-delete?peer=${encodeURIComponent(withUser)}`);
-    if (s?.status === "active") updateAutoDeleteHeaderLabel(s.days);
-    if (s?.status === "pending" && s?.proposed_by !== getMyUser()) showAutoDeleteProposal(s.days);
+    if (isGroup) {
+      const s = await apiFetch(`/groups/auto-delete?groupId=${encodeURIComponent(withUser)}`);
+      if (s?.status === "active") updateAutoDeleteHeaderLabel(s.days);
+      amGroupAdmin = s?.myRole === "admin";
+    } else {
+      const s = await apiFetch(`/chat/auto-delete?peer=${encodeURIComponent(withUser)}`);
+      if (s?.status === "active") updateAutoDeleteHeaderLabel(s.days);
+      if (s?.status === "pending" && s?.proposed_by !== getMyUser()) showAutoDeleteProposal(s.days);
+    }
   } catch {}
 
   // ⋮ Menü-Button
   const menuBtn = document.getElementById("chat-menu-btn");
   const menuDropdown = document.getElementById("chat-menu-dropdown");
   const adSubmenu = document.getElementById("chat-autodelete-submenu");
+  const adMenuItem = document.getElementById("chat-menu-autodelete");
+
+  // Für Gruppen: Admin-only Optionen sichtbar/versteckt
+  const renameMenuItem = document.getElementById("chat-menu-rename");
+  if (isGroup && renameMenuItem) renameMenuItem.style.display = amGroupAdmin ? "" : "none";
+
+  // Auto-Delete im Dropdown: Admin → änderbar, Mitglied → read-only (sichtbar)
+  if (isGroup && adMenuItem) {
+    if (!amGroupAdmin) {
+      // Nicht-Admin: Item anzeigen aber read-only (kein Submenu, kein Hover-Cursor)
+      adMenuItem.style.cursor = "default";
+      adMenuItem.style.opacity = "0.75";
+      if (adSubmenu) adSubmenu.style.display = "none";
+      adMenuItem.addEventListener("click", (e) => e.stopPropagation(), { capture: true });
+      // Hint "(Admin)" einblenden
+      const hint = document.getElementById("chat-autodelete-readonly-hint");
+      if (hint) hint.style.display = "inline";
+    }
+  }
+
+  // Rename-Handler (nur einmal setzen)
+  if (isGroup && amGroupAdmin && renameMenuItem && !renameMenuItem._listenerSet) {
+    renameMenuItem._listenerSet = true;
+    renameMenuItem.addEventListener("click", async () => {
+      if (menuDropdown) menuDropdown.style.display = "none";
+      const titleEl = document.getElementById("chat-with");
+      const currentName = titleEl?.textContent.trim() || "";
+      const newName = prompt("Gruppenname:", currentName);
+      if (!newName || newName.trim() === currentName) return;
+      try {
+        await apiFetch("/groups/rename", {
+          method: "POST",
+          body: JSON.stringify({ groupId: withUser, name: newName.trim() })
+        });
+        if (titleEl) titleEl.textContent = newName.trim();
+      } catch (e) {
+        alert("Umbenennen fehlgeschlagen: " + (e.message || e));
+      }
+    });
+  }
 
   if (menuBtn && menuDropdown) {
     const openMenu  = () => { menuDropdown.style.display = "block"; };
     const closeMenu = () => { menuDropdown.style.display = "none"; if (adSubmenu) adSubmenu.style.display = "none"; };
 
-    // Klick / Tap → Toggle
     menuBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       menuDropdown.style.display === "block" ? closeMenu() : openMenu();
     });
 
-    // Klicks INNERHALB des Dropdowns nicht nach oben propagieren → verhindert ungewolltes Schliessen
     menuDropdown.addEventListener("click", (e) => e.stopPropagation());
-
-    // Klick ausserhalb → schliessen
     document.addEventListener("click", closeMenu);
   }
 
   // Auto-Delete Submenu toggle
-  document.getElementById("chat-menu-autodelete")?.addEventListener("click", (e) => {
+  adMenuItem?.addEventListener("click", (e) => {
     e.stopPropagation();
     if (!adSubmenu) return;
     adSubmenu.style.display = adSubmenu.style.display === "block" ? "none" : "block";
+  });
+
+  // 🔔 Notifications Mute Toggle
+  const muteItem   = document.getElementById("chat-menu-mute");
+  const muteStatus = document.getElementById("chat-mute-status");
+  const muteLabel  = document.getElementById("chat-mute-label");
+
+  const convoId = isGroup ? withUser : (() => {
+    const [a, b] = [getMyUser(), withUser].sort();
+    return `${a}:${b}`;
+  })();
+
+  let _isMuted = false;
+
+  function updateMuteUI(muted) {
+    _isMuted = muted;
+    if (muteLabel)  muteLabel.textContent  = muted ? "🔕 Benachrichtigungen" : "🔔 Benachrichtigungen";
+    if (muteStatus) {
+      muteStatus.textContent  = muted ? "Aus" : "An";
+      muteStatus.style.color  = muted ? "var(--text-secondary)" : "var(--accent)";
+    }
+  }
+
+  // Aktuellen Mute-Status laden
+  try {
+    const { muted: mutedList } = await apiFetch("/notifications/muted");
+    updateMuteUI((mutedList || []).includes(convoId));
+  } catch {}
+
+  muteItem?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const newMuted = !_isMuted;
+    try {
+      await apiFetch("/notifications/mute", {
+        method: "POST",
+        body: JSON.stringify({ convoId, mute: newMuted })
+      });
+      updateMuteUI(newMuted);
+      // Inbox-Mute-Cache invalidieren → nächster Load holt frischen Stand
+      localStorage.setItem("renex_muted_cache_ts", "0");
+    } catch (err) { console.warn("Mute toggle failed:", err); }
   });
 
   // Auto-Delete Optionen
@@ -1594,18 +1930,26 @@ async function initAutoDeleteUI() {
     el.addEventListener("click", async (e) => {
       e.stopPropagation();
       const days = el.dataset.days === "" ? null : Number(el.dataset.days);
-      const action = days === null ? "cancel" : "propose";
       menuDropdown.style.display = "none";
       if (adSubmenu) adSubmenu.style.display = "none";
       try {
-        await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action, days }) });
-        updateAutoDeleteHeaderLabel(days);
-        if (action === "cancel") {
-          showAutoDeleteBanner("🗑️ Auto-Delete deaktiviert", "info");
+        if (isGroup) {
+          // Admin setzt direkt — kein Konsens nötig
+          await apiFetch("/groups/auto-delete", { method: "POST", body: JSON.stringify({ groupId: withUser, days }) });
+          updateAutoDeleteHeaderLabel(days);
+          showAutoDeleteBanner(days ? `✅ Auto-Delete: ${autoDeleteLabel(days)}` : "🗑️ Auto-Delete deaktiviert", "success");
         } else {
-          showAutoDeleteBanner(`📤 Vorschlag gesendet: ${autoDeleteLabel(days)}`, "info");
+          // DM: Konsens-Vorschlag senden
+          const action = days === null ? "cancel" : "propose";
+          await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action, days }) });
+          updateAutoDeleteHeaderLabel(days);
+          if (action === "cancel") {
+            showAutoDeleteBanner("🗑️ Auto-Delete deaktiviert", "info");
+          } else {
+            showAutoDeleteBanner(`📤 Vorschlag gesendet: ${autoDeleteLabel(days)}`, "info");
+          }
         }
-      } catch (e) { console.warn("Auto-Delete Vorschlag fehlgeschlagen", e); }
+      } catch (err) { console.warn("Auto-Delete fehlgeschlagen", err); }
     });
   });
 }
@@ -1662,6 +2006,9 @@ async function initGroupMembersUI(groupId) {
 
       const myContacts = await fetchAcceptedContacts();
       const myHandle   = getMyUser();
+      const amAdmin    = members.find(m => m.member_handle === myHandle)?.role === "admin";
+
+      // Rename-Handler wird in initAutoDeleteUI() gesetzt (dort ist menuDropdown im Scope)
 
       memberList.innerHTML = "";
       for (const m of members) {
@@ -1669,11 +2016,22 @@ async function initGroupMembersUI(groupId) {
         li.style.cssText = "font-size:13px;padding:4px 0;display:flex;align-items:center;gap:6px;justify-content:space-between;";
 
         const isMe = m.member_handle === myHandle;
-        const isMeStr = isMe ? " (Du)" : "";
-        const roleIcon = m.role === "admin" ? "⭐ " : "";
+        const isAdmin = m.role === "admin";
 
         const nameSpan = document.createElement("span");
-        nameSpan.textContent = `${roleIcon}${m.member_handle}${isMeStr}`;
+        nameSpan.style.cssText = "display:flex;align-items:center;gap:6px;";
+
+        const nameText = document.createElement("span");
+        nameText.textContent = `${m.member_handle}${isMe ? " (Du)" : ""}`;
+        nameSpan.appendChild(nameText);
+
+        if (isAdmin) {
+          const pill = document.createElement("span");
+          pill.textContent = "Admin";
+          pill.style.cssText = "font-size:10px;font-weight:600;padding:1px 6px;border-radius:20px;background:color-mix(in srgb,var(--accent-voice) 18%,transparent);color:var(--accent-voice);letter-spacing:0.03em;flex-shrink:0;";
+          nameSpan.appendChild(pill);
+        }
+
         li.appendChild(nameSpan);
 
         if (!isMe) {
@@ -1793,8 +2151,18 @@ async function initGroupMembersUI(groupId) {
         item.style.cssText = `padding:8px 12px;font-size:13px;cursor:${isMember ? "default" : "pointer"};` +
           `color:${isMember ? "var(--text-secondary)" : "var(--text-primary)"};` +
           `opacity:${isMember ? ".5" : "1"};display:flex;align-items:center;gap:8px;`;
-        item.innerHTML = `<span>👤</span><span>${handle}</span>` +
-          (isMember ? '<span style="font-size:11px;margin-left:auto">(Mitglied)</span>' : "");
+        // XSS-safe: textContent statt innerHTML
+        const iconSpan = document.createElement("span");
+        iconSpan.textContent = "👤";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = handle;
+        item.append(iconSpan, nameSpan);
+        if (isMember) {
+          const memberSpan = document.createElement("span");
+          memberSpan.style.cssText = "font-size:11px;margin-left:auto";
+          memberSpan.textContent = "(Mitglied)";
+          item.appendChild(memberSpan);
+        }
         if (!isMember) {
           item.addEventListener("mousedown", (e) => {
             e.preventDefault();
@@ -1892,7 +2260,112 @@ function getCachedSentMessage(id) {
 // ======================================================
 // RENDER
 // ======================================================
-function renderMessage({ id, from, message, ts, tempId = null, status = "sent" }) {
+// ======================================================
+// 👤 SENDER POPOVER (Gruppen-Chat)
+// ======================================================
+let _activeSenderPopover = null;
+
+function closeSenderPopover() {
+  if (_activeSenderPopover) {
+    _activeSenderPopover.remove();
+    _activeSenderPopover = null;
+  }
+}
+
+async function showSenderPopover(handle, anchorEl) {
+  closeSenderPopover();
+
+  const popover = document.createElement("div");
+  popover.style.cssText = "position:fixed;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);padding:12px 14px;z-index:500;min-width:180px;";
+
+  // Header: Avatar + Name — XSS-safe DOM-Konstruktion
+  const popoverHeader = document.createElement("div");
+  popoverHeader.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:10px;";
+  const avatarDiv = document.createElement("div");
+  avatarDiv.style.cssText = "width:34px;height:34px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;flex-shrink:0;";
+  avatarDiv.textContent = handle[0].toUpperCase();
+  const nameSpanPop = document.createElement("span");
+  nameSpanPop.style.cssText = "font-size:14px;font-weight:600;color:var(--text-primary);";
+  nameSpanPop.textContent = handle;
+  popoverHeader.append(avatarDiv, nameSpanPop);
+  const actionDiv = document.createElement("div");
+  actionDiv.id = "sender-popover-action";
+  actionDiv.style.cssText = "font-size:12px;color:var(--text-secondary);";
+  actionDiv.textContent = "…";
+  popover.append(popoverHeader, actionDiv);
+
+  document.body.appendChild(popover);
+  _activeSenderPopover = popover;
+
+  // Position berechnen (über dem Anker)
+  const rect = anchorEl.getBoundingClientRect();
+  const pw = popover.offsetWidth || 190;
+  let left = rect.left;
+  let top  = rect.top - popover.offsetHeight - 8;
+  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+  if (top < 8) top = rect.bottom + 8;
+  popover.style.left = left + "px";
+  popover.style.top  = top  + "px";
+
+  // Kontaktstatus prüfen
+  const actionEl = popover.querySelector("#sender-popover-action");
+  try {
+    const contacts = await fetchAcceptedContacts();
+    const isContact = contacts.includes(handle);
+
+    if (isContact) {
+      // → DM öffnen
+      const btn = document.createElement("a");
+      btn.href = `/chat?with=${encodeURIComponent(handle)}`;
+      btn.style.cssText = "display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;background:var(--accent);color:#fff;font-size:13px;font-weight:600;text-decoration:none;cursor:pointer;";
+      btn.textContent = "💬 Nachricht schreiben";
+      actionEl.replaceWith(btn);
+    } else {
+      // → Kontaktanfrage senden
+      const btn = document.createElement("button");
+      btn.style.cssText = "display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;background:var(--bg-panel-alt);border:1px solid var(--border-subtle);color:var(--text-primary);font-size:13px;cursor:pointer;width:100%;";
+      btn.innerHTML = "＋ Kontakt anfragen";
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "…";
+        try {
+          const r = await apiFetch("/contacts/request", {
+            method: "POST",
+            body: JSON.stringify({ contact: handle.trim().toLowerCase() })
+          });
+          if (r.rateLimited) {
+            btn.textContent = "⏳ Bitte warten…";
+            btn.disabled = false;
+          } else if (r.status === "cooldown") {
+            btn.textContent = "🚫 Anfrage abgelehnt (Cooldown)";
+          } else if (r.status === "already_exists" || r.status === "accepted") {
+            btn.textContent = "✓ Bereits Kontakt";
+          } else if (r.status === "already_pending") {
+            btn.textContent = "⏳ Anfrage ausstehend";
+          } else if (r.status === "requested") {
+            btn.textContent = "✓ Anfrage gesendet";
+          } else {
+            btn.textContent = "✓ Anfrage gesendet";
+          }
+        } catch (e) {
+          btn.textContent = "❌ " + (e.message || "Fehler");
+          btn.disabled = false;
+        }
+      });
+      actionEl.replaceWith(btn);
+    }
+  } catch {
+    actionEl.textContent = "Fehler beim Laden";
+  }
+
+  // Schliessen bei Klick ausserhalb
+  setTimeout(() => {
+    document.addEventListener("click", closeSenderPopover, { once: true });
+  }, 0);
+}
+
+// ======================================================
+function renderMessage({ id, from, message, ts, tempId = null, status = "sent", msg = null }) {
 
   if (!messagesEl) return null;
 
@@ -1913,7 +2386,21 @@ if (!isOwnMessage && isGroupConversation(withUser) && from) {
   const senderEl = document.createElement("div");
   senderEl.className = "sender-name";
   senderEl.textContent = from;
+  senderEl.style.cursor = "pointer";
+  senderEl.addEventListener("click", (e) => {
+    e.stopPropagation();
+    showSenderPopover(from, senderEl);
+  });
   div.appendChild(senderEl);
+}
+
+// Gruppe + fremde Nachricht: Klick auf Bubble öffnet Popover
+if (!isOwnMessage && isGroupConversation(withUser) && from) {
+  div.style.cursor = "pointer";
+  div.addEventListener("click", (e) => {
+    if (e.target.closest(".sender-name")) return; // bereits oben behandelt
+    showSenderPopover(from, div);
+  });
 }
 
 const textEl = document.createElement("div");
@@ -1942,6 +2429,7 @@ div.appendChild(timeEl);
 
 if (id) div.dataset.id = id;
 if (tempId) div.dataset.tempId = tempId;
+if (ts) div.dataset.ts = String(ts); // für mark-read Debounce
 
 // 🗑️ Delete-Event kam vor Render → sofort als gelöscht anzeigen
 if (id && deletedMessageIds.has(id)) {
@@ -1969,8 +2457,78 @@ if (status === "pending" && from === getMyUser()) {
 }
 if (status === "failed") div.classList.add("failed");
 
-// 🗑️ Delete-Button für eigene Nachrichten (nicht pending/failed)
+// ↩️ Quote-Block rendern (wenn Nachricht eine Antwort ist)
+if (msg && msg.replyToId && (msg.replyFrom || msg.replyPlaintext)) {
+  const quote = document.createElement("div");
+  quote.className = "reply-quote";
+  quote.dataset.replyToId = msg.replyToId;
+  const qFrom = document.createElement("div");
+  qFrom.className = "reply-quote-from";
+  qFrom.textContent = msg.replyFrom || "…";
+  const qText = document.createElement("div");
+  qText.className = "reply-quote-text";
+  qText.textContent = msg.replyPlaintext ? msg.replyPlaintext.slice(0, 100) : "…";
+  quote.append(qFrom, qText);
+  quote.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const orig = document.querySelector(`[data-id="${msg.replyToId}"]`);
+    if (orig) { orig.scrollIntoView({ behavior: "smooth", block: "center" }); orig.classList.add("highlight-flash"); setTimeout(() => orig.classList.remove("highlight-flash"), 1200); }
+  });
+  div.insertBefore(quote, textEl);
+}
+
+// ↩️ Reply-Button für alle Nachrichten (nicht pending/failed)
+if (id && status !== "pending" && status !== "failed") {
+  const replyBtn = document.createElement("button");
+  replyBtn.title = "Antworten";
+  replyBtn.textContent = "↩";
+  replyBtn.style.cssText = "position:absolute;bottom:4px;" + (isOwnMessage ? "left:22px;" : "right:22px;") +
+    "background:none;border:none;cursor:pointer;font-size:11px;opacity:0.18;padding:0;transition:opacity 0.15s;color:var(--text-secondary);";
+  replyBtn.addEventListener("mouseenter", () => replyBtn.style.opacity = "0.8");
+  replyBtn.addEventListener("mouseleave", () => replyBtn.style.opacity = "0.18");
+  replyBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const txt = textEl?.textContent || "";
+    showReplyBar(id, from, txt);
+  });
+  div.appendChild(replyBtn);
+}
+
+// 😂 Reaction-Picker: Smiley-Button für alle Nachrichten (nicht pending/failed)
+if (id && status !== "pending" && status !== "failed") {
+  const reactBtn = document.createElement("button");
+  reactBtn.className = "react-btn";
+  reactBtn.title = "Reagieren";
+  reactBtn.textContent = "😊";
+  reactBtn.style.cssText = "position:absolute;bottom:4px;" + (isOwnMessage ? "left:6px;" : "right:6px;") +
+    "background:none;border:none;cursor:pointer;font-size:11px;opacity:0.18;padding:0;transition:opacity 0.15s;";
+  reactBtn.addEventListener("mouseenter", () => reactBtn.style.opacity = "0.8");
+  reactBtn.addEventListener("mouseleave", () => reactBtn.style.opacity = "0.18");
+  reactBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    showReactionPicker(div, id);
+  });
+  div.appendChild(reactBtn);
+  // Bestehende Reaktionen aus Cache rendern
+  if (reactionsCache.has(id)) renderReactionBar(div, id);
+}
+
+// 🗑️ Delete-Button + ✏️ Edit-Button für eigene Nachrichten (nicht pending/failed)
 if (id && from === getMyUser() && status !== "pending" && status !== "failed") {
+  // ✏️ Edit-Button (nur innerhalb 15 Minuten)
+  const EDIT_WINDOW_MS = 15 * 60 * 1000;
+  if (ts && Date.now() - Number(ts) < EDIT_WINDOW_MS) {
+    const editBtn = document.createElement("button");
+    editBtn.className = "edit-btn";
+    editBtn.title = "Bearbeiten";
+    editBtn.textContent = "✏";
+    editBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      startInlineEdit(div, id, textEl.textContent);
+    });
+    div.appendChild(editBtn);
+  }
+
   const delBtn = document.createElement("button");
   delBtn.className = "delete-btn";
   delBtn.title = lang.deleteMessageTitle;
@@ -2020,6 +2578,113 @@ el.dataset.status = status;
 timeEl.textContent = meta;
 
 renderedMessageStatus.set(messageId, status);
+}
+
+// ======================================================
+// MESSAGE EDIT
+// ======================================================
+
+function startInlineEdit(div, msgId, currentText) {
+  // Verhindert doppeltes Öffnen
+  if (div.querySelector(".edit-textarea")) return;
+
+  const textEl = div.querySelector("div:not(.sender-name):not(.timestamp):not(.edited-badge-wrap)");
+  if (!textEl) return;
+
+  const originalText = currentText || textEl.textContent;
+  textEl.style.display = "none";
+
+  const ta = document.createElement("textarea");
+  ta.className = "edit-textarea";
+  ta.value = originalText;
+  ta.rows = Math.min(6, Math.max(1, Math.ceil(originalText.length / 40)));
+  div.insertBefore(ta, div.querySelector(".timestamp"));
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = ta.value.length;
+
+  ta.addEventListener("keydown", async (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      const newText = ta.value.trim();
+      if (newText && newText !== originalText) {
+        await editMessage(msgId, newText, div, textEl, ta);
+      } else {
+        cancelInlineEdit(div, textEl, ta);
+      }
+    }
+    if (e.key === "Escape") cancelInlineEdit(div, textEl, ta);
+  });
+}
+
+function cancelInlineEdit(div, textEl, ta) {
+  ta.remove();
+  textEl.style.display = "";
+}
+
+async function editMessage(msgId, newText, div, textEl, ta) {
+  try {
+    let ciphertext, rotationIndex;
+    if (isGroupConversation(withUser)) {
+      const { encrypted } = await encryptGroupMessage(newText, withUser);
+      ciphertext = encrypted;
+      rotationIndex = null;
+    } else {
+      const enc = await encryptMessage(newText);
+      ciphertext = enc.ciphertext;
+      rotationIndex = enc.rotationIndex ?? sessionRotationIndex;
+    }
+
+    await apiFetch("/chat/message/edit", {
+      method: "POST",
+      body: JSON.stringify({ id: msgId, ciphertext, rotationIndex })
+    });
+
+    // Bubble sofort aktualisieren
+    ta.remove();
+    textEl.textContent = newText;
+    textEl.style.display = "";
+    applyEditedBadge(div);
+    savePreviewCache(previewConvoId(withUser), { text: newText, ts: Date.now(), from: getMyUser() });
+  } catch (err) {
+    cancelInlineEdit(div, textEl, ta);
+    alert("Bearbeiten fehlgeschlagen: " + (err.message || err));
+  }
+}
+
+function applyEditedBadge(div) {
+  if (div.querySelector(".edited-badge-wrap")) return;
+  const timeEl = div.querySelector(".timestamp");
+  const badge = document.createElement("span");
+  badge.className = "edited-badge";
+  badge.textContent = "(bearbeitet)";
+  const wrap = document.createElement("span");
+  wrap.className = "edited-badge-wrap";
+  wrap.appendChild(badge);
+  if (timeEl) timeEl.appendChild(wrap);
+  else div.appendChild(wrap);
+}
+
+async function handleMessageEdited(event) {
+  const { messageId, ciphertext, rotationIndex, from } = event;
+  if (!messageId || !ciphertext) return;
+
+  const el = document.querySelector(`[data-id="${messageId}"]`);
+  if (!el || el.dataset.deleted === "1") return;
+
+  try {
+    let plaintext;
+    if (isGroupConversation(withUser)) {
+      plaintext = await decryptGroupMessage({ message: ciphertext }, withUser);
+    } else {
+      plaintext = await decryptMessage(ciphertext, rotationIndex ?? 0);
+    }
+    if (!plaintext || plaintext === "__decrypt_failed__") return;
+
+    const textEl = el.querySelector("div:not(.sender-name):not(.timestamp):not(.edited-badge-wrap)");
+    if (textEl) textEl.textContent = plaintext;
+    applyEditedBadge(el);
+    savePreviewCache(previewConvoId(withUser), { text: plaintext, ts: Date.now(), from });
+  } catch {}
 }
 
 // ======================================================
@@ -2143,22 +2808,53 @@ async function processMessage(m) {
       }
     }
     renderedMessageIds.add(messageId);
-    renderMessage({ id: messageId, from: m.from, message: "🔒 Nachricht konnte nicht entschlüsselt werden", ts: m.ts });
+    renderMessage({ id: messageId, from: m.from, message: decryptFailedText(m.ts), ts: m.ts });
     return true;
   }
 
-  // Normale Nachricht rendern
-  console.debug("[processMsg] OK", { from: m.from, ts: m.ts, preview: String(text).slice(0,20) });
+  // Normale Nachricht rendern — edited_message bevorzugen wenn vorhanden
+  let displayText = text;
+  if (m.edited_message) {
+    try {
+      const editedPlain = isGroupConversation(withUser)
+        ? await decryptGroupMessage({ message: m.edited_message }, withUser)
+        : await decryptMessage(m.edited_message, m.rotationIndex ?? 0);
+      if (editedPlain && editedPlain !== "__decrypt_failed__") displayText = editedPlain;
+    } catch {}
+  }
+
+  console.debug("[processMsg] OK", { from: m.from, ts: m.ts, preview: String(displayText).slice(0,20) });
   renderedMessageIds.add(messageId);
   deferredInboundIds.delete(messageId);
-  renderMessage({
+  // Reply-Preview entschlüsseln (wenn vorhanden)
+  if (m.replyToId && m.replyIv && m.replyCt) {
+    try {
+      let replyPlain;
+      if (isGroupConversation(withUser)) {
+        // Gruppe: mit GSK des Senders entschlüsseln (gleicher chainIndex wie Hauptnachricht)
+        replyPlain = await decryptGroupMessage(withUser, m.from, m.replyIv, m.replyCt, m.rotationIndex ?? 0);
+      } else {
+        // DM: mit MK entschlüsseln
+        const rMk = await deriveMessageKey(sessionKeyBytes, dmSessionId(getMyUser(), withUser), m.epoch ?? 0);
+        replyPlain = await e2eDecrypt(rMk, m.replyIv, m.replyCt);
+      }
+      if (typeof replyPlain === "string" && replyPlain !== "__decrypt_failed__") {
+        m.replyPlaintext = replyPlain;
+      }
+    } catch {}
+  }
+
+  const renderedDiv = renderMessage({
     id: messageId,
     from: m.from,
-    message: text,
+    message: displayText,
     ts: m.ts,
-    status: m.status
+    status: m.status,
+    msg: m   // ganzes msg-Objekt für Reply-Quote
   });
-  savePreviewCache(previewConvoId(withUser), { text, ts: m.ts || Date.now(), from: m.from });
+  // (bearbeitet) Badge wenn Nachricht schon editiert wurde
+  if (m.edited_at && renderedDiv) applyEditedBadge(renderedDiv);
+  savePreviewCache(previewConvoId(withUser), { text: displayText, ts: m.ts || Date.now(), from: m.from });
 
   if (m.from === getMyUser()) {
     const pending = document.querySelector(".me.pending");
@@ -2171,13 +2867,26 @@ async function processMessage(m) {
 async function loadMessages() {
   try {
     const url = "/chat/list?with=" + withUser;
-    const { messages = [] } = await apiFetch(url);
+    const { messages = [], reactions: msgReactions = {} } = await apiFetch(url);
+    // Reaktionen in Cache laden
+    Object.entries(msgReactions).forEach(([msgId, data]) => reactionsCache.set(msgId, data));
     console.warn("📥 SERVER MESSAGES:", messages.length, "withUser:", withUser);
 
-    // 📌 Für Gruppen: "letzte gelesene ts" speichern → Inbox-Badge zeigt neue Nachrichten
+    // 📌 Für Gruppen: "letzte gelesene ts" in localStorage UND Backend speichern
+    // → Inbox-Badge zeigt nur wirklich neue Nachrichten (seit diesem Zeitpunkt)
     if (isGroupConversation(withUser) && messages.length > 0) {
       const newestTs = messages[messages.length - 1]?.ts || 0;
-      if (newestTs) localStorage.setItem(`renex_group_read_${withUser}`, String(newestTs));
+      if (newestTs) {
+        const prevTs = Number(localStorage.getItem(`renex_group_read_${withUser}`) || 0);
+        localStorage.setItem(`renex_group_read_${withUser}`, String(newestTs));
+        // Backend nur updaten wenn neuere Ts (verhindert unnötige DB-Writes)
+        if (newestTs > prevTs) {
+          apiFetch("/groups/mark-read", {
+            method: "POST",
+            body: JSON.stringify({ groupId: withUser, lastReadTs: newestTs })
+          }).catch(() => {}); // fire-and-forget
+        }
+      }
     }
 
     const wasAtBottom = isUserAtBottom();
@@ -2284,8 +2993,24 @@ let pollingActive = false;
 let isLoadingMessages = false;
 let pollScheduled = false; // 🔒 verhindert Doppel-Timer
 
-let pollDelay = 30000;       // WebSocket liefert live — Poll nur als Fallback
-const MAX_POLL_DELAY = 60000;
+// Adaptives Poll-Interval:
+// WS verbunden  → 60s (nur Safety-Net, schont Batterie)
+// WS getrennt   →  5s (responsiver Fallback)
+const POLL_DELAY_WS_ON  = 60000;
+const POLL_DELAY_WS_OFF =  5000;
+const MAX_POLL_DELAY    = 60000;
+let pollDelay = POLL_DELAY_WS_OFF; // konservativ starten bis WS-Status bekannt
+
+// WS-Zustand beobachten → Poll-Interval anpassen
+window.addEventListener("renex-ws-state", (e) => {
+  if (e.detail?.connected) {
+    pollDelay = POLL_DELAY_WS_ON;
+    console.log("📶 WS verbunden — Poll-Interval: 60s");
+  } else {
+    pollDelay = POLL_DELAY_WS_OFF;
+    console.log("📵 WS getrennt — Poll-Interval: 5s");
+  }
+});
 
 async function pollLoop() {
   if (!pollingActive) return;
@@ -2299,7 +3024,8 @@ async function pollLoop() {
 
   try {
     await loadMessages();
-    pollDelay = 30000; // Erfolg → Reset auf Fallback-Interval
+    // Erfolg → zurück auf aktuell korrektes Interval (WS-abhängig)
+    // pollDelay wurde bereits via renex-ws-state gesetzt — nicht überschreiben
   } catch (e) {
     console.error("Polling error", e);
     pollDelay = Math.min(pollDelay * 2, MAX_POLL_DELAY);
@@ -2332,7 +3058,7 @@ function startPolling() {
   if (pollingActive) return;
 
   pollingActive = true;
-  pollDelay = 30000;
+  pollDelay = POLL_DELAY_WS_OFF; // startet konservativ, wird via renex-ws-state angepasst
   pollScheduled = false;
 
   pollLoop();

@@ -1,13 +1,16 @@
-import { json, readJson, param } from '../utils.js';
+import { json, readJson, param, checkCsrf } from '../utils.js';
 import { requireSession, rateLimit, pushToGroupMembers } from '../auth.js';
 
 // ======================================================
 // GROUP ROUTES
-// POST /groups/create   — Gruppe erstellen
-// POST /groups/invite   — Mitglied einladen
-// POST /groups/leave    — Gruppe verlassen
-// GET  /groups/list     — Meine Gruppen
-// GET  /groups/members  — Mitglieder einer Gruppe
+// POST /groups/create        — Gruppe erstellen
+// POST /groups/invite        — Mitglied einladen
+// POST /groups/leave         — Gruppe verlassen
+// POST /groups/rename        — Admin: Gruppe umbenennen
+// GET  /groups/list          — Meine Gruppen
+// GET  /groups/members       — Mitglieder einer Gruppe
+// GET  /groups/auto-delete   — Aktuelles Auto-Delete Setting
+// POST /groups/auto-delete   — Admin: Auto-Delete setzen/deaktivieren
 // ======================================================
 
 const MAX_GROUP_NAME   = 64;
@@ -18,6 +21,9 @@ const GROUP_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 function isValidGroupId(id) { return GROUP_ID_RE.test(String(id)); }
 
 export async function handleGroupRoutes(request, env, path, params) {
+
+  const csrfErr = checkCsrf(request);
+  if (csrfErr) return csrfErr;
 
   const session = await requireSession(request, env);
   if (!session) return json(request, { error: "Not authenticated" }, 401);
@@ -141,6 +147,63 @@ export async function handleGroupRoutes(request, env, path, params) {
     }
 
     // ──────────────────────────────────────────────────
+    // POST /groups/rename
+    // Body: { groupId, name }
+    // ──────────────────────────────────────────────────
+    case "/groups/rename": {
+      if (request.method !== "POST") break;
+
+      const body = await readJson(request);
+      if (!body) return json(request, { error: "Invalid JSON" }, 400);
+
+      const { groupId, name } = body;
+      if (!isValidGroupId(groupId)) return json(request, { error: "Invalid groupId" }, 400);
+
+      const newName = String(name || "").trim();
+      if (!newName || newName.length > MAX_GROUP_NAME) {
+        return json(request, { error: `Invalid name (1–${MAX_GROUP_NAME} chars)` }, 400);
+      }
+
+      // Nur Admin darf umbenennen
+      const membership = await env.RENEX_DB.prepare(
+        "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+      ).bind(groupId, me).first();
+      if (!membership) return json(request, { error: "Not a member" }, 403);
+      if (membership.role !== "admin") return json(request, { error: "Admin only" }, 403);
+
+      // Alten Namen holen für System-Message
+      const convo = await env.RENEX_DB.prepare(
+        "SELECT name FROM conversations WHERE id = ?"
+      ).bind(groupId).first();
+      const oldName = convo?.name || groupId;
+
+      // Umbenennen
+      await env.RENEX_DB.prepare(
+        "UPDATE conversations SET name = ? WHERE id = ?"
+      ).bind(newName, groupId).run();
+
+      // System-Message an alle
+      const ts = Date.now();
+      await env.RENEX_DB.prepare(
+        `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+         VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+      ).bind(crypto.randomUUID(), groupId, "__system__", ts,
+        `${me} hat die Gruppe in "${newName}" umbenannt`).run();
+
+      // Live-Push an alle Mitglieder
+      await pushToGroupMembers(env, env.RENEX_DB, groupId, null, {
+        id: crypto.randomUUID(),
+        type: "group_renamed",
+        groupId,
+        newName,
+        renamedBy: me,
+        ts
+      });
+
+      return json(request, { ok: true, groupId, name: newName });
+    }
+
+    // ──────────────────────────────────────────────────
     // POST /groups/leave
     // Body: { groupId }
     // ──────────────────────────────────────────────────
@@ -235,20 +298,55 @@ export async function handleGroupRoutes(request, env, path, params) {
 
       const rows = await env.RENEX_DB.prepare(`
         SELECT c.id, c.name, c.created_at, cm.role,
-               COUNT(cm2.member_handle) as member_count,
-               (SELECT ts        FROM messages WHERE convo_id = c.id ORDER BY ts DESC LIMIT 1) as last_ts,
-               (SELECT from_user FROM messages WHERE convo_id = c.id ORDER BY ts DESC LIMIT 1) as last_from,
-               (SELECT type      FROM messages WHERE convo_id = c.id ORDER BY ts DESC LIMIT 1) as last_type,
-               (SELECT message   FROM messages WHERE convo_id = c.id ORDER BY ts DESC LIMIT 1) as last_text
+               COUNT(DISTINCT cm2.member_handle) AS member_count,
+               lm_agg.last_ts,
+               lm.from_user  AS last_from,
+               lm.type       AS last_type,
+               lm.message    AS last_text,
+               COALESCE(cm.last_read_ts, 0) AS last_read_ts,
+               (
+                 SELECT COUNT(*)
+                 FROM messages m2
+                 WHERE m2.convo_id = c.id
+                   AND m2.ts > COALESCE(cm.last_read_ts, 0)
+                   AND m2.from_user != ?
+               ) AS unread_count
         FROM conversations c
-        JOIN conversation_members cm  ON c.id = cm.convo_id  AND cm.member_handle = ?
+        JOIN conversation_members cm  ON c.id = cm.convo_id AND cm.member_handle = ?
         JOIN conversation_members cm2 ON c.id = cm2.convo_id
+        LEFT JOIN (
+          SELECT convo_id, MAX(ts) AS last_ts
+          FROM messages
+          GROUP BY convo_id
+        ) lm_agg ON lm_agg.convo_id = c.id
+        LEFT JOIN messages lm
+               ON lm.convo_id = lm_agg.convo_id AND lm.ts = lm_agg.last_ts
         WHERE c.type = 'group'
-        GROUP BY c.id, c.name, c.created_at, cm.role
-        ORDER BY COALESCE(last_ts, c.created_at) DESC
-      `).bind(me).all();
+        GROUP BY c.id, c.name, c.created_at, cm.role,
+                 lm_agg.last_ts, lm.from_user, lm.type, lm.message, cm.last_read_ts
+        ORDER BY COALESCE(lm_agg.last_ts, c.created_at) DESC
+      `).bind(me, me).all();
 
       return json(request, { groups: rows.results || [] });
+    }
+
+    // ──────────────────────────────────────────────────
+    // POST /groups/mark-read  { groupId, lastReadTs }
+    // Setzt last_read_ts für den aktuellen User in dieser Gruppe
+    // ──────────────────────────────────────────────────
+    case "/groups/mark-read": {
+      if (request.method !== "POST") break;
+      const { groupId, lastReadTs } = await request.json();
+      if (!groupId || !lastReadTs) return json(request, { error: "Missing fields" }, 400);
+      // Sicherstellen dass User Mitglied ist
+      const member = await env.RENEX_DB.prepare(
+        "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+      ).bind(groupId, me).first();
+      if (!member) return json(request, { error: "Not a member" }, 403);
+      await env.RENEX_DB.prepare(
+        "UPDATE conversation_members SET last_read_ts = ? WHERE convo_id = ? AND member_handle = ?"
+      ).bind(Number(lastReadTs), groupId, me).run();
+      return json(request, { ok: true });
     }
 
     // ──────────────────────────────────────────────────
@@ -278,6 +376,94 @@ export async function handleGroupRoutes(request, env, path, params) {
         group:   groupInfo,
         members: rows.results || []
       });
+    }
+
+    // ──────────────────────────────────────────────────
+    // GET /groups/auto-delete?groupId=...
+    // POST /groups/auto-delete  { groupId, days }  — Admin only
+    // ──────────────────────────────────────────────────
+    case "/groups/auto-delete": {
+      const url2 = new URL(request.url);
+
+      if (request.method === "GET") {
+        const groupId = url2.searchParams.get("groupId");
+        if (!isValidGroupId(groupId)) return json(request, { error: "Invalid groupId" }, 400);
+
+        const membership = await env.RENEX_DB.prepare(
+          "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+        ).bind(groupId, me).first();
+        if (!membership) return json(request, { error: "Not a member" }, 403);
+
+        const row = await env.RENEX_DB.prepare(
+          "SELECT days, status FROM auto_delete_settings WHERE convo_id = ?"
+        ).bind(groupId).first();
+
+        return json(request, {
+          ...(row ?? { status: "off" }),
+          myRole: membership.role
+        });
+      }
+
+      if (request.method === "POST") {
+        const body = await readJson(request);
+        if (!body) return json(request, { error: "Invalid JSON" }, 400);
+        const { groupId, days } = body;
+        if (!isValidGroupId(groupId)) return json(request, { error: "Invalid groupId" }, 400);
+
+        // Admin-Check
+        const membership = await env.RENEX_DB.prepare(
+          "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+        ).bind(groupId, me).first();
+        if (!membership) return json(request, { error: "Not a member" }, 403);
+        if (membership.role !== "admin") return json(request, { error: "Only the group admin can change auto-delete" }, 403);
+
+        const ALLOWED_DAYS = new Set([1, 7, 28, 90]);
+        const now = Date.now();
+
+        const autoDeleteLabel = (d) => {
+          if (d === 1)  return "1 Tag";
+          if (d === 7)  return "7 Tage";
+          if (d === 28) return "28 Tage";
+          if (d === 90) return "90 Tage";
+          return `${d} Tage`;
+        };
+
+        if (!days) {
+          // Deaktivieren
+          await env.RENEX_DB.prepare(
+            "DELETE FROM auto_delete_settings WHERE convo_id = ?"
+          ).bind(groupId).run();
+          // System-Message
+          await env.RENEX_DB.prepare(
+            `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+             VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+          ).bind(crypto.randomUUID(), groupId, "__system__", now,
+            `${me} hat Auto-Delete deaktiviert`).run();
+          const ctrl = { id: crypto.randomUUID(), type: "auto_delete_set", action: "cancel", groupId, ts: now };
+          await pushToGroupMembers(env, env.RENEX_DB, groupId, me, ctrl);
+          return json(request, { ok: true, status: "off" });
+        }
+
+        if (!ALLOWED_DAYS.has(Number(days))) return json(request, { error: "Invalid days" }, 400);
+
+        await env.RENEX_DB.prepare(
+          `INSERT INTO auto_delete_settings (convo_id, days, proposed_by, status, updated_at)
+           VALUES (?, ?, ?, 'active', ?)
+           ON CONFLICT(convo_id) DO UPDATE SET days = excluded.days, proposed_by = excluded.proposed_by, status = 'active', updated_at = excluded.updated_at`
+        ).bind(groupId, Number(days), me, now).run();
+        // System-Message
+        await env.RENEX_DB.prepare(
+          `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+           VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+        ).bind(crypto.randomUUID(), groupId, "__system__", now,
+          `${me} hat Auto-Delete auf ${autoDeleteLabel(Number(days))} gesetzt`).run();
+
+        const ctrl = { id: crypto.randomUUID(), type: "auto_delete_set", action: "accept", days: Number(days), groupId, ts: now };
+        await pushToGroupMembers(env, env.RENEX_DB, groupId, me, ctrl);
+        return json(request, { ok: true, status: "active", days: Number(days) });
+      }
+
+      break;
     }
   }
 

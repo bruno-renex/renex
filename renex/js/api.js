@@ -31,6 +31,7 @@ export async function apiFetch(path, options = {}) {
     const data = await res.json().catch(() => ({}));
     return {
       rateLimited: true,
+      status: data.status || null,
       error: data.error || "Too many requests"
     };
   }

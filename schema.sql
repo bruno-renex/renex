@@ -85,3 +85,14 @@ CREATE TABLE IF NOT EXISTS auto_delete_settings (
 
 CREATE INDEX IF NOT EXISTS idx_ads_status
   ON auto_delete_settings(status);
+
+-- Migration: last_read_ts pro User pro Gruppe (für Unread-Count)
+-- ALTER TABLE conversation_members ADD COLUMN last_read_ts INTEGER DEFAULT 0;
+
+-- Notification Mutes (pro User, pro Konversation)
+CREATE TABLE IF NOT EXISTS notification_mutes (
+  user_handle TEXT NOT NULL,
+  convo_id    TEXT NOT NULL,
+  muted_at    INTEGER NOT NULL,
+  PRIMARY KEY (user_handle, convo_id)
+);

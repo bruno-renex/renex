@@ -288,7 +288,7 @@
   }
 
   .tab-badge {
-    background: var(--status-error);
+    background: var(--accent-voice);
     color: #fff;
     font-size: 10px;
     font-weight: 700;
@@ -312,6 +312,11 @@
 
   .tab-panel.active {
     display: block;
+  }
+
+  /* FAB-Überlappung verhindern — inkl. iPhone Safe Area */
+  #accepted, #groups {
+    padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
   }
 
   /* ============================= */
@@ -339,6 +344,12 @@
 
   button {
     margin-left: 8px;
+  }
+
+  /* Buttons innerhalb von Kontakt/Gruppen-Rows kein extra margin */
+  #accepted li button,
+  #groups li button {
+    margin-left: 0;
   }
 
   #add-btn, #create-group-btn {
@@ -406,44 +417,80 @@
       👥 <span data-i18n="tabGroups">Groups</span>
       <span id="tab-badge-groups" class="tab-badge"></span>
     </button>
-    <button class="tab-btn" data-tab="contacts">
-      👤 <span data-i18n="tabContacts">Contacts</span>
-      <span id="tab-badge-contacts" class="tab-badge"></span>
-    </button>
   </nav>
 
   <!-- TAB 1: CHATS (DMs) -->
   <div class="tab-panel active" id="panel-chats">
+    <!-- Anfragen-Banner (kompakt, klickbar) -->
+    <div id="pending-banner" style="display:none;margin-bottom:16px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:10px;padding:10px 14px;cursor:pointer;display:none;align-items:center;justify-content:space-between;gap:10px;" id="pending-banner">
+      <span style="font-size:13px;color:var(--text-primary);">📩 <strong id="pending-count">0</strong> ausstehende Anfragen</span>
+      <span style="font-size:12px;font-weight:600;color:var(--accent-voice);">Anzeigen →</span>
+    </div>
+    <input id="search-chats" type="search" placeholder="🔍 Suchen…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+      style="display:none;width:100%;box-sizing:border-box;padding:8px 12px;border-radius:10px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;margin-bottom:12px;" />
     <ul id="accepted"></ul>
+
+    <!-- FAB: Kontakt hinzufügen -->
+    <button id="add-contact-btn" title="Kontakt hinzufügen"
+      style="position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;font-size:26px;border:none;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;transition:transform 0.15s,box-shadow 0.15s;z-index:200;line-height:1;">＋</button>
+    <!-- FAB Popup: Kontakt hinzufügen -->
+    <div id="add-contact-popup" style="display:none;position:fixed;bottom:90px;right:28px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,0.4);padding:14px;z-index:201;width:260px;">
+      <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;" data-i18n="addContactHeading">Kontakt hinzufügen</div>
+      <div style="display:flex;gap:6px;">
+        <input id="add-handle" type="search" placeholder="Handle (z. B. bob)"
+          data-i18n-placeholder="addContactPlaceholder" autocomplete="off"
+          autocorrect="off" autocapitalize="off" spellcheck="false" name="renex-contact"
+          style="flex:1;min-width:0;padding:7px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:13px;outline:none;-webkit-appearance:none;" />
+        <button id="add-btn" title="Anfrage senden"
+          style="padding:7px 11px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:16px;font-weight:700;cursor:pointer;line-height:1;margin:0;">＋</button>
+      </div>
+    </div>
   </div>
 
   <!-- TAB 2: GRUPPEN -->
   <div class="tab-panel" id="panel-groups">
+    <input id="search-groups" type="search" placeholder="🔍 Suchen…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+      style="display:none;width:100%;box-sizing:border-box;padding:8px 12px;border-radius:10px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;margin-bottom:12px;" />
     <ul id="groups"></ul>
     <!-- FAB: Gruppe erstellen -->
     <button id="create-group-btn" data-i18n-title="createGroupBtn" title="Gruppe erstellen"
       style="position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;font-size:26px;border:none;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,0.35);display:none;align-items:center;justify-content:center;transition:transform 0.15s,box-shadow 0.15s;z-index:200;line-height:1;">＋</button>
-    <!-- FAB Popup -->
-    <div id="create-group-popup" style="display:none;position:fixed;bottom:90px;right:28px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,0.4);padding:12px;z-index:201;width:230px;">
-      <input id="group-name-input" type="text" data-i18n-placeholder="groupNamePlaceholder" placeholder="Gruppenname" autocomplete="off" autocorrect="off" autocapitalize="off"
-        style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;" />
+    <!-- FAB Popup: Gruppe erstellen -->
+    <div id="create-group-popup" style="display:none;position:fixed;bottom:90px;right:28px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,0.4);padding:14px;z-index:201;width:260px;">
+      <!-- Schritt 1: Gruppenname -->
+      <div id="group-step-1">
+        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Gruppe erstellen</div>
+        <input id="group-name-input" type="text" data-i18n-placeholder="groupNamePlaceholder" placeholder="Gruppenname" autocomplete="off" autocorrect="off" autocapitalize="off"
+          style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;margin-bottom:8px;" />
+        <button id="group-create-confirm-btn" style="width:100%;padding:8px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer;">Weiter →</button>
+      </div>
+      <!-- Schritt 2: Mitglieder einladen -->
+      <div id="group-step-2" style="display:none;">
+        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Personen einladen</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px;">
+          <input id="group-invite-search" type="text" placeholder="Username…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+            style="flex:1;min-width:0;padding:7px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:13px;outline:none;" />
+          <button id="group-invite-add-btn" style="padding:7px 11px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:16px;font-weight:700;cursor:pointer;line-height:1;">+</button>
+        </div>
+        <div id="group-invite-error" style="display:none;font-size:11px;color:var(--status-error);margin-bottom:6px;padding:4px 6px;background:rgba(255,59,48,0.1);border-radius:6px;">Nur eigene Kontakte können eingeladen werden</div>
+        <div id="group-invited-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:0;margin-bottom:8px;"></div>
+        <button id="group-invite-done-btn" style="width:100%;padding:7px;border-radius:8px;border:none;background:var(--bg-panel-alt);color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;">Fertig</button>
+      </div>
     </div>
   </div>
 
-  <!-- TAB 3: KONTAKTE -->
-  <div class="tab-panel" id="panel-contacts">
-    <h2 data-i18n="addContactHeading">Kontakt hinzufügen</h2>
-    <div style="display:flex;gap:8px;margin-bottom:16px;">
-      <input id="add-handle" type="search" placeholder="Handle (z. B. bob)"
-        data-i18n-placeholder="addContactPlaceholder" autocomplete="off"
-        autocorrect="off" autocapitalize="off" spellcheck="false" name="renex-contact"
-        style="margin:0;flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;-webkit-appearance:none;" />
-      <button id="add-btn" data-i18n-title="addContactBtn" title="Anfrage senden"
-        style="margin-left:0;width:42px;height:42px;min-width:42px;border-radius:50%;background:var(--accent);color:#fff;font-size:22px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform 0.15s,opacity 0.15s;flex-shrink:0;">＋</button>
+<!-- Modal: Ausstehende Anfragen -->
+<div id="requests-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:500;align-items:center;justify-content:center;">
+  <div style="background:var(--bg-panel);border-radius:14px;width:calc(100% - 40px);max-width:440px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.5);position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);">
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px 12px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;">
+      <span style="font-size:15px;font-weight:700;color:var(--text-primary);">📩 Ausstehende Anfragen</span>
+      <button id="requests-modal-close" style="background:none;border:none;color:var(--text-secondary);font-size:20px;cursor:pointer;line-height:1;padding:0;">✕</button>
     </div>
-    <h2 data-i18n="pendingHeading">Offene Anfragen</h2>
-    <ul id="pending"></ul>
+    <!-- Liste -->
+    <ul id="pending" style="margin:0;padding:8px 0;list-style:none;overflow-y:auto;flex:1;"></ul>
   </div>
+</div>
 
 <!-- Bestätigungsdialog Account löschen -->
 <div id="delete-overlay">

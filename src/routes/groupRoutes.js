@@ -129,7 +129,7 @@ export async function handleGroupRoutes(request, env, path, params) {
       await env.RENEX_DB.prepare(
         `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
          VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
-      ).bind(crypto.randomUUID(), groupId, invitee, joinTs,
+      ).bind(crypto.randomUUID(), groupId, me, joinTs,
         `${invitee} wurde von ${me} eingeladen`).run();
 
       // Live-Benachrichtigung an alle Mitglieder (inkl. neuem Member)
@@ -187,7 +187,7 @@ export async function handleGroupRoutes(request, env, path, params) {
       await env.RENEX_DB.prepare(
         `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
          VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
-      ).bind(crypto.randomUUID(), groupId, "__system__", ts,
+      ).bind(crypto.randomUUID(), groupId, me, ts,
         `${me} hat die Gruppe in "${newName}" umbenannt`).run();
 
       // Live-Push an alle Mitglieder
@@ -299,6 +299,7 @@ export async function handleGroupRoutes(request, env, path, params) {
       const rows = await env.RENEX_DB.prepare(`
         SELECT c.id, c.name, c.created_at, cm.role,
                COUNT(DISTINCT cm2.member_handle) AS member_count,
+               GROUP_CONCAT(DISTINCT cm2.member_handle) AS member_handles,
                lm_agg.last_ts,
                lm.from_user  AS last_from,
                lm.type       AS last_type,
@@ -417,7 +418,7 @@ export async function handleGroupRoutes(request, env, path, params) {
         if (!membership) return json(request, { error: "Not a member" }, 403);
         if (membership.role !== "admin") return json(request, { error: "Only the group admin can change auto-delete" }, 403);
 
-        const ALLOWED_DAYS = new Set([1, 7, 28, 90]);
+        const ALLOWED_DAYS = new Set([0.0417, 1, 7, 30]);
         const now = Date.now();
 
         const autoDeleteLabel = (d) => {
@@ -437,7 +438,7 @@ export async function handleGroupRoutes(request, env, path, params) {
           await env.RENEX_DB.prepare(
             `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
              VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
-          ).bind(crypto.randomUUID(), groupId, "__system__", now,
+          ).bind(crypto.randomUUID(), groupId, me, now,
             `${me} hat Auto-Delete deaktiviert`).run();
           const ctrl = { id: crypto.randomUUID(), type: "auto_delete_set", action: "cancel", groupId, ts: now };
           await pushToGroupMembers(env, env.RENEX_DB, groupId, me, ctrl);
@@ -455,7 +456,7 @@ export async function handleGroupRoutes(request, env, path, params) {
         await env.RENEX_DB.prepare(
           `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
            VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
-        ).bind(crypto.randomUUID(), groupId, "__system__", now,
+        ).bind(crypto.randomUUID(), groupId, me, now,
           `${me} hat Auto-Delete auf ${autoDeleteLabel(Number(days))} gesetzt`).run();
 
         const ctrl = { id: crypto.randomUUID(), type: "auto_delete_set", action: "accept", days: Number(days), groupId, ts: now };

@@ -11,7 +11,7 @@ export function corsHeaders(request) {
 
   const headers = {
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Mime-Type, X-File-Name, X-File-Size, X-Attachment-Type, X-Convo-Id",
     "Access-Control-Allow-Credentials": "true",
     "Vary": "Origin",
   };

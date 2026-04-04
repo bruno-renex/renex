@@ -54,6 +54,21 @@
   padding: 8px 12px;
   border-radius: 12px;
   word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  overflow: visible;
+  cursor: default;
+  }
+
+  /* Gelöschte Nachricht: Text immer vollständig sichtbar */
+  [data-deleted="1"] {
+    min-width: fit-content;
+  }
+  [data-deleted="1"] .msg-text {
+    display: block;
+    overflow: visible;
+    white-space: normal;
+    padding-right: 2px;
   }
 
   .me {
@@ -140,50 +155,67 @@
   color: var(--accent-voice);
 }
 
+/* Delete + Edit Buttons entfernt — Aktionen sind im Context Menu (Rechtsklick / Long-Press) */
+
 /* =========================
-   Delete Button
+   Context Menu
    ========================= */
 
-.delete-btn {
-  display: block;
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--text-secondary);
-  opacity: 0.18;
-  padding: 0;
-  margin: 0;
-  transition: opacity 0.15s, color 0.15s;
-  font-family: inherit;
+#msg-context-menu {
+  position: fixed;
+  z-index: 600;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-panel);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+  padding: 6px 0;
+  min-width: 170px;
+  animation: ctxFadeIn 0.12s ease;
 }
 
-.delete-btn:hover {
-  opacity: 0.8;
-  color: var(--status-error);
+@keyframes ctxFadeIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
 }
 
-.edit-btn {
-  display: block;
-  position: absolute;
-  top: 4px;
-  right: 24px;
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  font-size: 14px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.1s;
+  white-space: nowrap;
+}
+
+.ctx-item:hover { background: var(--bg-panel-alt); }
+.ctx-item.danger { color: var(--status-error); }
+.ctx-item-icon { font-size: 16px; width: 20px; text-align: center; }
+.ctx-divider { height: 1px; background: var(--border-subtle); margin: 4px 0; }
+
+/* Emoji Picker im Context Menu */
+.ctx-emoji-row {
+  display: flex;
+  justify-content: space-around;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ctx-emoji-btn {
   background: none;
   border: none;
+  font-size: 22px;
   cursor: pointer;
-  font-size: 10px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  transition: transform 0.1s, background 0.1s;
   line-height: 1;
-  color: var(--text-secondary);
-  opacity: 0.18;
-  padding: 0;
-  margin: 0;
-  transition: opacity 0.15s, color 0.15s;
-  font-family: inherit;
 }
+
+.ctx-emoji-btn:hover { transform: scale(1.25); background: var(--bg-panel-alt); }
+.ctx-emoji-btn.active { background: var(--accent-voice); border-radius: 8px; }
 
 .edit-btn:hover {
   opacity: 0.8;
@@ -360,6 +392,40 @@ textarea::placeholder {
   color: var(--input-placeholder);
 }
 
+/* ── Presence ─────────────────────────────────────── */
+#dm-presence-status {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.75;
+  line-height: 1;
+  margin-top: 2px;
+  min-height: 13px;
+}
+.presence-dot {
+  position: absolute;
+  bottom: 1px;
+  right: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-body);
+  background: #4ade80;
+  display: none;
+}
+
+/* ── Attach-Bar ───────────────────────────────────── */
+#attach-bar button:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
+#attach-bar button:active { background: var(--bg-active, rgba(255,255,255,0.10)); }
+
+/* ── Attachment-Bubble ────────────────────────────── */
+.attachment-bubble {
+  margin-bottom: 4px;
+}
+.attachment-bubble img {
+  border-radius: 8px;
+  display: block;
+}
+
   </style>
 </head>
 <body>
@@ -367,19 +433,20 @@ textarea::placeholder {
 <div id="chat-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border-panel);background:var(--bg-panel);position:sticky;top:0;z-index:20;gap:8px;">
   <button onclick="history.back()" style="background:none;border:none;color:var(--accent);font-size:15px;cursor:pointer;padding:4px 8px;border-radius:6px;">←</button>
   <div style="position:relative;flex:1;display:flex;justify-content:center;">
-    <button id="chat-menu-btn" style="background:none;border:none;color:inherit;font-size:16px;font-weight:600;cursor:pointer;padding:4px 12px;border-radius:8px;display:flex;align-items:center;transition:background 0.15s;">
+    <button id="chat-menu-btn" style="background:none;border:none;color:inherit;font-size:16px;font-weight:600;cursor:pointer;padding:4px 12px;border-radius:8px;display:flex;flex-direction:column;align-items:center;transition:background 0.15s;">
       <span id="chat-with"></span>
+      <span id="dm-presence-status"></span>
     </button>
     <div id="chat-menu-dropdown" style="display:none;position:absolute;left:50%;transform:translateX(-50%);top:38px;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:190px;padding:6px 0;z-index:50;">
       <div id="chat-menu-autodelete" style="padding:10px 16px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;position:relative;">
         <span>🗑️ Auto-Delete<span id="chat-autodelete-readonly-hint" style="display:none;font-size:10px;color:var(--text-secondary);margin-left:4px;">(Admin)</span></span>
         <span id="chat-autodelete-label" data-i18n="autoDeleteOff" style="color:var(--accent);font-size:12px;font-weight:600;">Off</span>
         <div id="chat-autodelete-submenu" style="display:none;position:absolute;left:calc(100% + 6px);top:0;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:130px;padding:6px 0;z-index:60;">
-          <div class="chat-ad-opt" data-days="" data-i18n="autoDeleteOff" style="padding:8px 16px;cursor:pointer;font-size:13px;">Off</div>
-          <div class="chat-ad-opt" data-days="1" data-i18n="autoDeleteOneDay" style="padding:8px 16px;cursor:pointer;font-size:13px;">1 day</div>
-          <div class="chat-ad-opt" data-days="7" data-i18n="autoDeleteOneWeek" style="padding:8px 16px;cursor:pointer;font-size:13px;">1 week</div>
-          <div class="chat-ad-opt" data-days="28" data-i18n="autoDeleteFourWeeks" style="padding:8px 16px;cursor:pointer;font-size:13px;">4 weeks</div>
-          <div class="chat-ad-opt" data-days="90" data-i18n="autoDeleteNinetyDays" style="padding:8px 16px;cursor:pointer;font-size:13px;">90 days</div>
+          <div class="chat-ad-opt" data-days="" data-i18n="autoDeleteOff" style="padding:8px 16px;cursor:pointer;font-size:13px;">Aus</div>
+          <div class="chat-ad-opt" data-days="0.0417" data-i18n="autoDeleteOneHour" style="padding:8px 16px;cursor:pointer;font-size:13px;">1h</div>
+          <div class="chat-ad-opt" data-days="1" data-i18n="autoDeleteOneDay" style="padding:8px 16px;cursor:pointer;font-size:13px;">24h</div>
+          <div class="chat-ad-opt" data-days="7" data-i18n="autoDeleteOneWeek" style="padding:8px 16px;cursor:pointer;font-size:13px;">7 Tage</div>
+          <div class="chat-ad-opt" data-days="30" data-i18n="autoDeleteThirtyDays" style="padding:8px 16px;cursor:pointer;font-size:13px;">30 Tage</div>
         </div>
       </div>
       <!-- Notifications Mute Toggle -->
@@ -428,6 +495,15 @@ textarea::placeholder {
   <button id="reply-bar-cancel" title="Abbrechen">✕</button>
 </div>
 
+<!-- Attach-Bar -->
+<div id="attach-bar" style="display:flex;align-items:center;gap:6px;padding:4px 12px 0;flex-shrink:0;">
+  <button id="attach-photo-btn" title="Foto senden" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 6px;border-radius:8px;color:var(--text-secondary);line-height:1;transition:background 0.12s;">📷</button>
+  <button id="attach-file-btn" title="Datei senden" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 6px;border-radius:8px;color:var(--text-secondary);line-height:1;transition:background 0.12s;">📎</button>
+  <button id="attach-gif-btn" title="GIF suchen" style="background:none;border:none;font-size:12px;font-weight:700;cursor:pointer;padding:4px 8px;border-radius:8px;color:var(--text-secondary);line-height:1;border:1px solid var(--border-subtle);transition:background 0.12s;">GIF</button>
+  <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" style="display:none" />
+  <input id="file-input" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.ics,.gif,.txt" style="display:none" />
+</div>
+
 <textarea
   id="msg-input"
   placeholder="Nachricht…"
@@ -441,6 +517,21 @@ textarea::placeholder {
 <div id="length-warning"></div>
 
 <button id="send-btn" data-i18n="sendBtn">Senden</button>
+
+<!-- GIF-Suchmodal -->
+<div id="gif-modal" style="display:none;position:fixed;inset:0;z-index:800;background:rgba(0,0,0,0.6);">
+  <div style="position:absolute;bottom:0;left:0;right:0;background:var(--bg-panel);border-radius:16px 16px 0 0;padding:12px;max-height:80vh;display:flex;flex-direction:column;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <input id="gif-search-input" type="search" placeholder="GIF suchen…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+             style="flex:1;font-size:14px;padding:8px 12px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);outline:none;" />
+      <button id="gif-modal-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-secondary);padding:4px 8px;">✕</button>
+    </div>
+    <div id="gif-results" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;overflow-y:auto;flex:1;"></div>
+    <div id="gif-loading" style="display:none;text-align:center;padding:20px;color:var(--text-secondary);font-size:13px;">Suche…</div>
+  </div>
+</div>
+
+<div id="chat-toast-container" style="position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;width:min(340px,92vw);"></div>
 
 <script type="module" src="/js/chat.js"></script>
 <script type="module">

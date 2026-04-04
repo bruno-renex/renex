@@ -19,7 +19,7 @@ export default {
   settings:                 "Einstellungen",
 
   // ── Tabs ─────────────────────────────────────────────
-  tabChats:             "Chats",
+  tabChats:             "Kontakte & Chats",
   tabGroups:            "Gruppen",
   tabContacts:          "Kontakte",
 
@@ -49,14 +49,15 @@ export default {
 
   // ── Chat-Menü ─────────────────────────────────────────
   autoDeleteOff:        "Aus",
-  autoDeleteOneDay:     "1 Tag",
-  autoDeleteOneWeek:    "1 Woche",
-  autoDeleteFourWeeks:  "4 Wochen",
-  autoDeleteNinetyDays: "90 Tage",
+  autoDeleteOneHour:    "1h",
+  autoDeleteOneDay:     "24h",
+  autoDeleteOneWeek:    "7 Tage",
+  autoDeleteThirtyDays: "30 Tage",
   membersHeading:       "Mitglieder",
 
   // ── Chat-Nachrichten ──────────────────────────────────
   decryptFailed:          "🔒 Nachricht konnte nicht entschlüsselt werden",
+  messageExpired:         "⏱ Nachricht automatisch gelöscht",
   deleteMessageTitle:     "Nachricht löschen",
   confirmDeleteMessage:   "Nachricht für alle löschen?",
   statusDelivered:        "Zugestellt",

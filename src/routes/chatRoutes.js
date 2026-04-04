@@ -106,10 +106,17 @@ export async function handleChatRoutes(request, env, path, params) {
           if (r.sig)       m.sig      = r.sig;
           if (r.device_id) m.deviceId = r.device_id;
           // Reply-Felder (E2E-verschlüsselt — nur Ciphertext)
-          if (r.reply_to_id) m.replyToId = r.reply_to_id;
-          if (r.reply_from)  m.replyFrom = r.reply_from;
-          if (r.reply_iv)    m.replyIv   = r.reply_iv;
-          if (r.reply_ct)    m.replyCt   = r.reply_ct;
+          if (r.reply_to_id)          m.replyToId          = r.reply_to_id;
+          if (r.reply_from)           m.replyFrom          = r.reply_from;
+          if (r.reply_iv)             m.replyIv            = r.reply_iv;
+          if (r.reply_ct)             m.replyCt            = r.reply_ct;
+          if (r.reply_rotation_index != null) m.replyRotationIndex = r.reply_rotation_index;
+          // Bearbeitete Nachrichten
+          if (r.edited_message)       m.edited_message     = r.edited_message;
+          if (r.edited_at != null)    m.edited_at          = r.edited_at;
+          // Attachment
+          if (r.attachment_key)       m.attachmentKey      = r.attachment_key;
+          if (r.attachment_type)      m.attachmentType     = r.attachment_type;
           return m;
         });
 
@@ -268,11 +275,16 @@ export async function handleChatRoutes(request, env, path, params) {
 
         // Nachricht laden — prüfen ob Sender korrekt
         const row = await env.RENEX_DB.prepare(
-          "SELECT id, from_user, to_user, convo_id FROM messages WHERE id = ?"
+          "SELECT id, from_user, to_user, convo_id, attachment_key, attachment_type FROM messages WHERE id = ?"
         ).bind(msgId).first();
 
         if (!row) return json(request, { error: "Message not found" }, 404);
         if (row.from_user !== me) return json(request, { error: "Forbidden" }, 403);
+
+        // R2-Objekt löschen (wenn vorhanden und kein GIF — GIFs haben keinen R2-Key)
+        if (row.attachment_key && row.attachment_type !== "gif" && env.RENEX_FILES) {
+          await env.RENEX_FILES.delete(row.attachment_key).catch(() => {});
+        }
 
         // Aus D1 löschen
         await env.RENEX_DB.prepare("DELETE FROM messages WHERE id = ?").bind(msgId).run();
@@ -332,9 +344,17 @@ export async function handleChatRoutes(request, env, path, params) {
       }
 
       const now = Date.now();
+      // rotationIndex in edited_message einbetten → korrekte Entschlüsselung beim Laden
+      let editedMessageJson = cipher;
+      if (rotIdx !== null) {
+        try {
+          const parsed = JSON.parse(cipher);
+          editedMessageJson = JSON.stringify({ ...parsed, rotationIndex: rotIdx });
+        } catch {}
+      }
       await env.RENEX_DB.prepare(
         "UPDATE messages SET edited_message = ?, edited_at = ? WHERE id = ?"
-      ).bind(cipher, now, msgId).run();
+      ).bind(editedMessageJson, now, msgId).run();
 
       // Peer(s) benachrichtigen
       const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.convo_id);
@@ -403,7 +423,7 @@ export async function handleChatRoutes(request, env, path, params) {
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
-      const ALLOWED_EMOJIS = ["👍🏽","👎🏽","😂","🔥","💀","❤️"];
+      const ALLOWED_EMOJIS = ["💀","🔥","🗿","😭","🫡","💯","🤝"];
       const msgId = String(body.messageId || "").trim();
       const emoji = String(body.emoji || "").trim();
       if (!msgId) return json(request, { error: "Missing messageId" }, 400);
@@ -417,11 +437,16 @@ export async function handleChatRoutes(request, env, path, params) {
 
       // Mitgliedschaft prüfen (DM oder Gruppe)
       const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(msg.convo_id);
+      let groupName = null;
       if (isGroup) {
         const member = await env.RENEX_DB.prepare(
           "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
         ).bind(msg.convo_id, me).first();
         if (!member) return json(request, { error: "Forbidden" }, 403);
+        const grp = await env.RENEX_DB.prepare(
+          "SELECT name FROM conversations WHERE id = ?"
+        ).bind(msg.convo_id).first();
+        groupName = grp?.name || null;
       } else {
         if (msg.from_user !== me && msg.to_user !== me) return json(request, { error: "Forbidden" }, 403);
       }
@@ -464,6 +489,9 @@ export async function handleChatRoutes(request, env, path, params) {
         emoji,
         action,
         from: me,
+        msgAuthor: msg.from_user,
+        convoId: msg.convo_id,
+        groupName,
         reactions,
         ts: Date.now()
       };

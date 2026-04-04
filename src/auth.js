@@ -238,6 +238,11 @@ export class UserSessionDO {
     this.env = env;
   }
 
+  // Handle aus DO-Name ableiten (gesetzt via idFromName(wsHandle))
+  get _handle() {
+    try { return this.state.id.name || null; } catch { return null; }
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
 
@@ -246,6 +251,8 @@ export class UserSessionDO {
       const { 0: client, 1: server } = new WebSocketPair();
       // Hibernatable WebSocket: DO schläft wenn idle → kosteneffizient
       this.state.acceptWebSocket(server);
+      // Presence: sofort online setzen (TTL übernimmt Ablauf, kein Alarm nötig)
+      await this._setOnline();
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -264,8 +271,40 @@ export class UserSessionDO {
     return new Response("Not found", { status: 404 });
   }
 
-  // Hibernatable WebSocket Handlers (Pflicht bei acceptWebSocket)
+  // Hibernatable WebSocket Handlers
   webSocketMessage(ws, message) {}
-  webSocketClose(ws, code, reason) {}
-  webSocketError(ws, error) {}
+
+  async webSocketClose(ws, code, reason) {
+    // Letzter Socket geschlossen → offline
+    if (this.state.getWebSockets().length === 0) {
+      await this._setOffline();
+    }
+  }
+
+  async webSocketError(ws, error) {
+    if (this.state.getWebSockets().length === 0) {
+      await this._setOffline();
+    }
+  }
+
+  // ── KV-Helpers ────────────────────────────────────────
+  async _setOnline() {
+    const handle = this._handle;
+    if (!handle || !this.env?.RENEX_KV) return;
+    await this.env.RENEX_KV.put(
+      `presence:${handle}`,
+      JSON.stringify({ online: true, ts: Date.now() }),
+      { expirationTtl: 300 }   // 5 Min TTL — kein Alarm, TTL übernimmt Ablauf
+    );
+  }
+
+  async _setOffline() {
+    const handle = this._handle;
+    if (!handle || !this.env?.RENEX_KV) return;
+    await this.env.RENEX_KV.put(
+      `presence:${handle}`,
+      JSON.stringify({ online: false, lastSeen: Date.now() }),
+      { expirationTtl: 7 * 24 * 3600 }  // 7 Tage — für "zuletzt gesehen"
+    );
+  }
 }

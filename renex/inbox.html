@@ -372,10 +372,65 @@
   #add-handle {
     margin-right: 8px;
   }
+
+  /* ── Toast-Notification ─────────────────────────── */
+  #inbox-toast-container {
+    position: fixed;
+    top: 68px; /* unter dem Header */
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+    width: calc(100% - 32px);
+    max-width: 420px;
+  }
+  /* Presence dot auf Avatar */
+  [data-presence-handle] {
+    position: relative;
+  }
+  [data-presence-handle] span {
+    pointer-events: none;
+  }
+
+  .inbox-toast {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--bg-panel);
+    border: 1px solid var(--accent-voice);
+    border-radius: 12px;
+    padding: 12px 16px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+    font-size: 14px;
+    color: var(--text-primary);
+    cursor: pointer;
+    pointer-events: all;
+    animation: toastIn 0.25s ease;
+    transition: opacity 0.3s, transform 0.3s;
+  }
+  .inbox-toast.hiding {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateY(-14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .inbox-toast-icon { font-size: 20px; flex-shrink: 0; }
+  .inbox-toast-body { flex: 1; }
+  .inbox-toast-title { font-weight: 700; margin-bottom: 1px; }
+  .inbox-toast-sub   { font-size: 12px; opacity: 0.65; }
+  .inbox-toast-close { background: none; border: none; color: var(--text-secondary); font-size: 16px; cursor: pointer; padding: 0; line-height: 1; flex-shrink: 0; }
 </style>
 </head>
 
 <body>
+
+<!-- Toast-Benachrichtigungen -->
+<div id="inbox-toast-container"></div>
 
 <div class="header">
   <div class="brand">RENE<span class="x">X</span></div>
@@ -410,7 +465,7 @@
   <!-- TAB BAR -->
   <nav class="tab-bar">
     <button class="tab-btn active" data-tab="chats">
-      💬 <span data-i18n="tabChats">Chats</span>
+      💬 <span data-i18n="tabChats">Kontakte & Chats</span>
       <span id="tab-badge-chats" class="tab-badge"></span>
     </button>
     <button class="tab-btn" data-tab="groups">
@@ -449,6 +504,11 @@
 
   <!-- TAB 2: GRUPPEN -->
   <div class="tab-panel" id="panel-groups">
+    <!-- Anfragen-Banner (identisch mit Chats-Tab) -->
+    <div id="pending-banner-groups" style="display:none;margin-bottom:16px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:10px;padding:10px 14px;cursor:pointer;align-items:center;justify-content:space-between;gap:10px;">
+      <span style="font-size:13px;color:var(--text-primary);">📩 <strong id="pending-count-groups">0</strong> ausstehende Anfragen</span>
+      <span style="font-size:12px;font-weight:600;color:var(--accent-voice);">Anzeigen →</span>
+    </div>
     <input id="search-groups" type="search" placeholder="🔍 Suchen…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
       style="display:none;width:100%;box-sizing:border-box;padding:8px 12px;border-radius:10px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;margin-bottom:12px;" />
     <ul id="groups"></ul>

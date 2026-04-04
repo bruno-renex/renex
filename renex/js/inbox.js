@@ -10,6 +10,72 @@ import lang, { getLang, setLang } from "./i18n.js";
 const API = "https://api.renex.id";
 
 // ================================
+// PRESENCE HELPERS
+// ================================
+async function fetchPresence(handles) {
+  if (!handles?.length) return {};
+  try {
+    const unique = [...new Set(handles.map(h => h.toLowerCase()))].filter(Boolean);
+    return await apiFetch(`/presence?handles=${encodeURIComponent(unique.join(","))}`);
+  } catch { return {}; }
+}
+
+function formatLastSeen(ts) {
+  if (!ts) return "";
+  const diff = Date.now() - Number(ts);
+  if (diff < 60_000)      return "gerade eben";
+  if (diff < 3_600_000)   return `vor ${Math.floor(diff / 60_000)} Min.`;
+  if (diff < 86_400_000)  return `vor ${Math.floor(diff / 3_600_000)} Std.`;
+  const days = Math.floor(diff / 86_400_000);
+  return `vor ${days} Tag${days === 1 ? "" : "en"}`;
+}
+
+// ================================
+// TOAST NOTIFICATION
+// ================================
+function showToast({ icon = "👥", title, sub = "", groupId = null, groupName = null, durationMs = 5000 }) {
+  const container = document.getElementById("inbox-toast-container");
+  if (!container) return;
+
+  const toast = document.createElement("div");
+  toast.className = "inbox-toast";
+
+  toast.innerHTML = `
+    <span class="inbox-toast-icon">${icon}</span>
+    <div class="inbox-toast-body">
+      <div class="inbox-toast-title">${title}</div>
+      ${sub ? `<div class="inbox-toast-sub">${sub}</div>` : ""}
+    </div>
+    <button class="inbox-toast-close" title="Schliessen">✕</button>
+  `;
+
+  // Klick auf Toast → Gruppen-Tab aktivieren (+ ggf. zum Chat navigieren)
+  toast.addEventListener("click", (e) => {
+    if (e.target.closest(".inbox-toast-close")) { dismissToast(toast); return; }
+    dismissToast(toast);
+    if (groupId) {
+      const nameParam = groupName ? `&name=${encodeURIComponent(groupName)}` : "";
+      window.location.href = `/chat?with=${encodeURIComponent(groupId)}${nameParam}`;
+    } else {
+      // Gruppen-Tab aktivieren
+      document.querySelector('.tab-btn[data-tab="groups"]')?.click();
+    }
+  });
+
+  container.appendChild(toast);
+
+  // Auto-dismiss
+  const timer = setTimeout(() => dismissToast(toast), durationMs);
+  toast._dismissTimer = timer;
+}
+
+function dismissToast(toast) {
+  clearTimeout(toast._dismissTimer);
+  toast.classList.add("hiding");
+  setTimeout(() => toast.remove(), 320);
+}
+
+// ================================
 // PROFILE CIRCLE
 // ================================
 function initProfileCircle() {
@@ -93,6 +159,7 @@ function closeRequestsModal() {
 }
 
 pendingBannerEl?.addEventListener("click", openRequestsModal);
+document.getElementById("pending-banner-groups")?.addEventListener("click", openRequestsModal);
 requestsModalClose?.addEventListener("click", closeRequestsModal);
 requestsModal?.addEventListener("click", (e) => { if (e.target === requestsModal) closeRequestsModal(); });
 
@@ -397,12 +464,56 @@ if (langBtn && langSubmenu) {
       if (!bcToken || e.data?._bcToken !== bcToken) return;
       const type = e.data?.type;
       if (type === "CONTACT_ACCEPTED" || type === "CONTACT_UPDATE") loadContacts();
+
+      // 🔔 Reaction-Toast: nur wenn meine Nachricht reagiert wurde (kein Badge)
+      if (type === "REACTION_UPDATED" && e.data?.action === "added") {
+        const myUser = (localStorage.getItem("my_user") || "").toLowerCase();
+        const msgAuthor = (e.data?.msgAuthor || "").toLowerCase();
+        const reactor   = (e.data?.from || "").toLowerCase();
+        if (msgAuthor === myUser && reactor !== myUser) {
+          const convoId = e.data?.convoId || null;
+          // Für DMs (convoId = "handle1:handle2") direkt den Reactor-Handle verwenden,
+          // damit kein "alice:bob"-Flash im Chat-Header entsteht
+          const _isDmConvo = convoId && /^[a-z0-9_]{1,32}:[a-z0-9_]{1,32}$/i.test(convoId);
+          // Für Groups: Namen aus _currentGroups holen, damit kein UUID-Flash entsteht
+          const _groupName = !_isDmConvo ? (_currentGroups.find(g => g.id === convoId)?.name || null) : null;
+          const reactorLabel = reactor && reactor !== "undefined" ? reactor : "Jemand";
+          showToast({
+            icon: e.data?.emoji || "💬",
+            title: `${reactorLabel} hat auf deine Nachricht reagiert`,
+            sub: "",
+            groupId: _isDmConvo ? reactor : convoId,
+            groupName: _groupName,
+            durationMs: 4000
+          });
+        }
+      }
+
       if (type === "NEW_MESSAGE" || type === "GSK_READY" || type === "GROUP_MEMBER_JOINED" || type === "GROUP_MEMBER_LEFT") {
         _lastContactsKey = null;
         _lastGroupsKey   = null;
         loadContacts();
-        loadGroups();
-        // muted: kein visuelles Aufblinken / Popup (Badge erscheint trotzdem)
+        loadGroups().then(() => {
+          // Toast: Gruppe beigetreten (nur wenn ich selbst der neue Member bin)
+          if (type === "GROUP_MEMBER_JOINED") {
+            const myUser = (localStorage.getItem("my_user") || "").toLowerCase();
+            const evHandle    = (e.data?.handle    || "").toLowerCase();
+            const invitedBy   = e.data?.invitedBy  || "";
+            const groupId     = e.data?.groupId    || null;
+            if (evHandle === myUser) {
+              // Gruppenname aus _currentGroups holen (nach loadGroups)
+              const grp = _currentGroups.find(g => g.id === groupId);
+              const groupName = grp?.name || "neue Gruppe";
+              showToast({
+                icon: "👥",
+                title: `Du wurdest zur Gruppe „${groupName}" eingeladen`,
+                sub: invitedBy ? `Von: ${invitedBy}` : "",
+                groupId,
+                durationMs: 6000
+              });
+            }
+          }
+        }).catch(() => {});
       }
     };
   } else {
@@ -598,21 +709,23 @@ async function loadContacts() {
     const incomingCount = contacts.filter(c => c.status === "pending" && c.direction === "in").length;
     const outgoingCount = contacts.filter(c => c.status === "pending" && c.direction === "out").length;
     const pendingCount  = incomingCount + outgoingCount;
-    if (pendingBanner) {
+
+    // Hilfsfunktion: einen Banner (Chats oder Gruppen) aktualisieren
+    function syncPendingBanner(bannerEl, countEl) {
+      if (!bannerEl) return;
       if (pendingCount > 0) {
-        pendingBanner.style.display = "flex";
-        // Bannertext je nach Typ anpassen
-        const bannerTextEl = pendingBanner.querySelector("span");
-        const pendingStrong = pendingBanner.querySelector("strong");
-        if (pendingStrong) pendingStrong.textContent = pendingCount;
-        if (bannerTextEl && incomingCount > 0 && outgoingCount > 0) {
-          bannerTextEl.childNodes[0] && (bannerTextEl.childNodes[0].textContent = "📩 ");
-        }
-        if (pendingCountEl) pendingCountEl.textContent = pendingCount;
+        bannerEl.style.display = "flex";
+        if (countEl) countEl.textContent = pendingCount;
       } else {
-        pendingBanner.style.display = "none";
+        bannerEl.style.display = "none";
       }
     }
+
+    syncPendingBanner(pendingBanner, pendingCountEl);
+    syncPendingBanner(
+      document.getElementById("pending-banner-groups"),
+      document.getElementById("pending-count-groups")
+    );
 
     if (!acceptedEl.children.length) {
       acceptedEl.appendChild(emptyLi(lang.noContacts));
@@ -634,6 +747,20 @@ async function loadContacts() {
       .filter(c => !_mutedConvos.has(dmConvoId(myUserBadge, c.handle)))
       .length;
     updateTabBadge("chats", unreadContacts); // pendingCount bewusst ausgeschlossen — Banner im Tab ist ausreichend
+
+    // Presence-Dots für akzeptierte Kontakte (fire-and-forget)
+    const acceptedHandles = contacts.filter(c => c.status === "accepted").map(c => c.handle);
+    if (acceptedHandles.length > 0) {
+      fetchPresence(acceptedHandles).then(presence => {
+        document.querySelectorAll("[data-presence-handle]").forEach(wrap => {
+          const handle = wrap.dataset.presenceHandle;
+          const dot = wrap.querySelector("span");
+          if (!dot) return;
+          const p = presence?.[handle];
+          dot.style.display = p?.online ? "block" : "none";
+        });
+      }).catch(() => {});
+    }
 
   } catch (err) {
     if (!localStorage.getItem("my_user")) return;
@@ -670,6 +797,19 @@ function renderPending(contact) {
       try {
         await apiFetch("/contacts/cancel", { method: "POST", body: JSON.stringify({ contact: contact.handle }) });
         li.remove();
+        // Modal schliessen wenn Liste jetzt leer
+        if (!pendingEl.children.length) closeRequestsModal();
+        // Beide Banner optimistisch aktualisieren
+        const remaining = pendingEl.children.length;
+        const pCount  = document.getElementById("pending-count");
+        const pCountG = document.getElementById("pending-count-groups");
+        if (pCount)  pCount.textContent  = remaining;
+        if (pCountG) pCountG.textContent = remaining;
+        if (remaining === 0) {
+          if (pendingBannerEl) pendingBannerEl.style.display = "none";
+          const groupsBanner = document.getElementById("pending-banner-groups");
+          if (groupsBanner) groupsBanner.style.display = "none";
+        }
         _lastContactsKey = null;
         loadContacts();
       } catch (e) {
@@ -689,11 +829,17 @@ function renderPending(contact) {
   acceptBtn.onclick = async () => {
     li.remove();
     if (!pendingEl.children.length) closeRequestsModal();
-    // Badge sofort optimistisch aktualisieren
+    // Beide Banner optimistisch aktualisieren
     const remainingAcc = pendingEl.children.length;
-    const pendingCountElAcc = document.getElementById("pending-count");
-    if (pendingCountElAcc) pendingCountElAcc.textContent = remainingAcc;
-    if (remainingAcc === 0 && pendingBannerEl) pendingBannerEl.style.display = "none";
+    const pCountAcc  = document.getElementById("pending-count");
+    const pCountAccG = document.getElementById("pending-count-groups");
+    if (pCountAcc)  pCountAcc.textContent  = remainingAcc;
+    if (pCountAccG) pCountAccG.textContent = remainingAcc;
+    if (remainingAcc === 0) {
+      if (pendingBannerEl) pendingBannerEl.style.display = "none";
+      const groupsBanner = document.getElementById("pending-banner-groups");
+      if (groupsBanner) groupsBanner.style.display = "none";
+    }
     // API-Call abwarten, dann Cache invalidieren + neu laden
     try {
       await apiFetch("/contacts/accept", {
@@ -710,11 +856,17 @@ function renderPending(contact) {
   rejectBtn.onclick = async () => {
     li.remove();
     if (!pendingEl.children.length) closeRequestsModal();
-    // Badge sofort optimistisch aktualisieren
-    const remaining = pendingEl.children.length;
-    const pendingCountEl = document.getElementById("pending-count");
-    if (pendingCountEl) pendingCountEl.textContent = remaining;
-    if (remaining === 0 && pendingBannerEl) pendingBannerEl.style.display = "none";
+    // Beide Banner optimistisch aktualisieren
+    const remainingRej = pendingEl.children.length;
+    const pCountRej  = document.getElementById("pending-count");
+    const pCountRejG = document.getElementById("pending-count-groups");
+    if (pCountRej)  pCountRej.textContent  = remainingRej;
+    if (pCountRejG) pCountRejG.textContent = remainingRej;
+    if (remainingRej === 0) {
+      if (pendingBannerEl) pendingBannerEl.style.display = "none";
+      const groupsBanner = document.getElementById("pending-banner-groups");
+      if (groupsBanner) groupsBanner.style.display = "none";
+    }
     // API-Call abwarten, dann Cache invalidieren + neu laden
     try {
       await apiFetch("/contacts/reject", {
@@ -751,10 +903,17 @@ function renderAccepted(contact) {
     window.location.href = `/chat?with=${encodeURIComponent(contact.handle)}`;
   });
 
-  // Avatar
+  // Avatar mit Presence-Dot
+  const avatarWrap = document.createElement("div");
+  avatarWrap.style.cssText = "position:relative;width:40px;height:40px;min-width:40px;flex-shrink:0;";
+  avatarWrap.dataset.presenceHandle = contact.handle.toLowerCase();
   const avatar = document.createElement("div");
-  avatar.style.cssText = "width:40px;height:40px;min-width:40px;border-radius:50%;background:#404249;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;color:#fff;";
+  avatar.style.cssText = "width:40px;height:40px;border-radius:50%;background:#404249;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;color:#fff;";
   avatar.textContent = handle[0].toUpperCase();
+  const presenceDot = document.createElement("span");
+  presenceDot.style.cssText = "display:none;position:absolute;bottom:1px;right:1px;width:10px;height:10px;border-radius:50%;background:#4ade80;border:2px solid var(--bg-body);";
+  avatarWrap.appendChild(avatar);
+  avatarWrap.appendChild(presenceDot);
 
   // Content
   const content = document.createElement("div");
@@ -815,7 +974,7 @@ function renderAccepted(contact) {
     } catch { alert(lang.removeContactFailed); }
   };
 
-  li.appendChild(avatar);
+  li.appendChild(avatarWrap);
   li.appendChild(content);
   li.appendChild(removeBtn);
   return li;
@@ -899,6 +1058,34 @@ async function loadGroups() {
       return;
     }
     groups.forEach(g => groupsEl.appendChild(renderGroup(g)));
+
+    // Presence: alle Member-Handles aller Gruppen batch-abfragen
+    const allHandles = [...new Set(
+      groups.flatMap(g => (g.member_handles || "").split(",").map(h => h.trim().toLowerCase()).filter(Boolean))
+    )];
+    if (allHandles.length > 0) {
+      fetchPresence(allHandles).then(presence => {
+        groups.forEach(g => {
+          const handles = (g.member_handles || "").split(",").map(h => h.trim().toLowerCase()).filter(Boolean);
+          const onlineCount = handles.filter(h => presence?.[h]?.online).length;
+          if (onlineCount === 0) return;
+          // Online-Count-Element suchen (data-group-online auf dem li)
+          const li = groupsEl.querySelector(`[data-group-id="${g.id}"]`);
+          const onlineEl = li?.querySelector("[data-online-count]");
+          if (onlineEl) {
+            const total = (g.member_count || 0);
+            if (onlineCount > 0) {
+              onlineEl.innerHTML = `${onlineCount} <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade80;margin:0 4px;vertical-align:middle;"></span>· ${total} Mitglieder`;
+              onlineEl.style.color = "var(--text-secondary)";
+            } else {
+              onlineEl.textContent = `${total} Mitglieder`;
+              onlineEl.style.color = "var(--text-secondary)";
+            }
+          }
+        });
+      }).catch(() => {});
+    }
+
     // Suchfeld: ab SEARCH_MIN Gruppen einblenden
     if (searchGroups) {
       searchGroups.style.display = groups.length >= SEARCH_MIN ? "block" : "none";
@@ -916,6 +1103,7 @@ function renderGroup(group) {
   const li = document.createElement("li");
   li.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border-subtle);cursor:pointer;transition:background 0.1s;border-radius:8px;";
   li.dataset.searchName = group.name.toLowerCase();
+  li.dataset.groupId = group.id;
   li.addEventListener("mouseenter", () => li.style.background = "var(--bg-panel-alt)");
   li.addEventListener("mouseleave", () => li.style.background = "");
   li.addEventListener("click", (e) => {
@@ -982,8 +1170,9 @@ function renderGroup(group) {
     previewRow.appendChild(badge);
   } else {
     const memberCount = document.createElement("span");
+    memberCount.dataset.onlineCount = "1";
     memberCount.style.cssText = "font-size:11px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap;";
-    memberCount.textContent = `👥 ${group.member_count}`;
+    memberCount.textContent = `${group.member_count} Mitglieder`;
     previewRow.appendChild(preview);
     previewRow.appendChild(memberCount);
   }

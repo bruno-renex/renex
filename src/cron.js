@@ -15,6 +15,19 @@ export async function scheduled(event, env) {
     for (const row of (activeConvos.results ?? [])) {
       try {
         const cutoffTs = Date.now() - row.days * 86400_000;
+
+        // R2-Objekte VOR D1-Delete löschen (GIFs haben keinen R2-Key)
+        if (env.RENEX_FILES) {
+          const attachments = await env.RENEX_DB.prepare(
+            "SELECT attachment_key FROM messages WHERE convo_id = ? AND ts < ? AND type IS NULL AND attachment_key IS NOT NULL AND attachment_type != 'gif'"
+          ).bind(row.convo_id, cutoffTs).all();
+          for (const a of (attachments.results ?? [])) {
+            if (a.attachment_key) {
+              await env.RENEX_FILES.delete(a.attachment_key).catch(() => {});
+            }
+          }
+        }
+
         const result = await env.RENEX_DB.prepare(
           "DELETE FROM messages WHERE convo_id = ? AND ts < ? AND type IS NULL"
         ).bind(row.convo_id, cutoffTs).run();

@@ -7,6 +7,9 @@ import { handleContactRoutes } from './src/routes/contactRoutes.js';
 import { handleAutoDeleteRoutes } from './src/routes/autoDeleteRoutes.js';
 import { handleGroupRoutes } from './src/routes/groupRoutes.js';
 import { handleNotificationRoutes } from './src/routes/notificationRoutes.js';
+import { handlePresenceRoutes } from './src/routes/presenceRoutes.js';
+import { handleUploadRoutes } from './src/routes/uploadRoutes.js';
+import { handleGifRoutes } from './src/routes/gifRoutes.js';
 import { scheduled } from './src/cron.js';
 
 // Cloudflare Durable Object binding requirement — must be re-exported from entry point
@@ -26,6 +29,12 @@ async function fetch(request, env) {
     const path = url.pathname.toLowerCase();
     const params = url.searchParams;
 
+    if (path.startsWith('/upload/')) {
+      return handleUploadRoutes(request, env, path, params);
+    }
+    if (path.startsWith('/gif/')) {
+      return handleGifRoutes(request, env, path, params);
+    }
     if (path === '/chat/ws' || path === '/chat/control' || path === '/chat/test') {
       return handleWsRoutes(request, env, path, params);
     }
@@ -49,6 +58,9 @@ async function fetch(request, env) {
     }
     if (path.startsWith('/notifications')) {
       return handleNotificationRoutes(request, env, path);
+    }
+    if (path.startsWith('/presence')) {
+      return handlePresenceRoutes(request, env, path);
     }
     return json(request, { error: 'Not found' }, 404);
 

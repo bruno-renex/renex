@@ -31,10 +31,13 @@ export async function handleChatSend(request, env) {
     epoch,
     sig,
     deviceId: senderDeviceId,
-    replyToId,      // ID der zitierten Nachricht
-    replyFrom,      // Absender der zitierten Nachricht
-    replyIv,        // IV für verschlüsselte Vorschau
-    replyCt,        // Ciphertext der verschlüsselten Vorschau
+    replyToId,           // ID der zitierten Nachricht
+    replyFrom,           // Absender der zitierten Nachricht
+    replyIv,             // IV für verschlüsselte Vorschau
+    replyCt,             // Ciphertext der verschlüsselten Vorschau
+    replyRotationIndex,  // chainIndex der Reply-Preview (Gruppen)
+    attachmentKey,       // R2-Key des verschlüsselten Files (null für GIFs)
+    attachmentType,      // 'photo' | 'file' | 'gif'
   } = body;
 
   // Recipient Validation (early guard)
@@ -60,6 +63,23 @@ export async function handleChatSend(request, env) {
   // Reply-Felder validieren (alle optional, aber wenn vorhanden: Grösse prüfen)
   if (replyToId !== undefined && (typeof replyToId !== "string" || replyToId.length > 64)) {
     return json(request, { error: "replyToId invalid" }, 400);
+  }
+  // Attachment-Felder validieren
+  if (attachmentKey !== undefined && attachmentKey !== null) {
+    if (
+      typeof attachmentKey !== "string" ||
+      attachmentKey.length > 256 ||
+      !attachmentKey.startsWith("files/") ||
+      attachmentKey.includes("..") ||
+      attachmentKey.includes("//")
+    ) {
+      return json(request, { error: "attachmentKey invalid" }, 400);
+    }
+  }
+  if (attachmentType !== undefined && attachmentType !== null) {
+    if (!["photo", "file", "gif"].includes(attachmentType)) {
+      return json(request, { error: "attachmentType invalid" }, 400);
+    }
   }
   if (replyFrom !== undefined && (typeof replyFrom !== "string" || replyFrom.length > 64)) {
     return json(request, { error: "replyFrom invalid" }, 400);
@@ -224,12 +244,18 @@ export async function handleChatSend(request, env) {
   // Gruppen-UUID in WS-Event einbetten (nötig für gsk-Handler + Chat-Routing)
   if (isGroupMessage) msg.groupId = cid;
 
+  // Attachment-Typ in WS-Event einbetten (für Render-Entscheidung beim Empfänger)
+  if (typeof attachmentType === "string" && attachmentType.length > 0) {
+    msg.attachmentType = attachmentType;
+  }
+
   // Reply-Felder (E2E-verschlüsselte Vorschau — Server sieht nur Ciphertext)
   if (typeof replyToId === "string" && replyToId.length > 0) {
-    msg.replyToId  = replyToId;
-    msg.replyFrom  = typeof replyFrom === "string" ? replyFrom : null;
-    msg.replyIv    = typeof replyIv === "string" ? replyIv : null;
-    msg.replyCt    = typeof replyCt === "string" ? replyCt : null;
+    msg.replyToId           = replyToId;
+    msg.replyFrom           = typeof replyFrom === "string" ? replyFrom : null;
+    msg.replyIv             = typeof replyIv === "string" ? replyIv : null;
+    msg.replyCt             = typeof replyCt === "string" ? replyCt : null;
+    msg.replyRotationIndex  = typeof replyRotationIndex === "number" ? replyRotationIndex : null;
   }
 
   // request_gsk: requestedFrom validieren + preservieren damit nur der Betroffene antwortet
@@ -291,8 +317,8 @@ export async function handleChatSend(request, env) {
   if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
     await env.RENEX_DB.prepare(
       `INSERT OR IGNORE INTO messages
-         (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id, reply_to_id, reply_from, reply_iv, reply_ct)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id, reply_to_id, reply_from, reply_iv, reply_ct, reply_rotation_index, attachment_key, attachment_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       msg.id, cid, msg.from, msg.to, msg.ts,
       msg.status ?? "sent",
@@ -311,7 +337,10 @@ export async function handleChatSend(request, env) {
       (typeof replyToId === "string" && replyToId.length > 0) ? replyToId : null,
       (typeof replyFrom === "string" && replyFrom.length > 0) ? replyFrom : null,
       (typeof replyIv === "string" && replyIv.length > 0) ? replyIv : null,
-      (typeof replyCt === "string" && replyCt.length > 0) ? replyCt : null
+      (typeof replyCt === "string" && replyCt.length > 0) ? replyCt : null,
+      (typeof replyRotationIndex === "number") ? replyRotationIndex : null,
+      (typeof attachmentKey === "string" && attachmentKey.length > 0) ? attachmentKey : null,
+      (typeof attachmentType === "string" && attachmentType.length > 0) ? attachmentType : null
     ).run();
   }
 

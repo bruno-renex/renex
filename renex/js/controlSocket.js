@@ -228,6 +228,18 @@ async function processControlMessage(m) {
     return;
   }
 
+  // message_edited — Nachricht wurde bearbeitet
+  if (m.type === "message_edited" && m.messageId) {
+    notify({ type: "MESSAGE_EDITED", messageId: m.messageId, ciphertext: m.ciphertext, rotationIndex: m.rotationIndex, from: m.from, ts: m.ts });
+    return;
+  }
+
+  // 9a) REACTION_UPDATED — Reaktion auf Nachricht hinzugefügt/entfernt
+  if (m.type === "reaction_updated" && m.messageId) {
+    notify({ type: "REACTION_UPDATED", messageId: m.messageId, reactions: m.reactions, convoId: m.convoId, from: m.from, action: m.action, emoji: m.emoji, msgAuthor: m.msgAuthor, groupName: m.groupName });
+    return;
+  }
+
   // 9) GROUP SENDER KEY — empfange GSK eines Gruppen-Members
   if (m.type === "gsk" && m.groupId && Array.isArray(m.payloads)) {
     console.log("🔑 GSK empfangen von:", m.from, "für Gruppe:", m.groupId);

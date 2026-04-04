@@ -50,6 +50,54 @@ const deferredInboundIds = new Set();
 const pendingGskRequests = new Set();
 
 // ======================================================
+// REACTION TOAST
+// ======================================================
+// Einfacher System-Toast (kein Klick-Ziel) — für Fehler, Warnungen, Infos
+function showSystemToast(text, durationMs = 4000) {
+  const container = document.getElementById("chat-toast-container");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.style.cssText = "pointer-events:auto;background:var(--bg-secondary,#1e1e1e);border:1px solid var(--border,#333);border-radius:12px;padding:10px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(0,0,0,.4);animation:chatToastIn .25s ease;";
+  toast.innerHTML = `<span style="font-size:13px;color:var(--text-primary,#fff);">${text}</span>`;
+  if (!document.getElementById("chat-toast-style")) {
+    const s = document.createElement("style");
+    s.id = "chat-toast-style";
+    s.textContent = `@keyframes chatToastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}`;
+    document.head.appendChild(s);
+  }
+  container.appendChild(toast);
+  const dismiss = () => { toast.style.opacity = "0"; toast.style.transition = "opacity .3s"; setTimeout(() => toast.remove(), 300); };
+  setTimeout(dismiss, durationMs);
+}
+
+function showChatToast({ emoji, from, chatTarget, groupName }) {
+  const container = document.getElementById("chat-toast-container");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.style.cssText = "pointer-events:auto;cursor:pointer;background:var(--bg-secondary,#1e1e1e);border:1px solid var(--border,#333);border-radius:12px;padding:10px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(0,0,0,.4);animation:chatToastIn .25s ease;";
+  const fromLabel = from && from !== "undefined" ? from : "Jemand";
+  toast.innerHTML = `<span style="font-size:20px;line-height:1;">${emoji || "💬"}</span><span style="font-size:13px;color:var(--text-primary,#fff);">${fromLabel} hat auf deine Nachricht reagiert</span>`;
+  // CSS-Animation inline einfügen (einmalig)
+  if (!document.getElementById("chat-toast-style")) {
+    const s = document.createElement("style");
+    s.id = "chat-toast-style";
+    s.textContent = `@keyframes chatToastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}`;
+    document.head.appendChild(s);
+  }
+  // Klick → direkt in den Chat
+  toast.addEventListener("click", () => {
+    if (!chatTarget) return;
+    const url = groupName
+      ? `/chat?with=${encodeURIComponent(chatTarget)}&name=${encodeURIComponent(groupName)}`
+      : `/chat?with=${encodeURIComponent(chatTarget)}`;
+    window.location.href = url;
+  });
+  container.appendChild(toast);
+  const dismiss = () => { toast.style.opacity = "0"; toast.style.transition = "opacity .3s"; setTimeout(() => toast.remove(), 300); };
+  setTimeout(dismiss, 4000);
+}
+
+// ======================================================
 // CMK v2 – Epoch Definition (GLOBAL)
 // ======================================================
 
@@ -190,6 +238,18 @@ try {
   if (rawName) _initialGroupName = decodeURIComponent(rawName).slice(0, 64);
 } catch {}
 
+// Reply-Kontext aus Gruppen-Chat (persönliche Antwort per DM)
+let _initialReplyFrom = null;
+let _initialReplyText = null;
+try {
+  const rf = params.get("replyFrom");
+  const rt = params.get("replyText");
+  if (rf && rt) {
+    _initialReplyFrom = decodeURIComponent(rf).slice(0, 64);
+    _initialReplyText = decodeURIComponent(rt).slice(0, 200);
+  }
+} catch {}
+
 if (!withUser) {
   alert(lang.noChatPartner);
   throw new Error("withUser fehlt");
@@ -276,6 +336,17 @@ if (event?.type === "REACTION_UPDATED" || event?.type === "reaction_updated") {
     reactionsCache.set(messageId, reactions);
     const el = document.querySelector(`[data-id="${messageId}"]`);
     if (el) renderReactionBar(el, messageId);
+  }
+  // 🔔 Toast: nur wenn meine Nachricht reagiert wurde
+  if (event.action === "added" && event.msgAuthor && event.from) {
+    const me = getMyUser();
+    if (me && event.msgAuthor.toLowerCase() === me.toLowerCase() && event.from.toLowerCase() !== me.toLowerCase()) {
+      // Gruppe (UUID) → zum Gruppen-Chat; DM → zum Chat mit dem Reactor
+      const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(event.convoId || "");
+      const chatTarget = isGroup ? event.convoId : event.from;
+      const groupName  = isGroup ? (event.groupName || null) : null;
+      showChatToast({ emoji: event.emoji || "💬", from: event.from, chatTarget, groupName });
+    }
   }
   return;
 }
@@ -490,11 +561,19 @@ if (event?.type === "NEW_MESSAGE") {
     if (event.action === "propose") {
       showAutoDeleteProposal(event.days);
     } else if (event.action === "accept") {
-      updateAutoDeleteHeaderLabel(event.days);
-      showAutoDeleteBanner(`✅ Auto-Delete aktiv: ${autoDeleteLabel(event.days)}`, "success");
+      const activeDays = event.days || null; // days=0 → null (deaktiviert)
+      updateAutoDeleteHeaderLabel(activeDays, true);
+      showAutoDeleteBanner(activeDays ? `✅ Auto-Delete aktiv: ${autoDeleteLabel(activeDays)}` : "✅ Auto-Delete deaktiviert", "success");
     } else if (event.action === "decline" || event.action === "cancel") {
-      updateAutoDeleteHeaderLabel(null);
-      showAutoDeleteBanner("🗑️ Auto-Delete deaktiviert", "info");
+      const restoreDays = event.original_days || null;
+      if (restoreDays) {
+        // Peer hat abgelehnt → altes aktives Setting wiederherstellen
+        updateAutoDeleteHeaderLabel(restoreDays, true);
+        showAutoDeleteBanner("❌ Vorschlag abgelehnt – Auto-Delete bleibt aktiv", "info");
+      } else {
+        updateAutoDeleteHeaderLabel(null, true);
+        showAutoDeleteBanner("🗑️ Auto-Delete deaktiviert", "info");
+      }
     }
     return;
   }
@@ -580,7 +659,7 @@ function clearReplyBar() {
 replyBarCancel?.addEventListener("click", clearReplyBar);
 
 // ── Reaktionen ────────────────────────────────────────────
-const REACTION_EMOJIS = ["👍🏽","👎🏽","😂","🔥","💀","❤️"];
+const REACTION_EMOJIS = ["💀","🔥","🗿","😭","🫡","💯","🤝"];
 // Cache: messageId → { emoji: [handles] }
 const reactionsCache = new Map();
 
@@ -623,6 +702,162 @@ async function sendReaction(messageId, emoji, div) {
       renderReactionBar(div, messageId);
     }
   } catch (e) { console.warn("React failed", e); }
+}
+
+// ======================================================
+// CONTEXT MENU (Long-Press + Right-Click)
+// ======================================================
+let _ctxMenu = null;
+
+function closeContextMenu() {
+  if (_ctxMenu) { _ctxMenu.remove(); _ctxMenu = null; }
+}
+
+document.addEventListener("click",  closeContextMenu);
+document.addEventListener("scroll", closeContextMenu, { passive: true });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeContextMenu(); });
+
+function showContextMenu(div, { id, from, textEl, ts }) {
+  closeContextMenu();
+  const isOwn = from === getMyUser();
+  const EDIT_MS = 15 * 60 * 1000;
+  const canEdit = isOwn && ts && Date.now() - Number(ts) < EDIT_MS;
+  const canReact = !isOwn && !!id; // Reaktionen nur auf fremde Nachrichten
+  const canReply = !!id;
+  const canDelete = isOwn && id;
+
+  const menu = document.createElement("div");
+  menu.id = "msg-context-menu";
+  _ctxMenu = menu;
+
+  // Emoji-Reihe (nur für fremde Nachrichten)
+  if (canReact) {
+    const emojiRow = document.createElement("div");
+    emojiRow.className = "ctx-emoji-row";
+    const myReactions = (reactionsCache.get(id) || {});
+    REACTION_EMOJIS.forEach(emoji => {
+      const btn = document.createElement("button");
+      btn.className = "ctx-emoji-btn";
+      const handles = myReactions[emoji] || [];
+      if (handles.includes(getMyUser())) btn.classList.add("active");
+      btn.textContent = emoji;
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        closeContextMenu();
+        const res = await apiFetch("/chat/react", {
+          method: "POST",
+          body: JSON.stringify({ messageId: id, emoji })
+        });
+        if (res.reactions) { reactionsCache.set(id, res.reactions); renderReactionBar(div, id); }
+      });
+      emojiRow.appendChild(btn);
+    });
+    menu.appendChild(emojiRow);
+  }
+
+  // Antworten
+  if (canReply) {
+    const replyItem = document.createElement("div");
+    replyItem.className = "ctx-item";
+    replyItem.innerHTML = '<span class="ctx-item-icon">↩️</span> Antworten';
+    replyItem.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeContextMenu();
+      showReplyBar(id, from, textEl?.textContent || "");
+    });
+    menu.appendChild(replyItem);
+  }
+
+  // Bearbeiten (nur eigene, innerhalb 15 min)
+  if (canEdit) {
+    const editItem = document.createElement("div");
+    editItem.className = "ctx-item";
+    editItem.innerHTML = '<span class="ctx-item-icon">✏️</span> Bearbeiten';
+    editItem.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeContextMenu();
+      startInlineEdit(div, id, textEl?.textContent || "");
+    });
+    menu.appendChild(editItem);
+  }
+
+  // Divider + Löschen
+  if (canDelete) {
+    if (canReply || canEdit) {
+      const divider = document.createElement("div");
+      divider.className = "ctx-divider";
+      menu.appendChild(divider);
+    }
+    const delItem = document.createElement("div");
+    delItem.className = "ctx-item danger";
+    delItem.innerHTML = '<span class="ctx-item-icon">🗑️</span> Löschen';
+    delItem.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeContextMenu();
+      if (confirm(lang.confirmDeleteMessage)) deleteMessage(id);
+    });
+    menu.appendChild(delItem);
+  }
+
+  if (!menu.children.length) return; // nichts anzuzeigen
+
+  document.body.appendChild(menu);
+
+  // Position berechnen
+  const rect = div.getBoundingClientRect();
+  const mw = menu.offsetWidth || 180;
+  const mh = menu.offsetHeight || 160;
+  let x = isOwn ? rect.right - mw : rect.left;
+  let y = rect.top - mh - 6;
+  if (y < 8) y = rect.bottom + 6;
+  if (x + mw > window.innerWidth - 8) x = window.innerWidth - mw - 8;
+  if (x < 8) x = 8;
+  menu.style.left = x + "px";
+  menu.style.top  = y + "px";
+}
+
+function attachContextMenu(div, opts) {
+  let longPressTimer = null;
+  let _didScroll = false;
+
+  // Long-Press (Mobile/Touch only)
+  div.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (e.pointerType === "mouse") return; // Desktop: Linksklick statt Long-Press
+    _didScroll = false;
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      if (!_didScroll) showContextMenu(div, getLiveOpts(div, opts));
+    }, 500);
+  }, { passive: true });
+
+  div.addEventListener("pointerup",    () => { clearTimeout(longPressTimer); longPressTimer = null; });
+  div.addEventListener("pointercancel",() => { clearTimeout(longPressTimer); longPressTimer = null; });
+  div.addEventListener("pointermove",  (e) => {
+    if (Math.abs(e.movementX) > 5 || Math.abs(e.movementY) > 5) {
+      _didScroll = true;
+      clearTimeout(longPressTimer); longPressTimer = null;
+    }
+  }, { passive: true });
+
+  // Linksklick (Desktop + Mobile als Alternative)
+  div.addEventListener("click", (e) => {
+    if (e.target.closest(".sender-name")) return; // Sender-Popover hat Vorrang
+    if (e.target.closest(".reaction-pill")) return; // Reaction-Pills stoppen selbst
+    if (e.target.closest(".reply-quote")) return;   // Quote-Block scrollt zur Nachricht
+    if (e.target.closest(".reaction-bar")) return;  // Reaction-Bar ignorieren
+    e.stopPropagation();
+    showContextMenu(div, getLiveOpts(div, opts));
+  });
+
+  // Rechtsklick: nichts tun (Browser-Default unterdrücken)
+  div.addEventListener("contextmenu", (e) => { e.preventDefault(); });
+}
+
+// textEl live auslesen damit auch nach Edit der aktuelle Text kommt
+function getLiveOpts(div, opts) {
+  const liveTextEl = div.querySelector(".msg-text") || opts.textEl;
+  return { ...opts, textEl: liveTextEl };
 }
 
 function showReactionPicker(div, messageId) {
@@ -760,6 +995,69 @@ const INBOX_KEY_TTL = 30_000;   // 30s: kurz genug dass neue Devices erscheinen
 
 export function invalidateInboxKeyCache(handle) {
   inboxKeyCache.delete(handle);
+}
+
+// ── Presence Helpers ──────────────────────────────────────────────────────
+// 90s In-Memory-Cache: reduziert KV-Reads um ~66%
+const _presenceCache = {};          // handle → { status, ts }
+const PRESENCE_CACHE_TTL = 90_000;  // 90 Sekunden
+
+async function fetchPresence(handles) {
+  if (!handles?.length) return {};
+  try {
+    const unique = [...new Set(handles.map(h => h.toLowerCase()))].filter(Boolean);
+    const now = Date.now();
+
+    // Cache-Hit: alle Handles noch frisch?
+    const stale = unique.filter(h => !_presenceCache[h] || now - _presenceCache[h].ts > PRESENCE_CACHE_TTL);
+    if (stale.length === 0) {
+      // Alle aus Cache zurückgeben
+      return Object.fromEntries(unique.map(h => [h, _presenceCache[h].status]));
+    }
+
+    // Nur veraltete Handles fetchen
+    const fetched = await apiFetch(`/presence?handles=${encodeURIComponent(stale.join(","))}`);
+    // Cache updaten
+    for (const h of stale) {
+      _presenceCache[h] = { status: fetched?.[h] ?? null, ts: now };
+    }
+    // Ergebnis zusammenführen (Cache + frisch)
+    return Object.fromEntries(unique.map(h => [h, _presenceCache[h]?.status ?? null]));
+  } catch { return {}; }
+}
+
+function formatLastSeen(ts) {
+  if (!ts) return "";
+  const diff = Date.now() - Number(ts);
+  if (diff < 60_000)      return "gerade eben";
+  if (diff < 3_600_000)   return `vor ${Math.floor(diff / 60_000)} Min.`;
+  if (diff < 86_400_000)  return `vor ${Math.floor(diff / 3_600_000)} Std.`;
+  const days = Math.floor(diff / 86_400_000);
+  return `vor ${days} Tag${days === 1 ? "" : "en"}`;
+}
+
+function presenceLabel(status) {
+  if (!status) return "";
+  if (status.online) return "🟢 Online";
+  if (status.lastSeen) return `⚫ ${formatLastSeen(status.lastSeen)}`;
+  return "";
+}
+
+/// DM-Header: Presence-Status anzeigen und alle 90s refreshen
+async function initDMPresence() {
+  const subEl = document.getElementById("dm-presence-status");
+  if (!subEl || !withUser || isGroupConversation(withUser)) return;
+  async function update() {
+    // Cache umgehen für DM-Header: immer frisch lesen
+    delete _presenceCache[withUser.toLowerCase()];
+    const p = await fetchPresence([withUser]);
+    const status = p?.[withUser];
+    if (!status) { subEl.textContent = ""; return; }
+    subEl.textContent = presenceLabel(status);
+    subEl.style.color = status.online ? "#4ade80" : "var(--text-secondary)";
+  }
+  await update();
+  setInterval(update, 90_000);
 }
 
 // Akzeptierte Kontakte für Invite-Autocomplete (lazy, gecacht pro Session)
@@ -1030,6 +1328,137 @@ async function e2eDecrypt(aesKey, ivB64, ctB64) {
 }
 
 // ======================================================
+// FILE UPLOAD: Encrypt / Compress / Upload zu R2
+// ======================================================
+
+// Binary ArrayBuffer → AES-GCM verschlüsseln
+async function e2eEncryptBytes(aesKey, bytes) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, bytes);
+  return { ivB64: abToB64(iv.buffer), ctBytes: new Uint8Array(ct) };
+}
+
+// AES-256-GCM Key erzeugen (ephemeral, pro File)
+async function generateFileKey() {
+  return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+}
+
+// AES Key → Base64
+async function exportKeyB64(aesKey) {
+  const raw = await crypto.subtle.exportKey("raw", aesKey);
+  return abToB64(raw);
+}
+
+// Base64 → AES Key
+async function importKeyB64(b64) {
+  const raw = b64ToAb(b64);
+  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["decrypt"]);
+}
+
+// Bild clientseitig komprimieren (max 1200px, JPEG 80%)
+async function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objUrl);
+      const MAX_PX = 1200;
+      const scale = Math.min(1, MAX_PX / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => {
+        if (!blob) { reject(new Error("Compression failed")); return; }
+        blob.arrayBuffer().then(resolve).catch(reject);
+      }, "image/jpeg", 0.80);
+    };
+    img.onerror = () => { URL.revokeObjectURL(objUrl); reject(new Error("Image load failed")); };
+    img.src = objUrl;
+  });
+}
+
+// Datei hochladen: komprimieren → verschlüsseln → Worker-Upload → R2
+// Gibt { attachmentPayloadJson, r2Key, attachmentType } zurück
+async function uploadFile(file, attachmentType) {
+  const MAX_SIZE = 10 * 1024 * 1024;
+  if (file.size > MAX_SIZE) {
+    showSystemToast("⚠️ Datei zu gross (max. 10 MB)");
+    return null;
+  }
+
+  let fileBytes;
+  if (attachmentType === "photo") {
+    try { fileBytes = await compressImage(file); }
+    catch { fileBytes = await file.arrayBuffer(); }
+  } else {
+    fileBytes = await file.arrayBuffer();
+  }
+
+  // Ephemeral File-Key erzeugen
+  const fileKey = await generateFileKey();
+  const { ivB64: fileIvB64, ctBytes } = await e2eEncryptBytes(fileKey, fileBytes);
+  const fileKeyB64 = await exportKeyB64(fileKey);
+
+  // convoId bestimmen
+  const isGroup = isGroupConversation(withUser);
+  const myConvoId = isGroup ? withUser : [getMyUser(), withUser].sort().join(":");
+
+  // Encrypted Bytes direkt durch Worker zu R2 hochladen
+  let r2Key;
+  try {
+    const uploadRes = await fetch("https://api.renex.id/upload/file", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "X-Mime-Type": file.type || "application/octet-stream",
+        "X-File-Name": file.name,
+        "X-File-Size": String(ctBytes.byteLength),
+        "X-Attachment-Type": attachmentType,
+        "X-Convo-Id": myConvoId,
+      },
+      body: ctBytes,
+    });
+    if (!uploadRes.ok) {
+      const err = await uploadRes.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${uploadRes.status}`);
+    }
+    const data = await uploadRes.json();
+    r2Key = data.r2Key;
+  } catch (e) {
+    console.error("[upload] Fehler:", e);
+    showSystemToast(`⚠️ Upload fehlgeschlagen: ${e.message}`);
+    return null;
+  }
+
+  // Attachment-Payload (geht in die E2E-verschlüsselte Nachricht)
+  const attachmentPayloadJson = JSON.stringify({
+    r2Key,
+    fileKeyB64,
+    fileIvB64,
+    mimeType: file.type || "application/octet-stream",
+    fileName: file.name,
+    fileSize: fileBytes.byteLength,
+  });
+
+  return { attachmentPayloadJson, r2Key, attachmentType };
+}
+
+// Encrypted R2 File herunterladen und dekryptieren → ArrayBuffer
+async function downloadAndDecryptFile(r2Key, fileKeyB64, fileIvB64) {
+  const res = await fetch(`https://api.renex.id/upload/download?key=${encodeURIComponent(r2Key)}`, {
+    credentials: "include"
+  });
+  if (!res.ok) throw new Error("Download failed");
+  const ctBytes = await res.arrayBuffer();
+  const fileKey = await importKeyB64(fileKeyB64);
+  const iv = new Uint8Array(b64ToAb(fileIvB64));
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, fileKey, ctBytes);
+  return plain;
+}
+
+// ======================================================
 // E2E: PUBLIC KEY UPLOAD (NUR HIER)
 // ======================================================
 async function uploadMyPublicKeyIfNeeded() {
@@ -1238,8 +1667,15 @@ if (deferredInboundMessages.length === 0) return;
         // Nach MAX_INBOUND_RETRIES Versuchen → permanent failed
         const el = document.querySelector(`[data-id="${m.id}"]`);
         if (el) {
-          const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
-          if (textEl) textEl.textContent = decryptFailedText(m.ts);
+          if (isAutoDeleted(m.ts)) {
+            const sysDiv = document.createElement("div");
+            sysDiv.className = "system";
+            sysDiv.textContent = lang.messageExpired || "⏱ Nachricht automatisch gelöscht";
+            el.replaceWith(sysDiv);
+          } else {
+            const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
+            if (textEl) textEl.textContent = decryptFailedText(m.ts);
+          }
         }
         deferredInboundIds.delete(m.id);
         deferredInboundRetryCount.delete(m.id);
@@ -1262,8 +1698,15 @@ if (deferredInboundMessages.length === 0) return;
       }
       const el = document.querySelector(`[data-id="${m.id}"]`);
       if (el) {
-        const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
-        if (textEl) textEl.textContent = decryptFailedText(m.ts);
+        if (isAutoDeleted(m.ts)) {
+          const sysDiv = document.createElement("div");
+          sysDiv.className = "system";
+          sysDiv.textContent = lang.messageExpired || "⏱ Nachricht automatisch gelöscht";
+          el.replaceWith(sysDiv);
+        } else {
+          const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
+          if (textEl) textEl.textContent = decryptFailedText(m.ts);
+        }
       }
       if (m?.id) deferredInboundIds.delete(m.id);
       deferredInboundRetryCount.delete(m.id);
@@ -1279,10 +1722,36 @@ if (deferredInboundMessages.length === 0) return;
     // Existierende Platzhalter-Bubble updaten (kein Duplikat)
     const existingBubble = m.id ? document.querySelector(`[data-id="${m.id}"]`) : null;
     if (existingBubble) {
-      const textEl = existingBubble.querySelector("div:not(.sender-name):not(.timestamp)");
+      // .msg-text explizit verwenden — verhindert dass reply-quote überschrieben wird
+      const textEl = existingBubble.querySelector(".msg-text");
       if (textEl) textEl.textContent = text;
     } else {
-      renderMessage({ id: m.id, from: m.from, message: text, ts: m.ts, status: m.status });
+      // msg: m mitgeben damit Reply-Quote-Block korrekt gerendert wird
+      m.replyPlaintext = null;
+      if (m.replyToId && m.replyIv && m.replyCt) {
+        try {
+          if (isGroupConversation(withUser)) {
+            const idx = m.replyRotationIndex ?? (m.rotationIndex > 0 ? m.rotationIndex - 1 : 0);
+            const plain = await decryptGroupMessage(withUser, m.from, m.replyIv, m.replyCt, idx);
+            if (typeof plain === "string" && plain !== "__decrypt_failed__") m.replyPlaintext = plain;
+          } else if (sessionKeyBytes) {
+            const rMk = await deriveMessageKey(sessionKeyBytes, dmSessionId(getMyUser(), withUser), m.epoch ?? 0);
+            const plain = await e2eDecrypt(rMk, m.replyIv, m.replyCt);
+            if (typeof plain === "string" && plain !== "__decrypt_failed__") m.replyPlaintext = plain;
+          }
+        } catch {}
+      }
+      // Attachment-Erkennung: ist der decryptierte Text ein JSON-Attachment-Payload?
+      let attachment = null;
+      let displayText = text;
+      if (m.attachmentType && text && text.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(text);
+          attachment = { type: m.attachmentType, payload: parsed };
+          displayText = ""; // kein Text in Attachment-Nachrichten
+        } catch {}
+      }
+      renderMessage({ id: m.id, from: m.from, message: displayText, ts: m.ts, status: m.status, msg: m, attachment });
     }
     savePreviewCache(previewConvoId(withUser), { text, ts: m.ts || Date.now(), from: m.from });
   }
@@ -1348,6 +1817,7 @@ console.log("🔄 Chat UI State reset");
   inputEl = document.getElementById("msg-input");
   warningEl = document.getElementById("length-warning");
   titleEl = document.getElementById("chat-with");
+  initAttachmentUI();
 
   if (!messagesEl || !indicatorEl || !unreadCountEl || !sendBtn || !inputEl || !titleEl) {
     console.error("DOM nicht bereit");
@@ -1422,18 +1892,25 @@ if (now - lastSendTime < SEND_COOLDOWN_MS) {
     updateSendButton(); // ✅ NUR freigeben wenn E2E ready
     }, 15000);
     
-    // Optimistic UI
+    // Optimistic UI — Reply-State mitgeben damit Quote-Block sofort erscheint
     const tempId = `tmp-${now}-${Math.random().toString(16).slice(2)}`;
     const pendingDiv = renderMessage({
-      from: getMyUser(),
-      message: text,
+      from:          getMyUser(),
+      message:       text,
       tempId,
-      status: "pending"
+      ts:            now,
+      status:        "pending",
+      replyToId:     _replyState?.id       || null,
+      replyFrom:     _replyState?.from     || null,
+      replyPlaintext: _replyState?.plaintext || null
     });
     if (pendingDiv) pendingByTempId.set(tempId, pendingDiv);
 
+    // _replyState sichern VOR clearReplyBar (sonst ist es null beim Encrypt)
+    const _savedReplyState = _replyState ? { ..._replyState } : null;
+
     inputEl.value = "";
-    clearReplyBar(); // Reply-State nach dem Senden zurücksetzen
+    clearReplyBar();
     scrollToBottom();
 
     // 🔐 SAFETY: merkt, ob der Send-Vorgang sauber beendet wurde
@@ -1448,14 +1925,17 @@ let res;
 if (isGroupConversation(withUser)) {
 
   // ── GRUPPE ─────────────────────────────────────────
-  const encrypted = await encryptGroupMessage(withUser, getMyUser(), text);
-
-  // Reply-Preview E2E verschlüsseln (Gruppe: gleicher GSK)
+  // Reply ZUERST verschlüsseln → chainIndex N
+  // Hauptnachricht danach → chainIndex N+1
+  // So stimmt der rotationIndex beim Empfänger
   let replyFields = {};
-  if (_replyState) {
-    const replyEncrypted = await encryptGroupMessage(withUser, getMyUser(), _replyState.plaintext.slice(0, 100));
-    replyFields = { replyToId: _replyState.id, replyFrom: _replyState.from, replyIv: replyEncrypted.ivB64, replyCt: replyEncrypted.ctB64 };
+  if (_savedReplyState) {
+    const replyEncrypted = await encryptGroupMessage(withUser, getMyUser(), _savedReplyState.plaintext.slice(0, 100));
+    replyFields = { replyFrom: _savedReplyState.from || getMyUser(), replyIv: replyEncrypted.ivB64, replyCt: replyEncrypted.ctB64, replyRotationIndex: replyEncrypted.chainIndex };
+    if (_savedReplyState.id) replyFields.replyToId = _savedReplyState.id;
   }
+
+  const encrypted = await encryptGroupMessage(withUser, getMyUser(), text);
 
   res = await apiFetch("/chat/send", {
     method: "POST",
@@ -1496,9 +1976,11 @@ if (isGroupConversation(withUser)) {
 
   // Reply-Preview E2E verschlüsseln (DM: gleicher MK)
   let replyFieldsDM = {};
-  if (_replyState) {
-    const { ivB64: rIv, ctB64: rCt } = await e2eEncrypt(mk, _replyState.plaintext.slice(0, 100));
-    replyFieldsDM = { replyToId: _replyState.id, replyFrom: _replyState.from, replyIv: rIv, replyCt: rCt };
+  if (_savedReplyState) {
+    const { ivB64: rIv, ctB64: rCt } = await e2eEncrypt(mk, _savedReplyState.plaintext.slice(0, 100));
+    replyFieldsDM = { replyFrom: _savedReplyState.from, replyIv: rIv, replyCt: rCt };
+    // replyToId nur mitsenden wenn vorhanden (null = cross-chat reply ohne echte Message-ID)
+    if (_savedReplyState.id) replyFieldsDM.replyToId = _savedReplyState.id;
   }
 
   res = await apiFetch("/chat/send", {
@@ -1572,17 +2054,11 @@ if (div) {
   renderedMessageIds.add(saved.id);   // gegen Duplikate beim Polling
   pendingByTempId.delete(tempId);     // ⬅️ DAS IST DER SCHLÜSSEL
 
-  // 🗑️ Delete-Button nachträglich hinzufügen (war während "pending" blockiert)
-  if (!div.querySelector(".delete-btn")) {
-    const delBtn = document.createElement("button");
-    delBtn.className = "delete-btn";
-    delBtn.title = lang.deleteMessageTitle;
-    delBtn.textContent = "×";
-    delBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (confirm(lang.confirmDeleteMessage)) deleteMessage(saved.id);
-    });
-    div.appendChild(delBtn);
+  // Context Menu nachträglich aktivieren (war während "pending" blockiert)
+  if (!div._ctxAttached) {
+    div._ctxAttached = true;
+    const textEl = div.querySelector(".msg-text");
+    attachContextMenu(div, { id: saved.id, from: getMyUser(), textEl, ts: saved.ts });
   }
 }
 
@@ -1700,6 +2176,39 @@ function showSystemMessage(text) {
   scrollToBottom();
 }
 
+// ======================================================
+// 🗑️ AUTO-DELETE SWEEP — ersetzt abgelaufene Nachrichten live
+// ======================================================
+let _sweepInterval = null;
+
+function sweepExpiredMessages() {
+  if (!messagesEl || !_autoDeleteDays) return;
+  // Alle Nachrichten-Bubbles (eigene + empfangene) erfassen
+  const bubbles = Array.from(messagesEl.querySelectorAll("[data-ts]"))
+    .filter(el => el.classList.contains("me") || el.classList.contains("other"));
+  for (const el of bubbles) {
+    const ts = Number(el.dataset.ts);
+    if (!ts || !isAutoDeleted(ts)) continue;
+    // Element direkt in System-Message umwandeln (robuster als replaceWith)
+    el.className = "system";
+    el.removeAttribute("data-id");
+    el.removeAttribute("data-temp-id");
+    el.removeAttribute("data-ts");
+    el.innerHTML = "";
+    el.textContent = lang.messageExpired || "⏱ Nachricht automatisch gelöscht";
+  }
+}
+
+function startExpirySwep() {
+  if (_sweepInterval) return;
+  // Alle 10 Sekunden prüfen ob Nachrichten abgelaufen sind
+  _sweepInterval = setInterval(sweepExpiredMessages, 10_000);
+}
+
+function stopExpirySweep() {
+  if (_sweepInterval) { clearInterval(_sweepInterval); _sweepInterval = null; }
+}
+
 function isUserAtBottom() {
   if (!messagesEl) return true; // ⬅️ WICHTIG
   const threshold = 80;
@@ -1712,9 +2221,15 @@ function isUserAtBottom() {
 // 🗑️ AUTO-DELETE UI
 // ======================================================
 function autoDeleteLabel(days) {
-  if (!days) return "Aus";
-  const map = { 1: "1 Tag", 7: "1 Woche", 28: "4 Wochen", 90: "90 Tage" };
-  return map[days] ?? `${days} Tage`;
+  if (!days) return lang.autoDeleteOff || "Aus";
+  const d = Number(days);
+  if (d <= 0.05) return lang.autoDeleteOneHour || "1h";
+  const map = {
+    1:  lang.autoDeleteOneDay      || "24h",
+    7:  lang.autoDeleteOneWeek     || "7 Tage",
+    30: lang.autoDeleteThirtyDays  || "30 Tage",
+  };
+  return map[d] ?? `${d} Tage`;
 }
 
 function showAutoDeleteBanner(text, type = "info") {
@@ -1745,7 +2260,11 @@ function showAutoDeleteProposal(days) {
   adStrong1.textContent = withUser;
   const adStrong2 = document.createElement("strong");
   adStrong2.textContent = autoDeleteLabel(days);
-  adTextSpan.append("🗑️ ", adStrong1, " schlägt Auto-Delete vor: ", adStrong2);
+  if (days) {
+    adTextSpan.append("🗑️ ", adStrong1, " schlägt Auto-Delete vor: ", adStrong2);
+  } else {
+    adTextSpan.append("🗑️ ", adStrong1, " möchte Auto-Delete deaktivieren");
+  }
   const adAcceptBtn = document.createElement("button");
   adAcceptBtn.id = "ad-accept";
   adAcceptBtn.style.cssText = "padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;";
@@ -1761,8 +2280,9 @@ function showAutoDeleteProposal(days) {
     try {
       await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action: "accept", days }) });
       bar.remove();
-      showAutoDeleteBanner(`✅ Auto-Delete aktiv: ${autoDeleteLabel(days)}`, "success");
-      updateAutoDeleteHeaderLabel(days);
+      const activeDays = days || null; // days=0 → null (deaktiviert)
+      updateAutoDeleteHeaderLabel(activeDays, true);
+      showAutoDeleteBanner(activeDays ? `✅ Auto-Delete aktiv: ${autoDeleteLabel(activeDays)}` : "✅ Auto-Delete deaktiviert", "success");
     } catch (e) { console.warn("Auto-Delete accept fehlgeschlagen", e); }
   });
 
@@ -1783,11 +2303,16 @@ function isAutoDeleted(ts) {
 }
 
 function decryptFailedText(ts) {
-  return isAutoDeleted(ts) ? "🗑️ Nachricht gelöscht" : lang.decryptFailed;
+  return isAutoDeleted(ts) ? (lang.messageExpired || "⏱ Nachricht automatisch gelöscht") : lang.decryptFailed;
 }
 
-function updateAutoDeleteHeaderLabel(days) {
+// active=true  → Sweep starten (beide Seiten haben akzeptiert)
+// active=false → nur Label/days setzen, kein Sweep (z.B. pending-Vorschlag)
+function updateAutoDeleteHeaderLabel(days, active = true) {
   _autoDeleteDays = days || null;
+  if (active) {
+    if (_autoDeleteDays) { startExpirySwep(); } else { stopExpirySweep(); }
+  }
   const lbl = document.getElementById("chat-autodelete-label");
   if (lbl) lbl.textContent = days ? autoDeleteLabel(days) : "Aus";
 
@@ -1810,12 +2335,25 @@ async function initAutoDeleteUI() {
   try {
     if (isGroup) {
       const s = await apiFetch(`/groups/auto-delete?groupId=${encodeURIComponent(withUser)}`);
-      if (s?.status === "active") updateAutoDeleteHeaderLabel(s.days);
+      if (s?.status === "active") { updateAutoDeleteHeaderLabel(s.days); startExpirySwep(); }
       amGroupAdmin = s?.myRole === "admin";
     } else {
       const s = await apiFetch(`/chat/auto-delete?peer=${encodeURIComponent(withUser)}`);
-      if (s?.status === "active") updateAutoDeleteHeaderLabel(s.days);
-      if (s?.status === "pending" && s?.proposed_by !== getMyUser()) showAutoDeleteProposal(s.days);
+      if (s?.status === "active") {
+        updateAutoDeleteHeaderLabel(s.days, true); // aktiv → Sweep starten
+      } else if (s?.status === "pending" && s?.proposed_by === getMyUser()) {
+        if (!s.days) {
+          // Vorschlag: Deaktivieren — original_days für Sweep nutzen falls vorhanden
+          if (s.original_days) {
+            updateAutoDeleteHeaderLabel(s.original_days, true); // Sweep mit altem Wert aktiv halten
+          }
+          showAutoDeleteBanner("📤 Vorschlag gesendet: Auto-Delete deaktivieren", "info");
+        } else {
+          updateAutoDeleteHeaderLabel(s.days, false); // eigener Vorschlag → days setzen, kein Sweep
+        }
+      } else if (s?.status === "pending") {
+        showAutoDeleteProposal(s.days); // eingehender Vorschlag → Banner zeigen
+      }
     }
   } catch {}
 
@@ -1939,19 +2477,262 @@ async function initAutoDeleteUI() {
           updateAutoDeleteHeaderLabel(days);
           showAutoDeleteBanner(days ? `✅ Auto-Delete: ${autoDeleteLabel(days)}` : "🗑️ Auto-Delete deaktiviert", "success");
         } else {
-          // DM: Konsens-Vorschlag senden
-          const action = days === null ? "cancel" : "propose";
-          await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action, days }) });
-          updateAutoDeleteHeaderLabel(days);
-          if (action === "cancel") {
-            showAutoDeleteBanner("🗑️ Auto-Delete deaktiviert", "info");
+          // DM: Konsens-Vorschlag senden — auch "Aus" muss vom Peer akzeptiert werden
+          const daysPayload = days === null ? 0 : days;
+          await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action: "propose", days: daysPayload }) });
+          if (days === null) {
+            // Vorschlag: Auto-Delete deaktivieren — Sweep läuft weiter bis Peer akzeptiert
+            showAutoDeleteBanner("📤 Vorschlag gesendet: Auto-Delete deaktivieren", "info");
           } else {
+            // _autoDeleteDays setzen (für isAutoDeleted-Checks), aber Sweep NICHT starten
+            // — Sweep startet erst wenn Peer akzeptiert (status: active)
+            updateAutoDeleteHeaderLabel(days, false);
             showAutoDeleteBanner(`📤 Vorschlag gesendet: ${autoDeleteLabel(days)}`, "info");
           }
         }
       } catch (err) { console.warn("Auto-Delete fehlgeschlagen", err); }
     });
   });
+}
+
+// ======================================================
+// 📎 ATTACHMENT UI: Foto, Datei, GIF
+// ======================================================
+function initAttachmentUI() {
+  const photoInput    = document.getElementById("photo-input");
+  const fileInput     = document.getElementById("file-input");
+  const photoBtn      = document.getElementById("attach-photo-btn");
+  const fileBtn       = document.getElementById("attach-file-btn");
+  const gifBtn        = document.getElementById("attach-gif-btn");
+
+  if (!photoInput || !fileInput || !photoBtn || !fileBtn || !gifBtn) return;
+
+  // Guard: nur einmal registrieren
+  if (photoBtn.dataset.bound === "1") return;
+  photoBtn.dataset.bound = "1";
+
+  photoBtn.addEventListener("click", () => photoInput.click());
+  fileBtn.addEventListener("click",  () => fileInput.click());
+  gifBtn.addEventListener("click",   () => openGifModal());
+
+  photoInput.addEventListener("change", (e) => {
+    const f = e.target.files?.[0];
+    if (f) handleFileSelected(f, "photo");
+    photoInput.value = "";
+  });
+  fileInput.addEventListener("change", (e) => {
+    const f = e.target.files?.[0];
+    if (f) handleFileSelected(f, "file");
+    fileInput.value = "";
+  });
+}
+
+async function handleFileSelected(file, attachmentType) {
+  if (!file) return;
+  const MAX_SIZE = 10 * 1024 * 1024;
+  if (file.size > MAX_SIZE) {
+    showSystemToast("⚠️ Datei zu gross (max. 10 MB)");
+    return;
+  }
+
+  // Optimistic: Pending-Bubble zeigen
+  const tempId = `tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const pendingDiv = renderMessage({
+    from: getMyUser(),
+    message: "",
+    tempId,
+    ts: Date.now(),
+    status: "pending",
+    attachment: { type: attachmentType, payload: null }
+  });
+  if (pendingDiv) pendingByTempId.set(tempId, pendingDiv);
+  scrollToBottom();
+
+  try {
+    // Upload + Verschlüsselung
+    const result = await uploadFile(file, attachmentType);
+    if (!result) {
+      pendingDiv?.remove();
+      pendingByTempId.delete(tempId);
+      return;
+    }
+
+    const { attachmentPayloadJson, r2Key } = result;
+    await sendAttachmentMessage(attachmentPayloadJson, r2Key, attachmentType, tempId, pendingDiv);
+  } catch (err) {
+    console.error("[upload] Unhandled error in handleFileSelected:", err);
+    showSystemToast(`⚠️ Fehler: ${err.message}`);
+    pendingDiv?.remove();
+    pendingByTempId.delete(tempId);
+  }
+}
+
+async function sendAttachmentMessage(attachmentPayloadJson, r2Key, attachmentType, tempId, pendingDiv) {
+  const now = Date.now();
+  try {
+    let res;
+    if (isGroupConversation(withUser)) {
+      // Gruppen: GSK verschlüsseln
+      const encrypted = await encryptGroupMessage(withUser, getMyUser(), attachmentPayloadJson);
+      res = await apiFetch("/chat/send", {
+        method: "POST",
+        body: JSON.stringify({
+          to: getMyUser(), // wird von Gruppe ignoriert, braucht aber einen Wert
+          convoId: withUser,
+          message: "",
+          e2e: true,
+          v: 2,
+          sid: withUser,
+          epoch: 0,
+          rotationIndex: encrypted.chainIndex,
+          ivB64: encrypted.ivB64,
+          ctB64: encrypted.ctB64,
+          attachmentKey: r2Key,
+          attachmentType,
+        })
+      });
+    } else {
+      // DM: Session Key
+      const sessionId = dmSessionId(getMyUser(), withUser);
+      const epoch = Math.floor(now / EPOCH_MS);
+      const mk = await deriveMessageKey(sessionKeyBytes, sessionId, epoch);
+      const { ivB64, ctB64 } = await e2eEncrypt(mk, attachmentPayloadJson);
+      res = await apiFetch("/chat/send", {
+        method: "POST",
+        body: JSON.stringify({
+          to: withUser,
+          message: "",
+          e2e: true,
+          v: 2,
+          sid: sessionId,
+          epoch,
+          rotationIndex: sessionRotationIndex,
+          ivB64,
+          ctB64,
+          attachmentKey: r2Key,
+          attachmentType,
+        })
+      });
+    }
+
+    // Pending-Bubble updaten mit echter ID + Attachment-Payload
+    if (pendingDiv && res?.message?.id) {
+      pendingDiv.dataset.id = res.message.id;
+      delete pendingDiv.dataset.tempId;
+      pendingDiv.classList.remove("pending");
+      pendingByTempId.delete(tempId);
+      renderedMessageIds.add(res.message.id);
+
+      // Attachment-Payload parsen und Bubble updaten
+      try {
+        const payload = JSON.parse(attachmentPayloadJson);
+        const attEl = pendingDiv.querySelector(".attachment-bubble");
+        if (attEl) {
+          // Bubble neu rendern mit echtem Payload
+          const newDiv = renderMessage({
+            id: res.message.id,
+            from: getMyUser(),
+            message: "",
+            ts: now,
+            status: "sent",
+            attachment: { type: attachmentType, payload }
+          });
+          if (newDiv) { pendingDiv.replaceWith(newDiv); }
+        }
+      } catch {}
+
+      // Preview-Cache mit lesbarem Text aktualisieren
+      const attachPreview = attachmentType === "photo" ? "📷 Foto"
+        : attachmentType === "gif" ? "GIF"
+        : attachmentType === "file" ? `📎 ${(() => { try { return JSON.parse(attachmentPayloadJson)?.fileName || "Datei"; } catch { return "Datei"; } })()}`
+        : "";
+      if (attachPreview) {
+        savePreviewCache(previewConvoId(withUser), { text: attachPreview, ts: now, from: getMyUser() });
+      }
+    }
+  } catch (e) {
+    console.warn("Attachment send fehlgeschlagen:", e);
+    showSystemToast("⚠️ Senden fehlgeschlagen");
+    pendingDiv?.remove();
+    pendingByTempId.delete(tempId);
+  }
+}
+
+// ── GIF-Modal ──────────────────────────────────────────
+let _gifSearchTimer = null;
+
+function openGifModal() {
+  const modal = document.getElementById("gif-modal");
+  const input = document.getElementById("gif-search-input");
+  const closeBtn = document.getElementById("gif-modal-close");
+  if (!modal) return;
+  modal.style.display = "block";
+  input?.focus();
+
+  // Close-Button
+  closeBtn?.addEventListener("click", () => { modal.style.display = "none"; }, { once: true });
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.style.display = "none";
+  }, { once: true });
+
+  // Debounced Suche
+  input?.addEventListener("input", () => {
+    clearTimeout(_gifSearchTimer);
+    _gifSearchTimer = setTimeout(() => searchGifs(input.value.trim()), 400);
+  });
+
+  // Trending GIFs beim Öffnen laden
+  searchGifs("");
+}
+
+async function searchGifs(q) {
+  const resultsEl = document.getElementById("gif-results");
+  const loadingEl = document.getElementById("gif-loading");
+  if (!resultsEl) return;
+
+  resultsEl.innerHTML = "";
+  if (loadingEl) loadingEl.style.display = "block";
+
+  try {
+    const url = q ? `/gif/search?q=${encodeURIComponent(q)}` : `/gif/search`;
+    const data = await apiFetch(url);
+    if (loadingEl) loadingEl.style.display = "none";
+    for (const gif of (data.results || [])) {
+      if (!gif.preview && !gif.url) continue;
+      const img = document.createElement("img");
+      img.src = gif.preview || gif.url;
+      img.loading = "lazy";
+      img.style.cssText = "width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;";
+      img.addEventListener("click", () => sendGif(gif.url));
+      resultsEl.appendChild(img);
+    }
+  } catch {
+    if (loadingEl) { loadingEl.style.display = "block"; loadingEl.textContent = "⚠️ Suche fehlgeschlagen"; }
+  }
+}
+
+async function sendGif(gifUrl) {
+  const modal = document.getElementById("gif-modal");
+  if (modal) modal.style.display = "none";
+
+  const now = Date.now();
+  const tempId = `tmp-${now}-${Math.random().toString(16).slice(2)}`;
+  const gifPayloadJson = JSON.stringify({ gifUrl });
+
+  // Optimistic Bubble
+  const pendingDiv = renderMessage({
+    from: getMyUser(),
+    message: "",
+    tempId,
+    ts: now,
+    status: "pending",
+    attachment: { type: "gif", payload: { gifUrl } }
+  });
+  if (pendingDiv) pendingByTempId.set(tempId, pendingDiv);
+  scrollToBottom();
+
+  // Senden (GIF hat keinen R2-Key — URL geht in E2E-Ciphertext)
+  await sendAttachmentMessage(gifPayloadJson, null, "gif", tempId, pendingDiv);
 }
 
 // ======================================================
@@ -2008,6 +2789,9 @@ async function initGroupMembersUI(groupId) {
       const myHandle   = getMyUser();
       const amAdmin    = members.find(m => m.member_handle === myHandle)?.role === "admin";
 
+      // Presence für alle Mitglieder laden
+      const presence = await fetchPresence(_memberHandles);
+
       // Rename-Handler wird in initAutoDeleteUI() gesetzt (dort ist menuDropdown im Scope)
 
       memberList.innerHTML = "";
@@ -2017,9 +2801,15 @@ async function initGroupMembersUI(groupId) {
 
         const isMe = m.member_handle === myHandle;
         const isAdmin = m.role === "admin";
+        const pStatus = presence?.[m.member_handle.toLowerCase()];
 
         const nameSpan = document.createElement("span");
         nameSpan.style.cssText = "display:flex;align-items:center;gap:6px;";
+
+        // Presence-Dot
+        const dot = document.createElement("span");
+        dot.style.cssText = `display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;background:${pStatus?.online ? "#4ade80" : "var(--border-subtle)"};`;
+        nameSpan.appendChild(dot);
 
         const nameText = document.createElement("span");
         nameText.textContent = `${m.member_handle}${isMe ? " (Du)" : ""}`;
@@ -2272,7 +3062,7 @@ function closeSenderPopover() {
   }
 }
 
-async function showSenderPopover(handle, anchorEl) {
+async function showSenderPopover(handle, anchorEl, plaintext = "") {
   closeSenderPopover();
 
   const popover = document.createElement("div");
@@ -2287,7 +3077,13 @@ async function showSenderPopover(handle, anchorEl) {
   const nameSpanPop = document.createElement("span");
   nameSpanPop.style.cssText = "font-size:14px;font-weight:600;color:var(--text-primary);";
   nameSpanPop.textContent = handle;
-  popoverHeader.append(avatarDiv, nameSpanPop);
+  const presenceSpanPop = document.createElement("span");
+  presenceSpanPop.style.cssText = "font-size:11px;color:var(--text-secondary);margin-top:1px;";
+  presenceSpanPop.textContent = "…";
+  const nameColPop = document.createElement("div");
+  nameColPop.style.cssText = "display:flex;flex-direction:column;gap:1px;";
+  nameColPop.append(nameSpanPop, presenceSpanPop);
+  popoverHeader.append(avatarDiv, nameColPop);
   const actionDiv = document.createElement("div");
   actionDiv.id = "sender-popover-action";
   actionDiv.style.cssText = "font-size:12px;color:var(--text-secondary);";
@@ -2307,18 +3103,32 @@ async function showSenderPopover(handle, anchorEl) {
   popover.style.left = left + "px";
   popover.style.top  = top  + "px";
 
-  // Kontaktstatus prüfen
+  // Presence + Kontaktstatus parallel laden
   const actionEl = popover.querySelector("#sender-popover-action");
   try {
-    const contacts = await fetchAcceptedContacts();
+    const [contacts, presence] = await Promise.all([
+      fetchAcceptedContacts(),
+      fetchPresence([handle])
+    ]);
     const isContact = contacts.includes(handle);
 
+    // Presence-Label aktualisieren
+    const pStatus = presence?.[handle.toLowerCase()];
+    if (presenceSpanPop) {
+      presenceSpanPop.textContent = pStatus ? presenceLabel(pStatus) : "";
+      presenceSpanPop.style.color = pStatus?.online ? "#4ade80" : "var(--text-secondary)";
+    }
+
     if (isContact) {
-      // → DM öffnen
+      // → DM öffnen (mit optionalem Reply-Kontext aus Gruppen-Nachricht)
       const btn = document.createElement("a");
-      btn.href = `/chat?with=${encodeURIComponent(handle)}`;
+      let dmUrl = `/chat?with=${encodeURIComponent(handle)}`;
+      if (plaintext) {
+        dmUrl += `&replyFrom=${encodeURIComponent(handle)}&replyText=${encodeURIComponent(plaintext.slice(0, 200))}`;
+      }
+      btn.href = dmUrl;
       btn.style.cssText = "display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;background:var(--accent);color:#fff;font-size:13px;font-weight:600;text-decoration:none;cursor:pointer;";
-      btn.textContent = "💬 Nachricht schreiben";
+      btn.textContent = `💬 Persönliche Nachricht an ${handle}`;
       actionEl.replaceWith(btn);
     } else {
       // → Kontaktanfrage senden
@@ -2365,7 +3175,16 @@ async function showSenderPopover(handle, anchorEl) {
 }
 
 // ======================================================
-function renderMessage({ id, from, message, ts, tempId = null, status = "sent", msg = null }) {
+function renderMessage({ id, from, message, ts, tempId = null, status = "sent", msg = null,
+                         replyToId = null, replyFrom = null, replyPlaintext = null,
+                         attachment = null }) {
+  // Reply-Felder: direkte Params (optimistic) oder aus msg (server-seitig)
+  replyToId    = replyToId    || msg?.replyToId    || null;
+  replyFrom    = replyFrom    || msg?.replyFrom    || null;
+  replyPlaintext = replyPlaintext || msg?.replyPlaintext || null;
+
+  // Attachment aus msg (server-seitig)
+  if (!attachment && msg?.attachmentType) attachment = { type: msg.attachmentType, payload: null };
 
   if (!messagesEl) return null;
 
@@ -2374,7 +3193,8 @@ if (status === "pending" && from !== getMyUser()) {
   status = "sent";
 }
 
-  if (!message || message.length > MAX_MESSAGE_LENGTH) return null;
+  // Attachment-Nachrichten dürfen leeres message haben
+  if (!attachment && (!message || message.length > MAX_MESSAGE_LENGTH)) return null;
 
 const div = document.createElement("div");
 // Gruppe: "me" wenn ich der Sender bin; DM: "me" wenn from !== withUser
@@ -2389,24 +3209,86 @@ if (!isOwnMessage && isGroupConversation(withUser) && from) {
   senderEl.style.cursor = "pointer";
   senderEl.addEventListener("click", (e) => {
     e.stopPropagation();
-    showSenderPopover(from, senderEl);
+    const msgText = div.querySelector(".msg-text")?.textContent || "";
+    showSenderPopover(from, senderEl, msgText);
   });
   div.appendChild(senderEl);
 }
 
-// Gruppe + fremde Nachricht: Klick auf Bubble öffnet Popover
-if (!isOwnMessage && isGroupConversation(withUser) && from) {
-  div.style.cursor = "pointer";
-  div.addEventListener("click", (e) => {
-    if (e.target.closest(".sender-name")) return; // bereits oben behandelt
-    showSenderPopover(from, div);
-  });
-}
+// Sender-Popover nur via Sender-Name-Klick (nicht ganze Bubble)
 
 const textEl = document.createElement("div");
-textEl.textContent = message;
+textEl.className = "msg-text";
+textEl.textContent = attachment ? "" : (message || "");
 
 div.appendChild(textEl);
+
+// ── Attachment-Bubble ────────────────────────────
+if (attachment) {
+  const attEl = document.createElement("div");
+  attEl.className = "attachment-bubble";
+
+  if (attachment.type === "gif" && attachment.payload?.gifUrl) {
+    // GIF: direkt anzeigen
+    const img = document.createElement("img");
+    img.src = attachment.payload.gifUrl;
+    img.style.cssText = "max-width:220px;max-height:180px;border-radius:8px;display:block;";
+    img.alt = "GIF";
+    attEl.appendChild(img);
+
+  } else if (attachment.type === "photo" && attachment.payload) {
+    // Foto: Platzhalter mit Lade-Button
+    const loadBtn = document.createElement("button");
+    loadBtn.style.cssText = "background:var(--bg-panel-alt);border:1px solid var(--border-subtle);border-radius:8px;padding:12px 16px;cursor:pointer;font-size:13px;color:var(--text-primary);display:flex;align-items:center;gap:8px;";
+    loadBtn.innerHTML = `<span style="font-size:20px;">🖼️</span> Foto laden`;
+    loadBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      loadBtn.disabled = true; loadBtn.textContent = "Lädt…";
+      try {
+        const plain = await downloadAndDecryptFile(attachment.payload.r2Key, attachment.payload.fileKeyB64, attachment.payload.fileIvB64);
+        const blob = new Blob([plain], { type: attachment.payload.mimeType || "image/jpeg" });
+        const url = URL.createObjectURL(blob);
+        const img = document.createElement("img");
+        img.src = url; img.style.cssText = "max-width:220px;max-height:220px;border-radius:8px;display:block;cursor:zoom-in;";
+        img.addEventListener("click", (e) => { e.stopPropagation(); window.open(url, "_blank"); });
+        attEl.replaceChildren(img);
+      } catch { loadBtn.textContent = "⚠️ Fehler beim Laden"; loadBtn.disabled = false; }
+    });
+    attEl.appendChild(loadBtn);
+
+  } else if (attachment.type === "file" && attachment.payload) {
+    // Datei: Download-Button mit Name + Grösse
+    const sizeKb = attachment.payload.fileSize ? Math.ceil(attachment.payload.fileSize / 1024) : "?";
+    const dlBtn = document.createElement("button");
+    dlBtn.style.cssText = "background:var(--bg-panel-alt);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 14px;cursor:pointer;font-size:13px;color:var(--text-primary);display:flex;align-items:center;gap:8px;max-width:220px;text-align:left;";
+    dlBtn.innerHTML = `<span style="font-size:18px;">📎</span><div><div style="font-weight:600;word-break:break-all;">${attachment.payload.fileName || "Datei"}</div><div style="font-size:11px;color:var(--text-secondary);">${sizeKb} KB</div></div>`;
+    dlBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      dlBtn.disabled = true; dlBtn.style.opacity = "0.6";
+      try {
+        const plain = await downloadAndDecryptFile(attachment.payload.r2Key, attachment.payload.fileKeyB64, attachment.payload.fileIvB64);
+        const blob = new Blob([plain], { type: attachment.payload.mimeType || "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = attachment.payload.fileName || "datei";
+        a.click(); URL.revokeObjectURL(url);
+      } catch { dlBtn.textContent = "⚠️ Download fehlgeschlagen"; }
+      dlBtn.disabled = false; dlBtn.style.opacity = "1";
+    });
+    attEl.appendChild(dlBtn);
+
+  } else {
+    // Pending / noch kein Payload: Upload-Indikator
+    const pending = document.createElement("div");
+    pending.style.cssText = "padding:10px 14px;font-size:13px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;";
+    const icon = attachment.type === "photo" ? "🖼️" : attachment.type === "gif" ? "GIF" : "📎";
+    pending.textContent = `${icon} Wird hochgeladen…`;
+    attEl.appendChild(pending);
+  }
+
+  div.insertBefore(attEl, textEl);
+}
+// ── Ende Attachment-Bubble ───────────────────────
 
 const timeEl = document.createElement("div");
 timeEl.className = "timestamp";
@@ -2433,7 +3315,7 @@ if (ts) div.dataset.ts = String(ts); // für mark-read Debounce
 
 // 🗑️ Delete-Event kam vor Render → sofort als gelöscht anzeigen
 if (id && deletedMessageIds.has(id)) {
-  const textEl = div.querySelector("div:not(.sender-name):not(.timestamp)");
+  const textEl = div.querySelector(".msg-text");
   if (textEl) {
     textEl.textContent = lang.messageDeleted;
     textEl.style.opacity = "0.5";
@@ -2457,87 +3339,35 @@ if (status === "pending" && from === getMyUser()) {
 }
 if (status === "failed") div.classList.add("failed");
 
-// ↩️ Quote-Block rendern (wenn Nachricht eine Antwort ist)
-if (msg && msg.replyToId && (msg.replyFrom || msg.replyPlaintext)) {
+// ↩️ Quote-Block rendern (wenn Nachricht eine Antwort ist — auch cross-chat ohne replyToId)
+if (replyToId || (replyFrom && replyPlaintext)) { // Quote-Block immer zeigen wenn replyToId gesetzt, auch wenn Entschlüsselung fehlschlägt
   const quote = document.createElement("div");
   quote.className = "reply-quote";
-  quote.dataset.replyToId = msg.replyToId;
+  quote.dataset.replyToId = replyToId;
   const qFrom = document.createElement("div");
   qFrom.className = "reply-quote-from";
-  qFrom.textContent = msg.replyFrom || "…";
+  qFrom.textContent = replyFrom || "…";
   const qText = document.createElement("div");
   qText.className = "reply-quote-text";
-  qText.textContent = msg.replyPlaintext ? msg.replyPlaintext.slice(0, 100) : "…";
+  qText.textContent = replyPlaintext ? replyPlaintext.slice(0, 100) : "…";
   quote.append(qFrom, qText);
   quote.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const orig = document.querySelector(`[data-id="${msg.replyToId}"]`);
+    e.stopPropagation(); // verhindert Context Menu
+    const orig = document.querySelector(`[data-id="${replyToId}"]`);
     if (orig) { orig.scrollIntoView({ behavior: "smooth", block: "center" }); orig.classList.add("highlight-flash"); setTimeout(() => orig.classList.remove("highlight-flash"), 1200); }
   });
+  quote.addEventListener("contextmenu", (e) => e.stopPropagation());
   div.insertBefore(quote, textEl);
 }
 
-// ↩️ Reply-Button für alle Nachrichten (nicht pending/failed)
+// Löschen ist jetzt im Context Menu (Rechtsklick / Long-Press)
+
+// Bestehende Reaktionen aus Cache rendern
+if (id && reactionsCache.has(id)) renderReactionBar(div, id);
+
+// 📱 Context Menu: Long-Press (Mobile) + Right-Click (Desktop)
 if (id && status !== "pending" && status !== "failed") {
-  const replyBtn = document.createElement("button");
-  replyBtn.title = "Antworten";
-  replyBtn.textContent = "↩";
-  replyBtn.style.cssText = "position:absolute;bottom:4px;" + (isOwnMessage ? "left:22px;" : "right:22px;") +
-    "background:none;border:none;cursor:pointer;font-size:11px;opacity:0.18;padding:0;transition:opacity 0.15s;color:var(--text-secondary);";
-  replyBtn.addEventListener("mouseenter", () => replyBtn.style.opacity = "0.8");
-  replyBtn.addEventListener("mouseleave", () => replyBtn.style.opacity = "0.18");
-  replyBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const txt = textEl?.textContent || "";
-    showReplyBar(id, from, txt);
-  });
-  div.appendChild(replyBtn);
-}
-
-// 😂 Reaction-Picker: Smiley-Button für alle Nachrichten (nicht pending/failed)
-if (id && status !== "pending" && status !== "failed") {
-  const reactBtn = document.createElement("button");
-  reactBtn.className = "react-btn";
-  reactBtn.title = "Reagieren";
-  reactBtn.textContent = "😊";
-  reactBtn.style.cssText = "position:absolute;bottom:4px;" + (isOwnMessage ? "left:6px;" : "right:6px;") +
-    "background:none;border:none;cursor:pointer;font-size:11px;opacity:0.18;padding:0;transition:opacity 0.15s;";
-  reactBtn.addEventListener("mouseenter", () => reactBtn.style.opacity = "0.8");
-  reactBtn.addEventListener("mouseleave", () => reactBtn.style.opacity = "0.18");
-  reactBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    showReactionPicker(div, id);
-  });
-  div.appendChild(reactBtn);
-  // Bestehende Reaktionen aus Cache rendern
-  if (reactionsCache.has(id)) renderReactionBar(div, id);
-}
-
-// 🗑️ Delete-Button + ✏️ Edit-Button für eigene Nachrichten (nicht pending/failed)
-if (id && from === getMyUser() && status !== "pending" && status !== "failed") {
-  // ✏️ Edit-Button (nur innerhalb 15 Minuten)
-  const EDIT_WINDOW_MS = 15 * 60 * 1000;
-  if (ts && Date.now() - Number(ts) < EDIT_WINDOW_MS) {
-    const editBtn = document.createElement("button");
-    editBtn.className = "edit-btn";
-    editBtn.title = "Bearbeiten";
-    editBtn.textContent = "✏";
-    editBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      startInlineEdit(div, id, textEl.textContent);
-    });
-    div.appendChild(editBtn);
-  }
-
-  const delBtn = document.createElement("button");
-  delBtn.className = "delete-btn";
-  delBtn.title = lang.deleteMessageTitle;
-  delBtn.textContent = "×";
-  delBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (confirm(lang.confirmDeleteMessage)) deleteMessage(id);
-  });
-  div.appendChild(delBtn);
+  attachContextMenu(div, { id, from, textEl, ts });
 }
 
 messagesEl.appendChild(div);
@@ -2588,7 +3418,8 @@ function startInlineEdit(div, msgId, currentText) {
   // Verhindert doppeltes Öffnen
   if (div.querySelector(".edit-textarea")) return;
 
-  const textEl = div.querySelector("div:not(.sender-name):not(.timestamp):not(.edited-badge-wrap)");
+  // .msg-text explizit — verhindert dass .reply-quote als Ziel verwendet wird
+  const textEl = div.querySelector(".msg-text");
   if (!textEl) return;
 
   const originalText = currentText || textEl.textContent;
@@ -2625,13 +3456,16 @@ async function editMessage(msgId, newText, div, textEl, ta) {
   try {
     let ciphertext, rotationIndex;
     if (isGroupConversation(withUser)) {
-      const { encrypted } = await encryptGroupMessage(newText, withUser);
-      ciphertext = encrypted;
-      rotationIndex = null;
+      // encryptGroupMessage(groupId, myHandle, plaintext) → { ivB64, ctB64, chainIndex }
+      const enc = await encryptGroupMessage(withUser, getMyUser(), newText);
+      // Backend erwartet kompaktes JSON als ciphertext-String
+      ciphertext = JSON.stringify({ ivB64: enc.ivB64, ctB64: enc.ctB64 });
+      rotationIndex = enc.chainIndex ?? null;
     } else {
-      const enc = await encryptMessage(newText);
-      ciphertext = enc.ciphertext;
-      rotationIndex = enc.rotationIndex ?? sessionRotationIndex;
+      const mk = await deriveMessageKey(sessionKeyBytes, dmSessionId(getMyUser(), withUser), Math.floor(Date.now() / EPOCH_MS));
+      const enc = await e2eEncrypt(mk, newText);
+      ciphertext = JSON.stringify({ ivB64: enc.ivB64, ctB64: enc.ctB64 });
+      rotationIndex = sessionRotationIndex;
     }
 
     await apiFetch("/chat/message/edit", {
@@ -2673,14 +3507,26 @@ async function handleMessageEdited(event) {
 
   try {
     let plaintext;
+    let ivB64, ctB64;
+    try { ({ ivB64, ctB64 } = JSON.parse(ciphertext)); } catch { return; }
+
     if (isGroupConversation(withUser)) {
-      plaintext = await decryptGroupMessage({ message: ciphertext }, withUser);
+      plaintext = await decryptGroupMessage(withUser, from, ivB64, ctB64, rotationIndex ?? 0);
     } else {
-      plaintext = await decryptMessage(ciphertext, rotationIndex ?? 0);
+      // Synthetisches Message-Objekt → decryptMessageIfNeeded nutzen (korrekte Rotation-Logik)
+      const fakeMsg = {
+        ivB64, ctB64,
+        rotationIndex: rotationIndex ?? 0,
+        from,
+        ts: event.ts || Date.now(),
+        id: null   // null → kein Cache-Hit, immer frisch entschlüsseln
+      };
+      plaintext = await decryptMessageIfNeeded(fakeMsg, withUser);
     }
     if (!plaintext || plaintext === "__decrypt_failed__") return;
 
-    const textEl = el.querySelector("div:not(.sender-name):not(.timestamp):not(.edited-badge-wrap)");
+    // .msg-text explizit — verhindert reply-quote Überschreibung
+    const textEl = el.querySelector(".msg-text");
     if (textEl) textEl.textContent = plaintext;
     applyEditedBadge(el);
     savePreviewCache(previewConvoId(withUser), { text: plaintext, ts: Date.now(), from });
@@ -2703,13 +3549,14 @@ function markMessageDeleted(messageId) {
 
   // Absender-Name (.sender-name) und Timestamp (.timestamp) überspringen →
   // nur den eigentlichen Text-Div treffen (hat keine Klasse)
-  const textEl = el.querySelector("div:not(.sender-name):not(.timestamp)");
+  // Reply-Quote entfernen (gelöschte Nachricht zeigt keinen Zitat-Block mehr)
+  el.querySelector(".reply-quote")?.remove();
+  const textEl = el.querySelector(".msg-text");
   if (textEl) {
     textEl.textContent = lang.messageDeleted;
     textEl.style.opacity = "0.5";
     textEl.style.fontStyle = "italic";
   }
-  // Delete-Button entfernen falls vorhanden
   el.querySelector(".delete-btn")?.remove();
   el.dataset.deleted = "1";
 }
@@ -2808,7 +3655,19 @@ async function processMessage(m) {
       }
     }
     renderedMessageIds.add(messageId);
-    renderMessage({ id: messageId, from: m.from, message: decryptFailedText(m.ts), ts: m.ts });
+    if (isAutoDeleted(m.ts)) {
+      showSystemMessage(lang.messageExpired || "⏱ Nachricht automatisch gelöscht");
+    } else {
+      renderMessage({ id: messageId, from: m.from, message: decryptFailedText(m.ts), ts: m.ts });
+    }
+    return true;
+  }
+
+  // Abgelaufene Nachricht (Auto-Delete) → als System-Message anzeigen, unabhängig vom Decrypt-Ergebnis
+  if (isAutoDeleted(m.ts)) {
+    renderedMessageIds.add(messageId);
+    deferredInboundIds.delete(messageId);
+    showSystemMessage(lang.messageExpired || "⏱ Nachricht automatisch gelöscht");
     return true;
   }
 
@@ -2816,9 +3675,23 @@ async function processMessage(m) {
   let displayText = text;
   if (m.edited_message) {
     try {
-      const editedPlain = isGroupConversation(withUser)
-        ? await decryptGroupMessage({ message: m.edited_message }, withUser)
-        : await decryptMessage(m.edited_message, m.rotationIndex ?? 0);
+      const editEnc = JSON.parse(m.edited_message); // { ivB64, ctB64, rotationIndex? }
+      const editRotIndex = editEnc.rotationIndex ?? m.rotationIndex ?? 0;
+      let editedPlain;
+      if (isGroupConversation(withUser)) {
+        editedPlain = await decryptGroupMessage(withUser, m.from, editEnc.ivB64, editEnc.ctB64, editRotIndex);
+      } else {
+        const fakeMsg = {
+          ivB64: editEnc.ivB64,
+          ctB64: editEnc.ctB64,
+          rotationIndex: editRotIndex,
+          from: m.from,
+          ts: m.edited_at || m.ts || Date.now(),
+          epoch: m.edited_at ? Math.floor(m.edited_at / EPOCH_MS) : undefined,
+          id: null
+        };
+        editedPlain = await decryptMessageIfNeeded(fakeMsg, withUser);
+      }
       if (editedPlain && editedPlain !== "__decrypt_failed__") displayText = editedPlain;
     } catch {}
   }
@@ -2831,8 +3704,9 @@ async function processMessage(m) {
     try {
       let replyPlain;
       if (isGroupConversation(withUser)) {
-        // Gruppe: mit GSK des Senders entschlüsseln (gleicher chainIndex wie Hauptnachricht)
-        replyPlain = await decryptGroupMessage(withUser, m.from, m.replyIv, m.replyCt, m.rotationIndex ?? 0);
+        // Gruppe: replyRotationIndex bevorzugen (Reply vor Hauptnachricht verschlüsselt)
+        const replyChainIdx = m.replyRotationIndex ?? (m.rotationIndex > 0 ? m.rotationIndex - 1 : 0);
+        replyPlain = await decryptGroupMessage(withUser, m.from, m.replyIv, m.replyCt, replyChainIdx);
       } else {
         // DM: mit MK entschlüsseln
         const rMk = await deriveMessageKey(sessionKeyBytes, dmSessionId(getMyUser(), withUser), m.epoch ?? 0);
@@ -2844,17 +3718,43 @@ async function processMessage(m) {
     } catch {}
   }
 
+  // Attachment-Payload aus entschlüsseltem Text parsen (wenn vorhanden)
+  let incomingAttachment = null;
+  if (m.attachmentType && m.attachmentType !== "gif") {
+    try {
+      const parsed = JSON.parse(displayText);
+      if (parsed?.r2Key) {
+        incomingAttachment = { type: m.attachmentType, payload: parsed };
+      }
+    } catch {}
+  } else if (m.attachmentType === "gif") {
+    try {
+      const parsed = JSON.parse(displayText);
+      if (parsed?.gifUrl) {
+        incomingAttachment = { type: "gif", payload: parsed };
+      }
+    } catch {}
+  }
+
   const renderedDiv = renderMessage({
     id: messageId,
     from: m.from,
-    message: displayText,
+    message: incomingAttachment ? "" : displayText,
     ts: m.ts,
     status: m.status,
-    msg: m   // ganzes msg-Objekt für Reply-Quote
+    msg: m,
+    attachment: incomingAttachment
   });
   // (bearbeitet) Badge wenn Nachricht schon editiert wurde
   if (m.edited_at && renderedDiv) applyEditedBadge(renderedDiv);
-  savePreviewCache(previewConvoId(withUser), { text: displayText, ts: m.ts || Date.now(), from: m.from });
+  // Attachment-Nachrichten: lesbarer Preview statt Raw-JSON
+  const previewText = incomingAttachment
+    ? (incomingAttachment.type === "photo" ? "📷 Foto"
+     : incomingAttachment.type === "gif"   ? "GIF"
+     : incomingAttachment.type === "file"  ? `📎 ${incomingAttachment.payload?.fileName || "Datei"}`
+     : displayText)
+    : displayText;
+  savePreviewCache(previewConvoId(withUser), { text: previewText, ts: m.ts || Date.now(), from: m.from });
 
   if (m.from === getMyUser()) {
     const pending = document.querySelector(".me.pending");
@@ -3193,6 +4093,9 @@ window.__chatStartupDone = true;
     startChat(); // zweiter Aufruf ist idempotent (dataset.bound Guard)
     updateSendButton();
 
+    // Auto-Delete zuerst laden — damit isAutoDeleted() bei loadMessages() korrekt arbeitet
+    await initAutoDeleteUI().catch(() => {});
+
     try { await loadMessages(); } catch (e) { console.warn("Group loadMessages failed", e); }
 
     // GSK im Hintergrund distribuieren (non-blocking)
@@ -3205,8 +4108,6 @@ window.__chatStartupDone = true;
       seen.add(withUser);
       localStorage.setItem("renex_seen_groups", JSON.stringify([...seen]));
     } catch {}
-
-    initAutoDeleteUI().catch(() => {});
     initGroupMembersUI(withUser).catch(() => {});
     startPolling();
     console.log("🟢 Gruppen-Chat gestartet:", withUser);
@@ -3252,7 +4153,11 @@ if (entry && entry.ready) {
 startChat();
 updateSendButton();
 
-// 6️⃣ Initial Messages nur laden wenn E2E bereit —
+// 6️⃣ Auto-Delete UI zuerst laden — damit isAutoDeleted() bei loadMessages() korrekt arbeitet
+await initAutoDeleteUI().catch(() => {});
+initDMPresence().catch(() => {});
+
+// 7️⃣ Initial Messages laden wenn E2E bereit —
 // sonst ruft der KV-Fetch / Fallback-Bootstrap loadMessages danach auf
 if (e2eReady) {
   try {
@@ -3262,8 +4167,10 @@ if (e2eReady) {
   }
 }
 
-// 7️⃣ Auto-Delete UI immer initialisieren (unabhängig von E2E)
-initAutoDeleteUI().catch(() => {});
+// 7b️⃣ Reply-Kontext aus Gruppen-Chat (persönliche Antwort per DM)
+if (_initialReplyFrom && _initialReplyText) {
+  showReplyBar(null, _initialReplyFrom, _initialReplyText);
+}
 
 // 8️⃣ Flush nur wenn ready
 if (e2eReady) {

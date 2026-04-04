@@ -23,5 +23,9 @@ class_name = "UserSessionDO"
 tag = "v1"
 new_classes = ["UserSessionDO"]
 
+[[r2_buckets]]
+binding = "RENEX_FILES"
+bucket_name = "renex-files"
+
 [triggers]
 crons = ["0 3 * * *"]

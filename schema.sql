@@ -96,3 +96,33 @@ CREATE TABLE IF NOT EXISTS notification_mutes (
   muted_at    INTEGER NOT NULL,
   PRIMARY KEY (user_handle, convo_id)
 );
+
+-- ======================================================
+-- Guest Sessions — Gastzugang ohne Passkey
+-- Token-Format:        guest_[32 hex chars]
+-- Guest-Handle-Format: guest_[8 hex chars]
+-- Ablauf: 48h | Nachrichtenlimit: 50
+-- Conversion: guest_handle → echter Account via Passkey
+-- ======================================================
+CREATE TABLE IF NOT EXISTS guest_sessions (
+  token        TEXT    PRIMARY KEY,            -- "guest_[32 hex]" — URL-sicherer Einladungstoken
+  convo_id     TEXT    NOT NULL,               -- Welche Konversation der Gast betreten darf
+  convo_type   TEXT    NOT NULL DEFAULT 'dm',  -- 'dm' | 'group'
+  created_by   TEXT    NOT NULL,               -- Handle des Einladenden
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,               -- Unix-Timestamp ms
+  msg_limit    INTEGER NOT NULL DEFAULT 50,    -- Max. sendbare Nachrichten
+  msg_count    INTEGER NOT NULL DEFAULT 0,     -- Bisher gesendete Nachrichten
+  guest_handle TEXT    NOT NULL DEFAULT '',    -- "guest_[8 hex]" — wird beim ersten Join vergeben
+  converted_to TEXT    DEFAULT NULL            -- Echter Handle nach Passkey-Registrierung
+);
+
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_convo
+  ON guest_sessions(convo_id);
+
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_handle
+  ON guest_sessions(guest_handle)
+  WHERE guest_handle != '';
+
+-- Migration: conversation_members role darf 'guest' sein
+-- (kein ALTER nötig — TEXT-Feld nimmt beliebige Werte an)

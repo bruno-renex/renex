@@ -10,6 +10,7 @@ import { handleNotificationRoutes } from './src/routes/notificationRoutes.js';
 import { handlePresenceRoutes } from './src/routes/presenceRoutes.js';
 import { handleUploadRoutes } from './src/routes/uploadRoutes.js';
 import { handleGifRoutes } from './src/routes/gifRoutes.js';
+import { handleInviteRoutes } from './src/routes/inviteRoutes.js';
 import { scheduled } from './src/cron.js';
 
 // Cloudflare Durable Object binding requirement — must be re-exported from entry point
@@ -29,6 +30,9 @@ async function fetch(request, env) {
     const path = url.pathname.toLowerCase();
     const params = url.searchParams;
 
+    if (path.startsWith('/invite/')) {
+      return handleInviteRoutes(request, env, path, params);
+    }
     if (path.startsWith('/upload/')) {
       return handleUploadRoutes(request, env, path, params);
     }

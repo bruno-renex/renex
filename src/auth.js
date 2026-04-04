@@ -3,7 +3,11 @@ import { base64url } from './utils.js';
 // =========================
 // SESSION TOKEN REGEX
 // =========================
-const SESSION_TOKEN_RE = /^sess_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION_TOKEN_RE   = /^sess_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Guest-Token-Format: "guest_" + 32 hex chars (16 zufällige Bytes)
+export const GUEST_TOKEN_RE  = /^guest_[a-z0-9]{32}$/;
+// Guest-Handle-Format: "guest_" + 8 hex chars (4 zufällige Bytes)
+export const GUEST_HANDLE_RE = /^guest_[a-z0-9]{8}$/;
 
 export function validateTokenFormat(token) {
   if (!token || token.length < 10 || token.length > 64) return null;
@@ -83,6 +87,72 @@ export async function requireSession(request, env) {
   }
 
   return session; // { handle, created_at, exp }
+}
+
+// =========================
+// GUEST SESSION AUTH
+// =========================
+
+// Liest das guest_session-Cookie aus dem Request
+export function getGuestToken(request) {
+  const cookie = request.headers.get("Cookie") || "";
+  const m = cookie.match(/(?:^|;\s*)guest_session=([^;]+)/);
+  if (!m) return null;
+  const t = decodeURIComponent(m[1].trim());
+  return GUEST_TOKEN_RE.test(t) ? t : null;
+}
+
+// Validiert einen Guest-Token → gibt Guest-Session-Objekt zurück oder null
+// Rückgabe: { handle, isGuest: true, token, convoId, expiresAt, msgLimit, msgCount }
+export async function requireGuestSession(request, env) {
+  const token = getGuestToken(request);
+  if (!token) return null;
+
+  // Erst KV (schnell), dann D1 als Fallback
+  const raw = await env.RENEX_KV.get(`guest_session:${token}`);
+  if (raw) {
+    try {
+      const s = JSON.parse(raw);
+      if (!s?.handle || !GUEST_HANDLE_RE.test(s.handle)) return null;
+      if (s.expiresAt && Date.now() > s.expiresAt) return null;
+      return { ...s, isGuest: true };
+    } catch {
+      return null;
+    }
+  }
+
+  // KV abgelaufen → D1 prüfen (z.B. nach Worker-Neustart)
+  const row = await env.RENEX_DB.prepare(
+    "SELECT * FROM guest_sessions WHERE token = ?"
+  ).bind(token).first();
+  if (!row) return null;
+  if (Date.now() > row.expires_at) return null;
+  if (!row.guest_handle || !GUEST_HANDLE_RE.test(row.guest_handle)) return null;
+  if (row.converted_to) return null; // Bereits konvertiert
+
+  // KV-Cache wiederherstellen
+  const ttlSec = Math.max(60, Math.floor((row.expires_at - Date.now()) / 1000));
+  const session = {
+    handle:    row.guest_handle,
+    isGuest:   true,
+    token,
+    convoId:   row.convo_id,
+    expiresAt: row.expires_at,
+    msgLimit:  row.msg_limit,
+    msgCount:  row.msg_count,
+  };
+  await env.RENEX_KV.put(`guest_session:${token}`, JSON.stringify(session), {
+    expirationTtl: ttlSec,
+  });
+  return session;
+}
+
+// Akzeptiert echte Sessions UND Gast-Sessions
+// Gibt null zurück wenn weder noch vorhanden
+export async function requireAnySession(request, env) {
+  const real = await requireSession(request, env);
+  if (real) return real;
+  return requireGuestSession(request, env);
 }
 
 export async function rateLimit(env, key, windowMs, limit, { failOpen = false } = {}) {

@@ -1,17 +1,19 @@
 import { json, readJson, dmConvoId } from '../utils.js';
-import { requireSession, rateLimit, isAcceptedContact, pushToUserDO, pushToGroupMembers } from '../auth.js';
+import { requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, pushToGroupMembers, GUEST_HANDLE_RE } from '../auth.js';
 
 // ======================================================
 // CHAT / SEND handler (extracted for line-count budget)
 // Called from chatRoutes.js
 // ======================================================
 export async function handleChatSend(request, env) {
-  const session = await requireSession(request, env);
+  const session = await requireAnySession(request, env);
   if (!session) {
     return json(request, { error: "Not authenticated" }, 401);
   }
 
-  const me = String(session.handle || "").toLowerCase();
+  const me       = String(session.handle || "").toLowerCase();
+  const isGuest  = session.isGuest === true;
+  const guestToken = isGuest ? session.token : null;
 
   // Body (SAFE)
   const body = await readJson(request);
@@ -46,6 +48,43 @@ export async function handleChatSend(request, env) {
   if (!/^[a-z0-9_]+$/.test(other)) {
     return json(request, { error: "Invalid recipient" }, 400);
   }
+
+  // ── GUEST RESTRICTIONS ──────────────────────────────
+  // Gäste dürfen nur in ihrer zugewiesenen Konversation schreiben
+  // Keine Control-Messages, keine Attachments, Nachrichtenlimit beachten
+  if (isGuest) {
+    const guestConvoId = session.convoId;
+    const sentConvoId  = bodyConvoId || null;
+
+    // Nur die zugewiesene Konvo erlaubt
+    const targetConvoId = sentConvoId || (other ? [me, other].sort().join(":") : null);
+    if (targetConvoId !== guestConvoId) {
+      return json(request, { error: "Guests can only send to their assigned conversation" }, 403);
+    }
+
+    // Keine Control-Messages für Gäste
+    if (type && type !== null) {
+      return json(request, { error: "Control messages not allowed for guests" }, 403);
+    }
+
+    // Nachrichtenlimit prüfen (D1 ist autoritativ)
+    const guestRow = await env.RENEX_DB.prepare(
+      "SELECT msg_count, msg_limit, expires_at, converted_to FROM guest_sessions WHERE token = ?"
+    ).bind(guestToken).first();
+
+    if (!guestRow)            return json(request, { error: "Guest session not found" }, 404);
+    if (guestRow.converted_to) return json(request, { error: "Session already converted" }, 409);
+    if (Date.now() > guestRow.expires_at) return json(request, { error: "Guest session expired" }, 410);
+    if (guestRow.msg_count >= guestRow.msg_limit) {
+      return json(request, {
+        error:   "Message limit reached",
+        msgCount: guestRow.msg_count,
+        msgLimit: guestRow.msg_limit,
+        convertUrl: "https://app.renex.id/join?convert=1",
+      }, 429);
+    }
+  }
+  // ────────────────────────────────────────────────────
 
   // Payload size limits (D1 storage protection)
   const MAX_IV_B64   = 24;    // AES-GCM 12-byte IV → 16 chars base64; 24 = safe headroom
@@ -342,6 +381,15 @@ export async function handleChatSend(request, env) {
       (typeof attachmentKey === "string" && attachmentKey.length > 0) ? attachmentKey : null,
       (typeof attachmentType === "string" && attachmentType.length > 0) ? attachmentType : null
     ).run();
+  }
+
+  // Gast-Nachrichtenzähler inkrementieren (nach erfolgreichem INSERT)
+  if (isGuest && guestToken) {
+    await env.RENEX_DB.prepare(
+      "UPDATE guest_sessions SET msg_count = msg_count + 1 WHERE token = ?"
+    ).bind(guestToken).run();
+    // KV-Cache invalidieren (damit /invite/ping frischen Wert liefert)
+    await env.RENEX_KV.delete(`guest_session:${guestToken}`);
   }
 
   // ======================================================

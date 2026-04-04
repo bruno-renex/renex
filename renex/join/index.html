@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RENEX – Einladung</title>
+  <link rel="stylesheet" href="/colors.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 20px;
+      padding: 36px 32px;
+      max-width: 400px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      text-align: center;
+    }
+
+    .logo {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--text-primary);
+    }
+    .logo .x { color: var(--accent-voice); }
+
+    .invite-icon {
+      font-size: 48px;
+      line-height: 1;
+    }
+
+    .invite-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .invite-sub {
+      font-size: 13px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    .info-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-tertiary, var(--bg-primary));
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      text-align: left;
+    }
+    .info-row span { flex: 1; }
+
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--accent-voice);
+      color: #fff;
+    }
+
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      font-size: 13px;
+      padding: 10px;
+    }
+
+    .status {
+      font-size: 13px;
+      color: var(--text-secondary);
+      min-height: 18px;
+    }
+    .status.error { color: #ef4444; }
+    .status.ok    { color: #22c55e; }
+
+    .spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Expiry badge */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 99px;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(56,189,248,0.12);
+      color: var(--accent-voice);
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    #errorCard { display: none; }
+  </style>
+</head>
+<body>
+
+<!-- LADE-STATE -->
+<div class="card" id="loadingCard">
+  <div class="logo">REN<span class="x">E</span>X</div>
+  <div class="status"><span class="spinner"></span> Einladung wird geprüft…</div>
+</div>
+
+<!-- EINLADUNGS-KARTE -->
+<div class="card" id="inviteCard" style="display:none">
+  <div class="logo">REN<span class="x">E</span>X</div>
+  <div class="invite-icon">💬</div>
+  <div>
+    <div class="invite-title" id="chatName">Chat</div>
+    <div class="invite-sub" style="margin-top:6px">
+      Du wurdest von <strong id="invitedBy"></strong> eingeladen
+    </div>
+  </div>
+
+  <div style="display:flex; flex-direction:column; gap:8px">
+    <div class="info-row">
+      <span>⏳</span>
+      <span>Zugang für <strong>48 Stunden</strong> — dann kannst du mit einem Passkey speichern</span>
+    </div>
+    <div class="info-row">
+      <span>✉️</span>
+      <span>Maximal <strong>50 Nachrichten</strong> als Gast</span>
+    </div>
+    <div class="info-row">
+      <span>🔒</span>
+      <span>Ende-zu-Ende verschlüsselt</span>
+    </div>
+  </div>
+
+  <button class="btn btn-primary" id="joinBtn" onclick="joinAsGuest()">
+    Als Gast beitreten
+  </button>
+
+  <hr class="divider" />
+
+  <button class="btn btn-ghost" onclick="goLogin()">
+    Ich habe bereits einen Account → Anmelden
+  </button>
+
+  <div class="status" id="joinStatus"></div>
+</div>
+
+<!-- FEHLER-KARTE -->
+<div class="card" id="errorCard">
+  <div class="logo">REN<span class="x">E</span>X</div>
+  <div class="invite-icon">❌</div>
+  <div class="invite-title" id="errorTitle">Einladung ungültig</div>
+  <div class="invite-sub" id="errorMsg">Dieser Einladungslink ist abgelaufen oder wurde bereits verwendet.</div>
+  <button class="btn btn-ghost" onclick="window.location.href='/'">Zur Startseite</button>
+</div>
+
+<script>
+  const API = "https://api.renex.id";
+  const token = new URLSearchParams(location.search).get("token");
+
+  // ── Startup ───────────────────────────────────────────
+  (async () => {
+    if (!token) return showError("Kein Token", "Dieser Link ist ungültig.");
+
+    try {
+      const res  = await fetch(`${API}/invite/info?token=${encodeURIComponent(token)}`);
+      const data = await res.json();
+
+      if (!data.valid) {
+        const msgs = {
+          expired:   "Dieser Einladungslink ist abgelaufen.",
+          converted: "Dieser Link wurde bereits verwendet.",
+          not_found: "Dieser Link existiert nicht.",
+        };
+        return showError("Einladung ungültig", msgs[data.reason] || "Unbekannter Fehler.");
+      }
+
+      document.getElementById("chatName").textContent  = data.displayName || "Chat";
+      document.getElementById("invitedBy").textContent = data.createdBy   || "jemandem";
+
+      show("inviteCard");
+      hide("loadingCard");
+
+    } catch (e) {
+      showError("Verbindungsfehler", "Bitte überprüfe deine Internetverbindung.");
+    }
+  })();
+
+  // ── Join ─────────────────────────────────────────────
+  async function joinAsGuest() {
+    const btn = document.getElementById("joinBtn");
+    const status = document.getElementById("joinStatus");
+    btn.disabled = true;
+    status.className = "status";
+    status.innerHTML = '<span class="spinner"></span> Beitreten…';
+
+    try {
+      const res  = await fetch(`${API}/invite/join`, {
+        method:      "POST",
+        credentials: "include",
+        headers:     { "Content-Type": "application/json" },
+        body:        JSON.stringify({ token }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        status.className = "status error";
+        status.textContent = data.error || "Fehler beim Beitreten.";
+        btn.disabled = false;
+        return;
+      }
+
+      // Gast-Daten im sessionStorage für den Chat speichern
+      sessionStorage.setItem("guestSession", JSON.stringify({
+        guestHandle: data.guestHandle,
+        convoId:     data.convoId,
+        convoType:   data.convoType,
+        expiresAt:   data.expiresAt,
+        msgLimit:    data.msgLimit,
+        msgCount:    data.msgCount,
+        token,
+      }));
+
+      status.className = "status ok";
+      status.textContent = "Erfolgreich! Leite weiter…";
+
+      // Weiterleitung in den Chat
+      setTimeout(() => {
+        if (data.convoType === "group") {
+          window.location.href = `/chat/?group=${encodeURIComponent(data.convoId)}&guest=1`;
+        } else {
+          // DM: den anderen Handle aus der convoId extrahieren
+          const parts   = data.convoId.split(":");
+          const partner = parts.find(h => h !== data.guestHandle) || parts[0];
+          window.location.href = `/chat/?with=${encodeURIComponent(partner)}&guest=1`;
+        }
+      }, 800);
+
+    } catch (e) {
+      status.className = "status error";
+      status.textContent = "Netzwerkfehler. Bitte erneut versuchen.";
+      btn.disabled = false;
+    }
+  }
+
+  // ── Helpers ───────────────────────────────────────────
+  function goLogin() {
+    window.location.href = `/?redirect=${encodeURIComponent(location.href)}`;
+  }
+
+  function showError(title, msg) {
+    document.getElementById("errorTitle").textContent = title;
+    document.getElementById("errorMsg").textContent   = msg;
+    hide("loadingCard");
+    hide("inviteCard");
+    show("errorCard");
+  }
+
+  function show(id) { document.getElementById(id).style.display = ""; }
+  function hide(id) { document.getElementById(id).style.display = "none"; }
+</script>
+</body>
+</html>

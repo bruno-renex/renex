@@ -315,6 +315,33 @@ if (data.authenticated) {
     return;
   }
 
+  // ── Gast-Konvertierung (falls Gast vorher registriert hat) ────────────
+  const _pendingConvert = sessionStorage.getItem("pendingGuestConvert");
+  if (_pendingConvert) {
+    try {
+      const guestInfo = JSON.parse(_pendingConvert);
+      sessionStorage.removeItem("pendingGuestConvert");
+      sessionStorage.removeItem("guestSession");
+
+      // Nachrichten des Gastes auf echten Account übertragen
+      await fetch(`${API}/invite/convert`, {
+        method:      "POST",
+        credentials: "include",
+        headers:     { "Content-Type": "application/json" },
+        body:        JSON.stringify({ guestToken: guestInfo.token }),
+      });
+
+      // Direkt in den Chat weiterleiten (nicht Inbox)
+      const chatTarget = guestInfo.convoType === "group"
+        ? guestInfo.convoId
+        : (guestInfo.inviterHandle || handle);
+      window.location.replace(`/chat/?with=${encodeURIComponent(chatTarget)}`);
+      return;
+    } catch (e) {
+      console.warn("⚠️ Gast-Konvertierung fehlgeschlagen:", e);
+      // Fallthrough → normale Inbox-Weiterleitung
+    }
+  }
   // ➡️ Weiter zur Inbox
   window.location.replace("/inbox.html");
 }

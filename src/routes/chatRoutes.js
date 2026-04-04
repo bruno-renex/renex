@@ -1,5 +1,5 @@
 import { json, readJson, param, dmConvoId } from '../utils.js';
-import { requireSession, rateLimit, pushToUserDO, pushToGroupMembers } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit, pushToUserDO, pushToGroupMembers } from '../auth.js';
 import { handleChatSend } from '../helpers/chatSend.js';
 
 // ======================================================
@@ -25,12 +25,14 @@ export async function handleChatRoutes(request, env, path, params) {
     case "/chat/list": {
       if (request.method === "GET") {
 
-        const session = await requireSession(request, env);
+        // Gäste dürfen ihre zugewiesene Konversation lesen (requireAnySession)
+        const session = await requireAnySession(request, env);
         if (!session) {
           return json(request, { error: "Not authenticated" }, 401);
         }
 
-        const me = String(session.handle || "").toLowerCase();
+        const me         = String(session.handle || "").toLowerCase();
+        const isGuest    = session.isGuest === true;
 
         const ip = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
 
@@ -64,6 +66,11 @@ export async function handleChatRoutes(request, env, path, params) {
         // Gruppe = UUID direkt verwenden; DM = sorted "alice:bob"
         const isGroupConvo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(other);
         const cid = isGroupConvo ? other : dmConvoId(me, other);
+
+        // Gäste: dürfen NUR ihre zugewiesene Konversation lesen
+        if (isGuest && cid !== session.convoId) {
+          return json(request, { error: "Guests can only read their assigned conversation" }, 403);
+        }
 
         // Gruppen: Mitgliedschaft prüfen (verhindert Lesen fremder Gruppen)
         if (isGroupConvo) {

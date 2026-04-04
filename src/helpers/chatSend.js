@@ -220,6 +220,10 @@ export async function handleChatSend(request, env) {
     ).bind(bodyConvoId, other).first();
 
     isAllowed = !!(senderMember && recipientMember);
+  } else if (isGuest) {
+    // Gast-DM: darf nur in der zugewiesenen Konversation schreiben
+    const guestCid = dmConvoId(me, other);
+    isAllowed = (guestCid === session.convoId);
   } else {
     // DM: gegenseitiger Kontakt-Check (bestehende Logik)
     isAllowed = await isAcceptedContact(env, me, to);

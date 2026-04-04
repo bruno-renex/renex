@@ -70,6 +70,163 @@ function showSystemToast(text, durationMs = 4000) {
   setTimeout(dismiss, durationMs);
 }
 
+// ======================================================
+// GUEST MODE HELPERS
+// ======================================================
+let _guestCountdownTimer = null;
+
+function showGuestBanner() {
+  const banner = document.getElementById("guest-banner");
+  if (!banner || !_guestData) return;
+  banner.style.display = "flex";
+  updateGuestBannerCount();
+  _startGuestCountdown();
+}
+
+function updateGuestBannerCount() {
+  const el = document.getElementById("guest-msgs-display");
+  if (!el || !_guestData) return;
+  const left = Math.max(0, (_guestData.msgLimit || 50) - (_guestData.msgCount || 0));
+  el.textContent = String(left);
+  // Bei niedrigem Nachrichtenlimit: warnen
+  if (left <= 5) el.style.color = "#ef4444";
+}
+
+function _startGuestCountdown() {
+  if (_guestCountdownTimer) clearInterval(_guestCountdownTimer);
+  const tick = () => {
+    const timerEl = document.getElementById("guest-timer-display");
+    if (!timerEl || !_guestData?.expiresAt) return;
+    const ms = Math.max(0, _guestData.expiresAt - Date.now());
+    const h  = Math.floor(ms / 3_600_000);
+    const m  = Math.floor((ms % 3_600_000) / 60_000);
+    const s  = Math.floor((ms % 60_000) / 1_000);
+    timerEl.textContent = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+    // Ablauf-Warnung (< 6 Stunden)
+    if (ms > 0 && ms < 6 * 3_600_000) timerEl.style.color = "#f59e0b";
+    if (ms === 0) {
+      timerEl.textContent = "Abgelaufen";
+      timerEl.style.color = "#ef4444";
+      showSystemToast("⚠️ Dein Gastzugang ist abgelaufen. Registriere dich um den Chat zu behalten.", 10000);
+    }
+  };
+  tick();
+  _guestCountdownTimer = setInterval(tick, 1000);
+}
+
+// Gast-Nachricht als Klartext senden (kein E2E)
+async function guestSendMessage(text) {
+  const now    = Date.now();
+  if (now - lastSendTime < SEND_COOLDOWN_MS) { showCooldownWarning(); return; }
+  lastSendTime = now;
+
+  const tempId     = `tmp-${now}-${Math.random().toString(16).slice(2)}`;
+  const pendingDiv = renderMessage({ from: getMyUser(), message: text, ts: now, tempId, status: "pending" });
+  if (pendingDiv) pendingByTempId.set(tempId, pendingDiv);
+  inputEl.value = "";
+  scrollToBottom();
+  updateSendButton();
+
+  try {
+    const isGroup = isGroupConversation(withUser);
+    const bodyObj = isGroup
+      ? { to: getMyUser(), convoId: withUser, message: text, e2e: false }
+      : { to: withUser, message: text, e2e: false };
+
+    const res  = await fetch(`${API}/chat/send`, {
+      method:      "POST",
+      credentials: "include",
+      headers:     { "Content-Type": "application/json" },
+      body:        JSON.stringify(bodyObj),
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (res.status === 429 && data?.error === "Message limit reached") {
+      if (pendingDiv) { pendingDiv.remove(); pendingByTempId.delete(tempId); }
+      showSystemToast("⚠️ Nachrichtenlimit erreicht — registriere dich um weiterzuschreiben!", 8000);
+      const btn = document.getElementById("guest-convert-btn");
+      if (btn) { btn.style.animation = "pulse 0.6s ease 2"; btn.style.background = "#ef4444"; }
+      return;
+    }
+
+    if (!res.ok) {
+      if (pendingDiv) { pendingDiv.remove(); pendingByTempId.delete(tempId); }
+      showSystemToast("⚠️ Senden fehlgeschlagen: " + (data?.error || "Unbekannter Fehler"));
+      return;
+    }
+
+    // Optimistic bubble bestätigen
+    if (pendingDiv && data?.message?.id) {
+      pendingDiv.dataset.id     = data.message.id;
+      pendingDiv.dataset.status = "sent";
+      pendingByTempId.delete(tempId);
+      renderedMessageIds.add(data.message.id);
+    }
+
+    // Lokalen msg_count hochzählen
+    if (_guestData) { _guestData.msgCount = (_guestData.msgCount || 0) + 1; }
+    updateGuestBannerCount();
+
+  } catch (e) {
+    if (pendingDiv) { pendingDiv.remove(); pendingByTempId.delete(tempId); }
+    showSystemToast("⚠️ Netzwerkfehler — bitte erneut versuchen");
+  }
+}
+
+// Gast → echten Account konvertieren
+function convertGuest() {
+  if (!_guestData?.token) return;
+  // Token in sessionStorage sichern, damit auth.js nach Passkey-Reg weiterleiten kann
+  sessionStorage.setItem("pendingGuestConvert", JSON.stringify({
+    token:         _guestData.token,
+    convoId:       _guestData.convoId,
+    convoType:     _guestData.convoType,
+    inviterHandle: _guestData.inviterHandle || withUser,
+  }));
+  // Zur Login/Register-Seite (registerGuest=1 als Signal für mögliche UI-Anpassung)
+  window.location.href = "/?registerGuest=1";
+}
+
+// Einladungslink erstellen (für registrierte User)
+async function createInviteLink() {
+  const statusEl = document.getElementById("chat-invite-status");
+  if (statusEl) statusEl.textContent = "…";
+
+  try {
+    const isGroup = isGroupConversation(withUser);
+    const bodyObj = isGroup ? { convoId: withUser } : {};   // DM: kein convoId → neuer 1:1-Chat
+
+    const res  = await fetch(`${API}/invite/create`, {
+      method:      "POST",
+      credentials: "include",
+      headers:     { "Content-Type": "application/json" },
+      body:        JSON.stringify(bodyObj),
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || !data.inviteUrl) {
+      if (statusEl) statusEl.textContent = "❌";
+      showSystemToast("⚠️ Einladungslink konnte nicht erstellt werden");
+      return;
+    }
+
+    // In Zwischenablage kopieren
+    try {
+      await navigator.clipboard.writeText(data.inviteUrl);
+      if (statusEl) { statusEl.textContent = "✅ Kopiert!"; setTimeout(() => { statusEl.textContent = ""; }, 3000); }
+      showSystemToast("🔗 Einladungslink kopiert!", 3000);
+    } catch {
+      // Fallback: prompt
+      prompt("Link kopieren:", data.inviteUrl);
+      if (statusEl) statusEl.textContent = "";
+    }
+
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "❌";
+    showSystemToast("⚠️ Netzwerkfehler");
+  }
+}
+
 function showChatToast({ emoji, from, chatTarget, groupName }) {
   const container = document.getElementById("chat-toast-container");
   if (!container) return;
@@ -213,6 +370,14 @@ if (!inputEl || !sendBtn) {
 inputEl.value = text;
 sendBtn.click();  
 }
+
+// ======================================================
+// GUEST SESSION — Erkennung aus sessionStorage (gesetzt durch /join/)
+// ======================================================
+const _guestData = (() => {
+  try { return JSON.parse(sessionStorage.getItem("guestSession") || "null"); } catch { return null; }
+})();
+const _isGuestMode = !!(_guestData?.guestHandle && _guestData?.token);
 
 // ======================================================
 // URL PARAMS
@@ -1840,6 +2005,13 @@ if (firstLoad) {
 
     if (!text) return;
 
+    // ── GAST-SEND: Klartext, kein E2E ──────────────────────────────────
+    if (_isGuestMode) {
+      await guestSendMessage(text);
+      return;
+    }
+    // ────────────────────────────────────────────────────────────────────
+
 // ==========================================
 // E2E NOT READY → DEFERRED SEND
 // ==========================================
@@ -2400,6 +2572,12 @@ async function initAutoDeleteUI() {
         alert("Umbenennen fehlgeschlagen: " + (e.message || e));
       }
     });
+  }
+
+  // 🔗 Einladungslink-Button (nur für eingeloggte User, nicht für Gäste)
+  const inviteItem = document.getElementById("chat-invite-item");
+  if (inviteItem && !_isGuestMode) {
+    inviteItem.style.display = "flex";
   }
 
   if (menuBtn && menuDropdown) {
@@ -3583,6 +3761,14 @@ async function deleteMessage(messageId) {
 async function processMessage(m) {
   if (!m?.id || !m?.from) return false;
 
+  // Gast-Modus: E2E-Nachrichten anderer User als Platzhalter zeigen (kein Decrypt-Versuch)
+  if (_isGuestMode && m.e2e && m.from !== getMyUser()) {
+    if (renderedMessageIds.has(m.id)) return false;
+    renderedMessageIds.add(m.id);
+    renderMessage({ id: m.id, from: m.from, message: "🔒 Registriere dich um diese Nachricht zu lesen", ts: m.ts });
+    return true;
+  }
+
   // System-Messages (join/leave) direkt als UI-Hinweis rendern — kein Decrypt, kein Bubble
   if (m.type === "system") {
     if (renderedMessageIds.has(m.id)) return false;
@@ -4071,6 +4257,26 @@ if (window.__chatStartupDone) {
 window.__chatStartupDone = true;
 
   console.log("💬 Chat Startup läuft");
+
+  // ══ GAST-MODUS: kein E2E, kein Passkey ═══════════════════════════════
+  if (_isGuestMode && _guestData) {
+    // my_user setzen damit getMyUser() den Gast-Handle zurückgibt
+    localStorage.setItem("my_user", _guestData.guestHandle);
+    // e2eReady bleibt false → Guest-Send-Pfad greift im sendBtn-Listener
+    startChat();
+    showGuestBanner();
+    // Invite-Item verstecken für Gäste
+    const inviteItem = document.getElementById("chat-invite-item");
+    if (inviteItem) inviteItem.style.display = "none";
+    // Attachment-Buttons für Gäste deaktivieren (kein Upload ohne Account)
+    const attachBar = document.getElementById("attach-bar");
+    if (attachBar) attachBar.style.display = "none";
+    await loadMessages().catch(e => console.warn("Guest loadMessages failed:", e));
+    startPolling();
+    console.log("👤 Gast-Chat gestartet:", withUser, "als", _guestData.guestHandle);
+    return; // DM/Gruppen E2E-Startup überspringen
+  }
+  // ═════════════════════════════════════════════════════════════════════
 
   // 0️⃣ UI sofort binden — Enter & Click funktionieren von Anfang an.
   // Nachrichten während E2E-Setup werden in deferredQueue gepuffert und

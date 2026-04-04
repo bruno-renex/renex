@@ -1,4 +1,4 @@
-import { json, param, corsHeaders } from '../utils.js';
+import { json, param, corsHeaders, dmConvoId } from '../utils.js';
 import { requireSession, requireGuestSession, rateLimit, GUEST_TOKEN_RE, GUEST_HANDLE_RE } from '../auth.js';
 
 // ======================================================
@@ -51,34 +51,44 @@ export async function handleInviteRoutes(request, env, path, params) {
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
     const { convoId } = body;
-    const convoType = validateConvoId(convoId);
-    if (!convoType) return json(request, { error: "Invalid convoId" }, 400);
 
-    // Membership-Check
-    if (convoType === "group") {
-      const member = await env.RENEX_DB.prepare(
-        "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-      ).bind(convoId, me).first();
-      if (!member) return json(request, { error: "Not a member" }, 403);
-    } else {
-      if (!convoId.split(":").includes(me)) return json(request, { error: "Not a member" }, 403);
+    // convoId optional: wenn nicht angegeben → DM-Einladung (1:1 mit dem Einladenden)
+    let finalConvoId = "";
+    let convoType    = "dm";
+
+    if (convoId) {
+      const detectedType = validateConvoId(convoId);
+      if (!detectedType) return json(request, { error: "Invalid convoId" }, 400);
+      convoType    = detectedType;
+      finalConvoId = convoId;
+
+      // Membership-Check für Gruppen oder existierende DMs
+      if (convoType === "group") {
+        const member = await env.RENEX_DB.prepare(
+          "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+        ).bind(finalConvoId, me).first();
+        if (!member) return json(request, { error: "Not a member" }, 403);
+      } else {
+        if (!finalConvoId.split(":").includes(me)) return json(request, { error: "Not a member" }, 403);
+      }
+
+      // Konversation muss in DB existieren
+      const convo = await env.RENEX_DB.prepare(
+        "SELECT name FROM conversations WHERE id = ?"
+      ).bind(finalConvoId).first();
+      if (!convo) return json(request, { error: "Conversation not found" }, 404);
     }
+    // kein convoId: DM-Einladung → convo_id wird erst beim Join erstellt
 
-    // Konversation muss in DB existieren
-    const convo = await env.RENEX_DB.prepare(
-      "SELECT name FROM conversations WHERE id = ?"
-    ).bind(convoId).first();
-    if (!convo) return json(request, { error: "Conversation not found" }, 404);
-
-    const now      = Date.now();
-    const token    = generateGuestToken();
+    const now       = Date.now();
+    const token     = generateGuestToken();
     const expiresAt = now + GUEST_EXPIRY_MS;
 
     await env.RENEX_DB.prepare(
       `INSERT INTO guest_sessions
          (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
        VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', NULL)`
-    ).bind(token, convoId, convoType, me, now, expiresAt, GUEST_MSG_LIMIT).run();
+    ).bind(token, finalConvoId, convoType, me, now, expiresAt, GUEST_MSG_LIMIT).run();
 
     return json(request, {
       ok: true,
@@ -113,7 +123,7 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     // Anzeigenamen der Konversation ermitteln
     let displayName = row.created_by + "'s Chat";
-    if (row.convo_type === "group") {
+    if (row.convo_type === "group" && row.convo_id) {
       const convo = await env.RENEX_DB.prepare(
         "SELECT name FROM conversations WHERE id = ?"
       ).bind(row.convo_id).first();
@@ -148,7 +158,7 @@ export async function handleInviteRoutes(request, env, path, params) {
       return json(request, { error: "Invalid token" }, 400);
     }
 
-    const row = await env.RENEX_DB.prepare(
+    let row = await env.RENEX_DB.prepare(
       "SELECT * FROM guest_sessions WHERE token = ?"
     ).bind(token).first();
 
@@ -176,11 +186,38 @@ export async function handleInviteRoutes(request, env, path, params) {
         "UPDATE guest_sessions SET guest_handle = ? WHERE token = ?"
       ).bind(guestHandle, token).run();
 
+      const joinTs = Date.now();
+      let convoId = row.convo_id;
+
+      // ── DM-Einladung ohne vordefinierte Konversation ─────────────────
+      // Neue 1:1-Konversation zwischen Einladendem und Gast erstellen
+      if (!convoId || convoId === "") {
+        convoId = dmConvoId(row.created_by, guestHandle);
+        await env.RENEX_DB.prepare(
+          `INSERT OR IGNORE INTO conversations (id, type, name, created_at, created_by)
+           VALUES (?, 'dm', NULL, ?, ?)`
+        ).bind(convoId, joinTs, row.created_by).run();
+
+        // Einladenden als Mitglied eintragen
+        await env.RENEX_DB.prepare(
+          `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+           VALUES (?, ?, 'member', ?)`
+        ).bind(convoId, row.created_by, joinTs).run();
+
+        // guest_sessions.convo_id nachträglich setzen
+        await env.RENEX_DB.prepare(
+          "UPDATE guest_sessions SET convo_id = ? WHERE token = ?"
+        ).bind(convoId, token).run();
+
+        // row lokal aktualisieren (wird weiter unten für KV-Session verwendet)
+        row = { ...row, convo_id: convoId };
+      }
+
       // Gast als Mitglied der Konversation eintragen (Rolle: 'guest')
       await env.RENEX_DB.prepare(
         `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
          VALUES (?, ?, 'guest', ?)`
-      ).bind(row.convo_id, guestHandle, Date.now()).run();
+      ).bind(convoId, guestHandle, joinTs).run();
     }
 
     // KV-Session-Cache setzen (für schnellen Auth-Lookup)
@@ -202,13 +239,14 @@ export async function handleInviteRoutes(request, env, path, params) {
     const cookieVal = `guest_session=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Max-Age=${ttlSec}; Path=/`;
 
     return new Response(JSON.stringify({
-      ok:          true,
+      ok:            true,
       guestHandle,
-      convoId:     row.convo_id,
-      convoType:   row.convo_type,
-      expiresAt:   row.expires_at,
-      msgLimit:    row.msg_limit,
-      msgCount:    row.msg_count,
+      convoId:       row.convo_id,
+      convoType:     row.convo_type,
+      inviterHandle: row.created_by,
+      expiresAt:     row.expires_at,
+      msgLimit:      row.msg_limit,
+      msgCount:      row.msg_count,
     }), {
       status: 200,
       headers: {

@@ -472,12 +472,33 @@ textarea::placeholder {
             style="width:32px;height:32px;min-width:32px;border-radius:50%;background:var(--accent);color:#fff;font-size:18px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:transform 0.15s,opacity 0.15s;padding:0;">＋</button>
         </div>
       </div>
+      <!-- Einladungslink (DM + Gruppe, nur für eingeloggte User) -->
+      <div id="chat-invite-item" style="display:none;border-top:1px solid var(--border-subtle);margin-top:4px;padding:10px 16px;cursor:pointer;font-size:13px;display:none;justify-content:space-between;align-items:center;" onclick="createInviteLink()">
+        <span>🔗 Einladungslink erstellen</span>
+        <span id="chat-invite-status" style="font-size:11px;color:var(--accent-voice);"></span>
+      </div>
       <!-- Gruppen: Verlassen -->
       <div id="group-leave-item" style="display:none;border-top:1px solid var(--border-subtle);margin-top:4px;padding:4px 16px 8px;">
         <button id="group-leave-btn" data-i18n="leaveGroupBtn" style="width:100%;font-size:13px;padding:7px 12px;border-radius:7px;background:transparent;border:1px solid var(--border-subtle);color:var(--status-error);cursor:pointer;text-align:left;">Verlassen</button>
       </div>
     </div>
   </div>
+</div>
+
+<!-- ── GAST-BANNER (wird per JS eingeblendet) ──────────────────────── -->
+<div id="guest-banner" style="display:none;background:linear-gradient(135deg,rgba(56,189,248,0.12),rgba(99,102,241,0.12));border-bottom:1px solid rgba(56,189,248,0.2);padding:8px 16px;display:none;align-items:center;justify-content:space-between;gap:8px;font-size:12px;flex-shrink:0;">
+  <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+    <span style="font-size:16px;flex-shrink:0;">👤</span>
+    <div style="min-width:0;">
+      <div style="font-weight:600;color:var(--text-primary);">Gastzugang</div>
+      <div style="color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        <span id="guest-timer-display">--:--:--</span> verbleibend &nbsp;·&nbsp; <span id="guest-msgs-display">50</span> Nachrichten übrig
+      </div>
+    </div>
+  </div>
+  <button id="guest-convert-btn" onclick="convertGuest()" style="flex-shrink:0;padding:6px 12px;border-radius:8px;border:none;background:var(--accent-voice);color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">
+    Registrieren &amp; behalten
+  </button>
 </div>
 
 <div id="messages"></div>

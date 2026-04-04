@@ -253,12 +253,13 @@
 
       // Gast-Daten im sessionStorage für den Chat speichern
       sessionStorage.setItem("guestSession", JSON.stringify({
-        guestHandle: data.guestHandle,
-        convoId:     data.convoId,
-        convoType:   data.convoType,
-        expiresAt:   data.expiresAt,
-        msgLimit:    data.msgLimit,
-        msgCount:    data.msgCount,
+        guestHandle:   data.guestHandle,
+        convoId:       data.convoId,
+        convoType:     data.convoType,
+        inviterHandle: data.inviterHandle,
+        expiresAt:     data.expiresAt,
+        msgLimit:      data.msgLimit,
+        msgCount:      data.msgCount,
         token,
       }));
 
@@ -268,12 +269,12 @@
       // Weiterleitung in den Chat
       setTimeout(() => {
         if (data.convoType === "group") {
-          window.location.href = `/chat/?group=${encodeURIComponent(data.convoId)}&guest=1`;
+          // Gruppe: withUser = groupUUID
+          window.location.href = `/chat/?with=${encodeURIComponent(data.convoId)}&guest=1`;
         } else {
-          // DM: den anderen Handle aus der convoId extrahieren
-          const parts   = data.convoId.split(":");
-          const partner = parts.find(h => h !== data.guestHandle) || parts[0];
-          window.location.href = `/chat/?with=${encodeURIComponent(partner)}&guest=1`;
+          // DM: withUser = Einladender (damit dmConvoId korrekt berechnet wird)
+          const inviter = data.inviterHandle || data.convoId.split(":").find(h => h !== data.guestHandle);
+          window.location.href = `/chat/?with=${encodeURIComponent(inviter)}&guest=1`;
         }
       }, 800);
 

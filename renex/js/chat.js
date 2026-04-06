@@ -384,6 +384,10 @@ const _guestData = (() => {
 })();
 const _isGuestMode = !!(_guestData?.guestHandle && _guestData?.token);
 
+// true wenn mindestens ein Gast in der aktuellen Gruppe ist.
+// Wenn gesetzt: reguläre Mitglieder senden `pt`-Feld (Klartext) neben E2E-Payload.
+let _groupHasGuests = false;
+
 // ======================================================
 // URL PARAMS
 // ======================================================
@@ -698,6 +702,13 @@ if (event?.type === "NEW_MESSAGE") {
   if ((event?.type === "GROUP_MEMBER_JOINED" || event?.type === "GROUP_MEMBER_LEFT") && event.groupId === withUser) {
     initGroupMembersUI(withUser);
     loadMessages().catch(() => {});
+    return;
+  }
+
+  // 👤 GUEST_JOINED: Gast hat die Gruppe betreten → pt-Flag aktivieren
+  if (event?.type === "guest_joined" && event.groupId === withUser) {
+    _groupHasGuests = true;
+    console.log("👤 Gast beigetreten:", event.handle, "→ _groupHasGuests = true");
     return;
   }
 
@@ -2129,6 +2140,8 @@ if (isGroupConversation(withUser)) {
       ivB64:        encrypted.ivB64,
       ctB64:        encrypted.ctB64,
       rotationIndex: encrypted.chainIndex,
+      // Gast-Klartext-Overlay: falls Gäste in der Gruppe → pt mitsenden
+      ...(_groupHasGuests ? { pt: text } : {}),
       ...replyFields
     })
   });
@@ -2969,6 +2982,8 @@ async function initGroupMembersUI(groupId) {
       }
 
       _memberHandles = members.map(m => m.member_handle);
+      // Gäste-Flag aktualisieren (für pt-Feld beim Senden)
+      _groupHasGuests = members.some(m => m.member_handle.startsWith("guest_"));
 
       const myContacts = await fetchAcceptedContacts();
       const myHandle   = getMyUser();
@@ -3768,19 +3783,17 @@ async function deleteMessage(messageId) {
 async function processMessage(m) {
   if (!m?.id || !m?.from) return false;
 
-  // Gast-Modus: E2E-Nachrichten anderer User als Platzhalter zeigen (kein Decrypt-Versuch)
-  if (_isGuestMode && m.e2e && m.from !== getMyUser()) {
+  // Gast-Modus: Nachrichten anderer direkt rendern
+  // - m.message vorhanden: Klartext (entweder reiner Gast oder pt-Overlay von regulärem Member)
+  // - nur E2E ohne Klartext: Platzhalter anzeigen
+  if (_isGuestMode && m.from && m.from !== getMyUser()) {
     if (renderedMessageIds.has(m.id)) return false;
     renderedMessageIds.add(m.id);
-    renderMessage({ id: m.id, from: m.from, message: "🔒 Registriere dich um diese Nachricht zu lesen", ts: m.ts });
-    return true;
-  }
-
-  // Gast-Modus: Klartext-Nachrichten anderer direkt rendern (kein E2E-Decrypt nötig)
-  if (_isGuestMode && !m.e2e && m.from && m.from !== getMyUser() && m.message) {
-    if (renderedMessageIds.has(m.id)) return false;
-    renderedMessageIds.add(m.id);
-    renderMessage({ id: m.id, from: m.from, message: m.message, ts: m.ts });
+    if (m.message) {
+      renderMessage({ id: m.id, from: m.from, message: m.message, ts: m.ts });
+    } else {
+      renderMessage({ id: m.id, from: m.from, message: "🔒 Registriere dich um diese Nachricht zu lesen", ts: m.ts });
+    }
     return true;
   }
 
@@ -4209,20 +4222,24 @@ async function ensureGroupChatReady(groupId, myHandle) {
   // Eigenen GSK bereitstellen (IDB-persistent)
   await getOrCreateGroupSK(groupId, myHandle);
 
+  // Mitgliederliste immer laden — auch wenn GSK bereits distribuiert,
+  // damit _groupHasGuests bei Page-Reload korrekt gesetzt wird.
+  let members = [];
+  try {
+    const res = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
+    const allMembers = res.members || [];
+    members = allMembers.filter(m => m.member_handle !== myHandle);
+    // Gäste-Flag: true wenn min. ein Gast in der Gruppe ist
+    _groupHasGuests = allMembers.some(m => m.member_handle.startsWith("guest_"));
+    if (_groupHasGuests) console.log("👤 Gruppe hat aktive Gäste → sende pt-Feld mit");
+  } catch (e) {
+    console.warn("⚠️ ensureGroupChatReady: Mitgliederliste fehlgeschlagen", e);
+  }
+
   // Nur einmal pro Session distribuieren (verhindert Spam beim Tab-Reload)
   const distKey = `gsk-dist:${groupId}`;
   if (sessionStorage.getItem(distKey)) {
     console.log("🔑 GSK bereits in dieser Session distribuiert:", groupId);
-    return;
-  }
-
-  // Mitgliederliste vom Server holen
-  let members = [];
-  try {
-    const res = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
-    members = (res.members || []).filter(m => m.member_handle !== myHandle);
-  } catch (e) {
-    console.warn("⚠️ ensureGroupChatReady: Mitgliederliste fehlgeschlagen", e);
     return;
   }
 

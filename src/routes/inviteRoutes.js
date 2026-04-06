@@ -1,5 +1,5 @@
 import { json, param, corsHeaders, dmConvoId } from '../utils.js';
-import { requireSession, requireGuestSession, rateLimit, GUEST_TOKEN_RE, GUEST_HANDLE_RE } from '../auth.js';
+import { requireSession, requireGuestSession, rateLimit, GUEST_TOKEN_RE, GUEST_HANDLE_RE, pushToGroupMembers, pushToUserDO } from '../auth.js';
 
 // ======================================================
 // INVITE ROUTES — Gastzugang ohne Passkey
@@ -218,6 +218,23 @@ export async function handleInviteRoutes(request, env, path, params) {
         `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
          VALUES (?, ?, 'guest', ?)`
       ).bind(convoId, guestHandle, joinTs).run();
+
+      // Bestehende Mitglieder benachrichtigen (damit sie _groupHasGuests setzen)
+      const isGroupConvo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(convoId);
+      const guestJoinEvent = {
+        id:        crypto.randomUUID(),
+        type:      "guest_joined",
+        groupId:   convoId,
+        handle:    guestHandle,
+        ts:        joinTs,
+      };
+      if (isGroupConvo) {
+        // Gruppe: alle anderen Mitglieder benachrichtigen
+        await pushToGroupMembers(env, env.RENEX_DB, convoId, guestHandle, guestJoinEvent);
+      } else {
+        // DM: nur den Einladenden benachrichtigen
+        if (row.created_by) await pushToUserDO(env, row.created_by, guestJoinEvent);
+      }
     }
 
     // KV-Session-Cache setzen (für schnellen Auth-Lookup)

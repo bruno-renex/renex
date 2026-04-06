@@ -23,6 +23,7 @@ export async function handleChatSend(request, env) {
     to,
     convoId: bodyConvoId,   // optional: explizite Konversations-ID (Gruppen-Ready)
     message,
+    pt,                  // Gast-Klartext-Overlay: Plaintext neben E2E (nur für Gruppen mit Gästen)
     e2e,
     payloads,
     ivB64,
@@ -354,6 +355,21 @@ export async function handleChatSend(request, env) {
 
   } else {
     msg.message = message;
+  }
+
+  // Gast-Klartext-Overlay: Wenn eine Gruppe aktive Gäste hat, schickt der reguläre
+  // Sender `pt` (plaintext) mit. Wir speichern es in message-Spalte, damit Gäste
+  // die Nachricht lesen können ohne den GSK zu haben.
+  // Nur erlaubt: E2E-Gruppen-Message, kein Gast als Sender, gültiger Text
+  if (
+    e2e &&
+    bodyConvoId &&
+    !isGuest &&
+    typeof pt === "string" &&
+    pt.length > 0 &&
+    pt.length <= MAX_MSG_LEN
+  ) {
+    msg.message = pt.slice(0, MAX_MSG_LEN);
   }
 
   // D1 INSERT — only real chat messages (not control)

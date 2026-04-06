@@ -157,6 +157,7 @@ async function guestSendMessage(text) {
 
     // Optimistic bubble bestätigen
     if (pendingDiv && data?.message?.id) {
+      pendingDiv.classList.remove("pending");
       pendingDiv.dataset.id     = data.message.id;
       pendingDiv.dataset.status = "sent";
       pendingByTempId.delete(tempId);
@@ -226,6 +227,10 @@ async function createInviteLink() {
     showSystemToast("⚠️ Netzwerkfehler");
   }
 }
+
+// Globale Exports für HTML-onclick-Handler (ES-Module sind nicht global)
+window.convertGuest   = convertGuest;
+window.createInviteLink = createInviteLink;
 
 function showChatToast({ emoji, from, chatTarget, groupName }) {
   const container = document.getElementById("chat-toast-container");
@@ -1300,6 +1305,8 @@ async function decryptMessageIfNeeded(msg, otherHandle) {
       }
       return null; // kein E2E-Payload → skip
     }
+    // Klartext-Nachricht (z.B. von Gästen, die kein E2E nutzen) → direkt zurückgeben
+    if (!msg.e2e && msg.message) return msg.message;
     // Kein E2E-Payload → nicht entschlüsselbar
     if (!msg.ivB64 || !msg.ctB64) return null;
     // chainIndex aus rotationIndex (im Backend so gespeichert)
@@ -3769,6 +3776,14 @@ async function processMessage(m) {
     return true;
   }
 
+  // Gast-Modus: Klartext-Nachrichten anderer direkt rendern (kein E2E-Decrypt nötig)
+  if (_isGuestMode && !m.e2e && m.from && m.from !== getMyUser() && m.message) {
+    if (renderedMessageIds.has(m.id)) return false;
+    renderedMessageIds.add(m.id);
+    renderMessage({ id: m.id, from: m.from, message: m.message, ts: m.ts });
+    return true;
+  }
+
   // System-Messages (join/leave) direkt als UI-Hinweis rendern — kein Decrypt, kein Bubble
   if (m.type === "system") {
     if (renderedMessageIds.has(m.id)) return false;
@@ -4166,7 +4181,7 @@ document.addEventListener("visibilitychange", async () => {
     return;
   }
 
-  if (!e2eReady) {
+  if (!e2eReady && !_isGuestMode) {
     stopPolling();
     return;
   }

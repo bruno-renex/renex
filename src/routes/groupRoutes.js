@@ -1,5 +1,5 @@
 import { json, readJson, param, checkCsrf } from '../utils.js';
-import { requireSession, rateLimit, pushToGroupMembers } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit, pushToGroupMembers } from '../auth.js';
 
 // ======================================================
 // GROUP ROUTES
@@ -25,10 +25,11 @@ export async function handleGroupRoutes(request, env, path, params) {
   const csrfErr = checkCsrf(request);
   if (csrfErr) return csrfErr;
 
-  const session = await requireSession(request, env);
+  const session = await requireAnySession(request, env);
   if (!session) return json(request, { error: "Not authenticated" }, 401);
 
   const me = String(session.handle || "").toLowerCase();
+  const isGuest = session.isGuest === true;
 
   switch (path) {
 
@@ -38,6 +39,7 @@ export async function handleGroupRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/groups/create": {
       if (request.method !== "POST") break;
+      if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
 
       const rl = await rateLimit(env, `groups_create:${me}`, 60_000, 5);
       if (!rl) return json(request, { error: "Too many requests" }, 429);
@@ -74,6 +76,7 @@ export async function handleGroupRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/groups/invite": {
       if (request.method !== "POST") break;
+      if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
 
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
@@ -152,6 +155,7 @@ export async function handleGroupRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/groups/rename": {
       if (request.method !== "POST") break;
+      if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
 
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
@@ -209,6 +213,7 @@ export async function handleGroupRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/groups/leave": {
       if (request.method !== "POST") break;
+      if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
 
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
@@ -339,6 +344,8 @@ export async function handleGroupRoutes(request, env, path, params) {
       if (request.method !== "POST") break;
       const { groupId, lastReadTs } = await request.json();
       if (!groupId || !lastReadTs) return json(request, { error: "Missing fields" }, 400);
+      // Gäste dürfen nur ihre eigene Gruppe markieren
+      if (isGuest && groupId !== session.convoId) return json(request, { error: "Not authorized" }, 403);
       // Sicherstellen dass User Mitglied ist
       const member = await env.RENEX_DB.prepare(
         "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
@@ -406,6 +413,7 @@ export async function handleGroupRoutes(request, env, path, params) {
       }
 
       if (request.method === "POST") {
+        if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
         const body = await readJson(request);
         if (!body) return json(request, { error: "Invalid JSON" }, 400);
         const { groupId, days } = body;

@@ -384,10 +384,6 @@ const _guestData = (() => {
 })();
 const _isGuestMode = !!(_guestData?.guestHandle && _guestData?.token);
 
-// true wenn mindestens ein Gast in der aktuellen Gruppe ist.
-// Wenn gesetzt: reguläre Mitglieder senden `pt`-Feld (Klartext) neben E2E-Payload.
-let _groupHasGuests = false;
-
 // ======================================================
 // URL PARAMS
 // ======================================================
@@ -705,10 +701,10 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
-  // 👤 GUEST_JOINED: Gast hat die Gruppe betreten → pt-Flag aktivieren
+  // 👤 GUEST_JOINED: Gast hat die Gruppe betreten → Mitgliederliste neu laden
   if (event?.type === "guest_joined" && event.groupId === withUser) {
-    _groupHasGuests = true;
-    console.log("👤 Gast beigetreten:", event.handle, "→ _groupHasGuests = true");
+    console.log("👤 Gast beigetreten:", event.handle);
+    initGroupMembersUI(withUser).catch(() => {});
     return;
   }
 
@@ -1316,8 +1312,6 @@ async function decryptMessageIfNeeded(msg, otherHandle) {
       }
       return null; // kein E2E-Payload → skip
     }
-    // Klartext-Nachricht (z.B. von Gästen, die kein E2E nutzen) → direkt zurückgeben
-    if (!msg.e2e && msg.message) return msg.message;
     // Kein E2E-Payload → nicht entschlüsselbar
     if (!msg.ivB64 || !msg.ctB64) return null;
     // chainIndex aus rotationIndex (im Backend so gespeichert)
@@ -2023,12 +2017,7 @@ if (firstLoad) {
 
     if (!text) return;
 
-    // ── GAST-SEND: Klartext, kein E2E ──────────────────────────────────
-    if (_isGuestMode) {
-      await guestSendMessage(text);
-      return;
-    }
-    // ────────────────────────────────────────────────────────────────────
+    // Gäste nutzen jetzt den normalen E2E-Gruppen-Pfad (kein separater Guest-Send mehr)
 
 // ==========================================
 // E2E NOT READY → DEFERRED SEND
@@ -2140,8 +2129,6 @@ if (isGroupConversation(withUser)) {
       ivB64:        encrypted.ivB64,
       ctB64:        encrypted.ctB64,
       rotationIndex: encrypted.chainIndex,
-      // Gast-Klartext-Overlay: falls Gäste in der Gruppe → pt mitsenden
-      ...(_groupHasGuests ? { pt: text } : {}),
       ...replyFields
     })
   });
@@ -2982,8 +2969,6 @@ async function initGroupMembersUI(groupId) {
       }
 
       _memberHandles = members.map(m => m.member_handle);
-      // Gäste-Flag aktualisieren (für pt-Feld beim Senden)
-      _groupHasGuests = members.some(m => m.member_handle.startsWith("guest_"));
 
       const myContacts = await fetchAcceptedContacts();
       const myHandle   = getMyUser();
@@ -3783,19 +3768,7 @@ async function deleteMessage(messageId) {
 async function processMessage(m) {
   if (!m?.id || !m?.from) return false;
 
-  // Gast-Modus: Nachrichten anderer direkt rendern
-  // - m.message vorhanden: Klartext (entweder reiner Gast oder pt-Overlay von regulärem Member)
-  // - nur E2E ohne Klartext: Platzhalter anzeigen
-  if (_isGuestMode && m.from && m.from !== getMyUser()) {
-    if (renderedMessageIds.has(m.id)) return false;
-    renderedMessageIds.add(m.id);
-    if (m.message) {
-      renderMessage({ id: m.id, from: m.from, message: m.message, ts: m.ts });
-    } else {
-      renderMessage({ id: m.id, from: m.from, message: "🔒 Registriere dich um diese Nachricht zu lesen", ts: m.ts });
-    }
-    return true;
-  }
+  // Gäste entschlüsseln jetzt via GSK wie reguläre Mitglieder — kein Intercept nötig
 
   // System-Messages (join/leave) direkt als UI-Hinweis rendern — kein Decrypt, kein Bubble
   if (m.type === "system") {
@@ -4194,7 +4167,7 @@ document.addEventListener("visibilitychange", async () => {
     return;
   }
 
-  if (!e2eReady && !_isGuestMode) {
+  if (!e2eReady) {
     stopPolling();
     return;
   }
@@ -4229,9 +4202,6 @@ async function ensureGroupChatReady(groupId, myHandle) {
     const res = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
     const allMembers = res.members || [];
     members = allMembers.filter(m => m.member_handle !== myHandle);
-    // Gäste-Flag: true wenn min. ein Gast in der Gruppe ist
-    _groupHasGuests = allMembers.some(m => m.member_handle.startsWith("guest_"));
-    if (_groupHasGuests) console.log("👤 Gruppe hat aktive Gäste → sende pt-Feld mit");
   } catch (e) {
     console.warn("⚠️ ensureGroupChatReady: Mitgliederliste fehlgeschlagen", e);
   }
@@ -4290,23 +4260,62 @@ window.__chatStartupDone = true;
 
   console.log("💬 Chat Startup läuft");
 
-  // ══ GAST-MODUS: kein E2E, kein Passkey ═══════════════════════════════
+  // ══ GAST-MODUS: Ephemeres E2E (Key aus sessionStorage) ══════════════
   if (_isGuestMode && _guestData) {
-    // my_user setzen damit getMyUser() den Gast-Handle zurückgibt
     localStorage.setItem("my_user", _guestData.guestHandle);
-    // e2eReady bleibt false → Guest-Send-Pfad greift im sendBtn-Listener
     startChat();
     showGuestBanner();
-    // Invite-Item verstecken für Gäste
     const inviteItem = document.getElementById("chat-invite-item");
     if (inviteItem) inviteItem.style.display = "none";
-    // Attachment-Buttons für Gäste deaktivieren (kein Upload ohne Account)
     const attachBar = document.getElementById("attach-bar");
     if (attachBar) attachBar.style.display = "none";
-    await loadMessages().catch(e => console.warn("Guest loadMessages failed:", e));
+
+    // Ephemeren Key aus sessionStorage laden und in IDB einspielen
+    // damit initE2EKeys() / loadPrivateKey() den gleichen Key findet
+    const guestDeviceId = _guestData.deviceId || sessionStorage.getItem("guest_device_id");
+    const privJwkRaw    = sessionStorage.getItem("guest_e2e_priv_jwk");
+    if (privJwkRaw && guestDeviceId) {
+      try {
+        const privJwk   = JSON.parse(privJwkRaw);
+        const privKey   = await crypto.subtle.importKey(
+          "jwk", privJwk,
+          { name: "ECDH", namedCurve: "P-256" },
+          false, ["deriveKey"]
+        );
+        const pubKey    = await crypto.subtle.importKey(
+          "jwk", { ...privJwk, d: undefined, key_ops: [] },
+          { name: "ECDH", namedCurve: "P-256" },
+          true, []
+        );
+        // In IDB speichern (wird von loadPrivateKey() / wrapCMKForInboxDevices() gelesen)
+        await idbSet("e2e-private-key", privKey);
+        await idbSet("e2e-public-key",  pubKey);
+        // device_id setzen (wird von getDeviceId() gelesen)
+        localStorage.setItem("device_id", guestDeviceId);
+        // Public Key (neu) in KV hochladen — sichert gegen TTL-Ablauf
+        const pubJwk = await crypto.subtle.exportKey("jwk", pubKey);
+        apiFetch("/e2e/inbox/upload", {
+          method: "POST",
+          body: JSON.stringify({ jwk: pubJwk, deviceId: guestDeviceId })
+        }).catch(e => console.warn("⚠️ Gast-Key re-upload fehlgeschlagen:", e));
+        console.log("🔐 Gast-E2E-Key geladen:", guestDeviceId);
+      } catch (e) {
+        console.warn("⚠️ Gast-E2E-Key konnte nicht geladen werden:", e);
+      }
+    } else {
+      console.warn("⚠️ Kein Gast-E2E-Key in sessionStorage — Nachrichten evtl. nicht entschlüsselbar");
+    }
+
+    // Normaler Gruppen-E2E-Startup (ab hier identisch mit regulären Mitgliedern)
+    e2eReady = true;
+    updateSendButton();
+    await initAutoDeleteUI().catch(() => {});
+    try { await loadMessages(); } catch (e) { console.warn("Guest loadMessages failed:", e); }
+    ensureGroupChatReady(withUser, _guestData.guestHandle)
+      .catch(e => console.warn("⚠️ ensureGroupChatReady (guest) failed", e));
     startPolling();
-    console.log("👤 Gast-Chat gestartet:", withUser, "als", _guestData.guestHandle);
-    return; // DM/Gruppen E2E-Startup überspringen
+    console.log("👤 Gast-Chat gestartet (E2E):", withUser, "als", _guestData.guestHandle);
+    return;
   }
   // ═════════════════════════════════════════════════════════════════════
 

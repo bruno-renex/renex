@@ -23,7 +23,6 @@ export async function handleChatSend(request, env) {
     to,
     convoId: bodyConvoId,   // optional: explizite Konversations-ID (Gruppen-Ready)
     message,
-    pt,                  // Gast-Klartext-Overlay: Plaintext neben E2E (nur für Gruppen mit Gästen)
     e2e,
     payloads,
     ivB64,
@@ -63,10 +62,22 @@ export async function handleChatSend(request, env) {
       return json(request, { error: "Guests can only send to their assigned conversation" }, 403);
     }
 
-    // Keine Control-Messages für Gäste
-    if (type && type !== null) {
+    // Nur E2E-Schlüssel-Control-Messages erlaubt (GSK für Gruppen-E2E)
+    // Alle anderen Control-Messages verboten
+    const GUEST_ALLOWED_TYPES = ["gsk", "request_gsk"];
+    if (type && type !== null && !GUEST_ALLOWED_TYPES.includes(type)) {
       return json(request, { error: "Control messages not allowed for guests" }, 403);
     }
+
+    // GSK/request_gsk: kein Nachrichtenlimit-Check nötig (keine Chat-Nachricht)
+    if (type && GUEST_ALLOWED_TYPES.includes(type)) {
+      // Gültige Konvo prüfen, dann direkt weiterleiten ohne Limit-Check
+      const targetConvoId = bodyConvoId || null;
+      if (targetConvoId !== session.convoId) {
+        return json(request, { error: "Guests can only send to their assigned conversation" }, 403);
+      }
+      // Limit-Check überspringen für Control-Messages
+    } else {
 
     // Nachrichtenlimit prüfen (D1 ist autoritativ)
     const guestRow = await env.RENEX_DB.prepare(
@@ -84,6 +95,7 @@ export async function handleChatSend(request, env) {
         convertUrl: "https://app.renex.id/join?convert=1",
       }, 429);
     }
+    } // end else (non-control guest message)
   }
   // ────────────────────────────────────────────────────
 
@@ -355,21 +367,6 @@ export async function handleChatSend(request, env) {
 
   } else {
     msg.message = message;
-  }
-
-  // Gast-Klartext-Overlay: Wenn eine Gruppe aktive Gäste hat, schickt der reguläre
-  // Sender `pt` (plaintext) mit. Wir speichern es in message-Spalte, damit Gäste
-  // die Nachricht lesen können ohne den GSK zu haben.
-  // Nur erlaubt: E2E-Gruppen-Message, kein Gast als Sender, gültiger Text
-  if (
-    e2e &&
-    bodyConvoId &&
-    !isGuest &&
-    typeof pt === "string" &&
-    pt.length > 0 &&
-    pt.length <= MAX_MSG_LEN
-  ) {
-    msg.message = pt.slice(0, MAX_MSG_LEN);
   }
 
   // D1 INSERT — only real chat messages (not control)

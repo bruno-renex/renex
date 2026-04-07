@@ -153,7 +153,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { token } = body;
+    const { token, publicKeyJwk, guestDeviceId } = body;
     if (!token || !GUEST_TOKEN_RE.test(token)) {
       return json(request, { error: "Invalid token" }, 400);
     }
@@ -219,6 +219,25 @@ export async function handleInviteRoutes(request, env, path, params) {
          VALUES (?, ?, 'guest', ?)`
       ).bind(convoId, guestHandle, joinTs).run();
 
+      // Ephemeren E2E-Public-Key des Gastes in KV speichern (für GSK-Distribution)
+      // Format: gdev_[24 hex chars] — kein reguläres deviceId-Format → sicher isoliert
+      if (
+        publicKeyJwk && typeof publicKeyJwk === "object" &&
+        typeof guestDeviceId === "string" && /^gdev_[0-9a-f]{24}$/.test(guestDeviceId)
+      ) {
+        await env.RENEX_KV.put(
+          `e2e:inbox:${guestHandle}:${guestDeviceId}`,
+          JSON.stringify(publicKeyJwk),
+          { expirationTtl: ttlSec }
+        );
+        await env.RENEX_KV.put(
+          `e2e:inbox:index:${guestHandle}`,
+          JSON.stringify([guestDeviceId]),
+          { expirationTtl: ttlSec }
+        );
+        console.log("🔐 Gast-E2E-Key gespeichert:", guestHandle, guestDeviceId);
+      }
+
       // Bestehende Mitglieder benachrichtigen (damit sie _groupHasGuests setzen)
       const isGroupConvo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(convoId);
       const guestJoinEvent = {
@@ -264,6 +283,7 @@ export async function handleInviteRoutes(request, env, path, params) {
       expiresAt:     row.expires_at,
       msgLimit:      row.msg_limit,
       msgCount:      row.msg_count,
+      deviceId:      guestDeviceId || null,
     }), {
       status: 200,
       headers: {

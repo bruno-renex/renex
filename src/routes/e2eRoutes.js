@@ -1,5 +1,5 @@
 import { json, readJson, param } from '../utils.js';
-import { requireSession, rateLimit, isAcceptedContact, pushToUserDO } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit, isAcceptedContact, pushToUserDO } from '../auth.js';
 
 // ======================================================
 // E2E ROUTES: /chat/keys/*, /e2e/inbox/*, /e2e/cmk/*
@@ -115,7 +115,7 @@ export async function handleE2eRoutes(request, env, path, params) {
     // ======================================================
     case "/e2e/inbox/upload": {
       if (request.method === "POST") {
-        const session = await requireSession(request, env);
+        const session = await requireAnySession(request, env);
         if (!session) {
           return json(request, { error: "Not authenticated" }, 401);
         }
@@ -218,7 +218,7 @@ export async function handleE2eRoutes(request, env, path, params) {
     // ======================================================
     case "/e2e/inbox/get": {
       if (request.method === "GET") {
-        const session = await requireSession(request, env);
+        const session = await requireAnySession(request, env);
         if (!session) {
           return json(request, { error: "Not authenticated" }, 401);
         }

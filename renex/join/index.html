@@ -235,12 +235,30 @@
     status.className = "status";
     status.innerHTML = '<span class="spinner"></span> Beitreten…';
 
+    // ── Ephemeres E2E-Schlüsselpaar generieren ────────────────────────
+    let publicKeyJwk = null;
+    let guestDeviceId = null;
+    try {
+      guestDeviceId = "gdev_" + Array.from(crypto.getRandomValues(new Uint8Array(12)))
+        .map(b => b.toString(16).padStart(2, "0")).join("");
+      const keyPair = await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey"]
+      );
+      const privJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+      publicKeyJwk  = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+      sessionStorage.setItem("guest_e2e_priv_jwk", JSON.stringify(privJwk));
+      sessionStorage.setItem("guest_device_id", guestDeviceId);
+    } catch (e) {
+      console.warn("⚠️ E2E Key-Generierung fehlgeschlagen:", e);
+    }
+    // ─────────────────────────────────────────────────────────────────
+
     try {
       const res  = await fetch(`${API}/invite/join`, {
         method:      "POST",
         credentials: "include",
         headers:     { "Content-Type": "application/json" },
-        body:        JSON.stringify({ token }),
+        body:        JSON.stringify({ token, publicKeyJwk, guestDeviceId }),
       });
       const data = await res.json();
 
@@ -260,6 +278,7 @@
         expiresAt:     data.expiresAt,
         msgLimit:      data.msgLimit,
         msgCount:      data.msgCount,
+        deviceId:      guestDeviceId,
         token,
       }));
 

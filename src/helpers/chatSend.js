@@ -50,52 +50,43 @@ export async function handleChatSend(request, env) {
   }
 
   // ── GUEST RESTRICTIONS ──────────────────────────────
-  // Gäste dürfen nur in ihrer zugewiesenen Konversation schreiben
-  // Keine Control-Messages, keine Attachments, Nachrichtenlimit beachten
+  // Gäste dürfen nur in ihrer zugewiesenen Konversation schreiben.
+  // GSK/request_gsk Control-Messages sind erlaubt (E2E Key Exchange).
+  // Alle anderen Control-Messages + normaler Send: Limit-Check.
   if (isGuest) {
-    const guestConvoId = session.convoId;
-    const sentConvoId  = bodyConvoId || null;
+    const guestConvoId  = session.convoId;
+    const resolvedConvo = bodyConvoId || (other ? [me, other].sort().join(":") : null);
 
     // Nur die zugewiesene Konvo erlaubt
-    const targetConvoId = sentConvoId || (other ? [me, other].sort().join(":") : null);
-    if (targetConvoId !== guestConvoId) {
+    if (resolvedConvo !== guestConvoId) {
       return json(request, { error: "Guests can only send to their assigned conversation" }, 403);
     }
 
-    // Nur E2E-Schlüssel-Control-Messages erlaubt (GSK für Gruppen-E2E)
+    const isGskControl = type === "gsk" || type === "request_gsk";
+
     // Alle anderen Control-Messages verboten
-    const GUEST_ALLOWED_TYPES = ["gsk", "request_gsk"];
-    if (type && type !== null && !GUEST_ALLOWED_TYPES.includes(type)) {
+    if (type && !isGskControl) {
       return json(request, { error: "Control messages not allowed for guests" }, 403);
     }
 
-    // GSK/request_gsk: kein Nachrichtenlimit-Check nötig (keine Chat-Nachricht)
-    if (type && GUEST_ALLOWED_TYPES.includes(type)) {
-      // Gültige Konvo prüfen, dann direkt weiterleiten ohne Limit-Check
-      const targetConvoId = bodyConvoId || null;
-      if (targetConvoId !== session.convoId) {
-        return json(request, { error: "Guests can only send to their assigned conversation" }, 403);
+    // Chat-Nachrichten: Limit-Check (GSK-Control-Messages überspringen)
+    if (!isGskControl) {
+      const guestRow = await env.RENEX_DB.prepare(
+        "SELECT msg_count, msg_limit, expires_at, converted_to FROM guest_sessions WHERE token = ?"
+      ).bind(guestToken).first();
+
+      if (!guestRow)             return json(request, { error: "Guest session not found" }, 404);
+      if (guestRow.converted_to) return json(request, { error: "Session already converted" }, 409);
+      if (Date.now() > guestRow.expires_at) return json(request, { error: "Guest session expired" }, 410);
+      if (guestRow.msg_count >= guestRow.msg_limit) {
+        return json(request, {
+          error:    "Message limit reached",
+          msgCount: guestRow.msg_count,
+          msgLimit: guestRow.msg_limit,
+          convertUrl: "https://app.renex.id/join?convert=1",
+        }, 429);
       }
-      // Limit-Check überspringen für Control-Messages
-    } else {
-
-    // Nachrichtenlimit prüfen (D1 ist autoritativ)
-    const guestRow = await env.RENEX_DB.prepare(
-      "SELECT msg_count, msg_limit, expires_at, converted_to FROM guest_sessions WHERE token = ?"
-    ).bind(guestToken).first();
-
-    if (!guestRow)            return json(request, { error: "Guest session not found" }, 404);
-    if (guestRow.converted_to) return json(request, { error: "Session already converted" }, 409);
-    if (Date.now() > guestRow.expires_at) return json(request, { error: "Guest session expired" }, 410);
-    if (guestRow.msg_count >= guestRow.msg_limit) {
-      return json(request, {
-        error:   "Message limit reached",
-        msgCount: guestRow.msg_count,
-        msgLimit: guestRow.msg_limit,
-        convertUrl: "https://app.renex.id/join?convert=1",
-      }, 429);
     }
-    } // end else (non-control guest message)
   }
   // ────────────────────────────────────────────────────
 

@@ -225,15 +225,16 @@ export async function handleInviteRoutes(request, env, path, params) {
         publicKeyJwk && typeof publicKeyJwk === "object" &&
         typeof guestDeviceId === "string" && /^gdev_[0-9a-f]{24}$/.test(guestDeviceId)
       ) {
+        const keyTtlSec = Math.max(60, Math.floor((row.expires_at - Date.now()) / 1000));
         await env.RENEX_KV.put(
           `e2e:inbox:${guestHandle}:${guestDeviceId}`,
           JSON.stringify(publicKeyJwk),
-          { expirationTtl: ttlSec }
+          { expirationTtl: keyTtlSec }
         );
         await env.RENEX_KV.put(
           `e2e:inbox:index:${guestHandle}`,
           JSON.stringify([guestDeviceId]),
-          { expirationTtl: ttlSec }
+          { expirationTtl: keyTtlSec }
         );
         console.log("🔐 Gast-E2E-Key gespeichert:", guestHandle, guestDeviceId);
       }

@@ -10,8 +10,8 @@ import { requireSession, requireGuestSession, rateLimit, GUEST_TOKEN_RE, GUEST_H
 //   POST /invite/ping     → msg_count aktualisieren + verbleibende Zeit prüfen
 // ======================================================
 
-const GUEST_EXPIRY_MS = 48 * 60 * 60 * 1000; // 48 Stunden
-const GUEST_MSG_LIMIT = 50;                   // Max. Nachrichten als Gast
+const GUEST_EXPIRY_MS = 2 * 60 * 1000; // 2 Minuten (TEST)
+const GUEST_MSG_LIMIT = 2;             // 2 Nachrichten (TEST)
 
 // ── Helpers ──────────────────────────────────────────
 function generateGuestToken() {
@@ -391,6 +391,69 @@ export async function handleInviteRoutes(request, env, path, params) {
       expiresAt:     row.expires_at,
       remainingMs:   remaining,
       expired,
+    });
+  }
+
+  // ────────────────────────────────────────────────────
+  // POST /invite/join-auth
+  // Eingeloggter User tritt über Invite-Link als echtes Member bei
+  // (kein Gast — normaler Member-Eintrag in conversation_members)
+  // ────────────────────────────────────────────────────
+  if (path === "/invite/join-auth" && request.method === "POST") {
+    const session = await requireSession(request, env);
+    if (!session || session.isGuest) return json(request, { error: "Not authenticated" }, 401);
+    const me = session.handle;
+
+    let body;
+    try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
+
+    const { token } = body;
+    if (!token || !GUEST_TOKEN_RE.test(token)) {
+      return json(request, { error: "Invalid token" }, 400);
+    }
+
+    const row = await env.RENEX_DB.prepare(
+      "SELECT * FROM guest_sessions WHERE token = ?"
+    ).bind(token).first();
+
+    if (!row)               return json(request, { error: "Invite not found" }, 404);
+    if (Date.now() > row.expires_at) return json(request, { error: "Invite expired" }, 410);
+
+    const convoId   = row.convo_id;
+    const convoType = row.convo_type;
+
+    if (!convoId) return json(request, { error: "No conversation linked to this invite" }, 400);
+
+    // Prüfen ob User bereits Mitglied ist
+    const existing = await env.RENEX_DB.prepare(
+      "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+    ).bind(convoId, me).first();
+
+    if (!existing) {
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+         VALUES (?, ?, 'member', ?)`
+      ).bind(convoId, me, Date.now()).run();
+
+      // Andere Mitglieder benachrichtigen
+      const isGroupConvo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(convoId);
+      if (isGroupConvo) {
+        const members = await env.RENEX_DB.prepare(
+          "SELECT member_handle FROM conversation_members WHERE convo_id = ? AND member_handle != ?"
+        ).bind(convoId, me).all();
+        for (const m of members.results || []) {
+          await pushToUserDO(env, m.member_handle, {
+            type: "member_joined", groupId: convoId, handle: me
+          }).catch(() => {});
+        }
+      }
+    }
+
+    return json(request, {
+      ok: true,
+      convoId,
+      convoType,
+      inviterHandle: row.created_by,
     });
   }
 

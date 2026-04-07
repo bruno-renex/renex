@@ -72,6 +72,16 @@ export async function handleChatRoutes(request, env, path, params) {
           return json(request, { error: "Guests can only read their assigned conversation" }, 403);
         }
 
+        // Gäste: Session-Ablauf sofort prüfen (verhindert unbegrenztes Mitlesen)
+        if (isGuest) {
+          const guestRow = await env.RENEX_DB.prepare(
+            "SELECT expires_at, converted_to FROM guest_sessions WHERE token = ?"
+          ).bind(session.token).first();
+          if (!guestRow || guestRow.converted_to || Date.now() > guestRow.expires_at) {
+            return json(request, { error: "Guest session expired" }, 410);
+          }
+        }
+
         // Gruppen: Mitgliedschaft prüfen (verhindert Lesen fremder Gruppen)
         if (isGroupConvo) {
           const isMember = await env.RENEX_DB.prepare(

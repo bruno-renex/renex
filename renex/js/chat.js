@@ -36,7 +36,8 @@ import {
   decryptGroupMessage,
   getOrCreateGroupSK,
   getGroupSK,
-  distributeGroupSK
+  distributeGroupSK,
+  receiveGroupSK
 } from "./groupSessionManager.js";
 // ======================================================
 // CONFIG
@@ -90,6 +91,20 @@ function updateGuestBannerCount() {
   el.textContent = String(left);
   // Bei niedrigem Nachrichtenlimit: warnen
   if (left <= 5) el.style.color = "#ef4444";
+  // Limit erreicht → gleiche Anzeige wie bei Zeit-Ablauf
+  if (left === 0) {
+    el.textContent = "0";
+    el.style.color = "#ef4444";
+    const timerEl = document.getElementById("guest-timer-display");
+    if (timerEl) {
+      timerEl.textContent = "Abgelaufen";
+      timerEl.style.color = "#ef4444";
+    }
+    showSystemToast("⚠️ Limit erreicht. Mit einem Passkey in Sekunden anmelden — kein Passwort nötig.", 10000);
+    // Eingabe sperren
+    if (inputEl) inputEl.disabled = true;
+    updateSendButton();
+  }
 }
 
 function _startGuestCountdown() {
@@ -107,7 +122,13 @@ function _startGuestCountdown() {
     if (ms === 0) {
       timerEl.textContent = "Abgelaufen";
       timerEl.style.color = "#ef4444";
-      showSystemToast("⚠️ Dein Gastzugang ist abgelaufen. Registriere dich um den Chat zu behalten.", 10000);
+      // Interval stoppen — kein weiterer Tick nötig
+      clearInterval(_guestCountdownTimer);
+      _guestCountdownTimer = null;
+      showSystemToast("⚠️ Gastzugang abgelaufen. Mit einem Passkey in Sekunden anmelden — kein Passwort nötig.", 10000);
+      // Eingabe sperren
+      if (inputEl) inputEl.disabled = true;
+      updateSendButton();
     }
   };
   tick();
@@ -189,42 +210,89 @@ function convertGuest() {
 }
 
 // Einladungslink erstellen (für registrierte User)
+let _inviteLinkPending = false;
 async function createInviteLink() {
+  if (_inviteLinkPending) return; // Doppelklick / Spam verhindern
+  _inviteLinkPending = true;
+
   const statusEl = document.getElementById("chat-invite-status");
   if (statusEl) statusEl.textContent = "…";
 
+  const isGroup = isGroupConversation(withUser);
+  const bodyObj = isGroup ? { convoId: withUser } : {};
+
+  // Fetch-Promise — wird ggf. direkt an ClipboardItem übergeben
+  const doFetch = () => fetch(`${API}/invite/create`, {
+    method:      "POST",
+    credentials: "include",
+    headers:     { "Content-Type": "application/json" },
+    body:        JSON.stringify(bodyObj),
+  }).then(r => r.json().catch(() => ({}))).then(data => {
+    if (!data.inviteUrl) throw new Error("no_url");
+    return data.inviteUrl;
+  });
+
   try {
-    const isGroup = isGroupConversation(withUser);
-    const bodyObj = isGroup ? { convoId: withUser } : {};   // DM: kein convoId → neuer 1:1-Chat
+    let copied = false;
 
-    const res  = await fetch(`${API}/invite/create`, {
-      method:      "POST",
-      credentials: "include",
-      headers:     { "Content-Type": "application/json" },
-      body:        JSON.stringify(bodyObj),
-    });
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok || !data.inviteUrl) {
-      if (statusEl) statusEl.textContent = "❌";
-      showSystemToast("⚠️ Einladungslink konnte nicht erstellt werden");
-      return;
+    // ── Methode 1: ClipboardItem + Promise (Safari-kompatibel) ──────────
+    // Hält den User-Gesture-Kontext aufrecht, auch nach await fetch()
+    if (navigator.clipboard && window.ClipboardItem) {
+      try {
+        const urlPromise = doFetch();
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/plain": urlPromise.then(u => new Blob([u], { type: "text/plain" }))
+          })
+        ]);
+        await urlPromise; // Fehler propagieren falls fetch fehlschlug
+        copied = true;
+      } catch (e) {
+        if (e.message === "no_url") throw e; // API-Fehler weitergeben
+        // Clipboard-Permission verweigert → Fallback
+      }
     }
 
-    // In Zwischenablage kopieren
-    try {
-      await navigator.clipboard.writeText(data.inviteUrl);
-      if (statusEl) { statusEl.textContent = "✅ Kopiert!"; setTimeout(() => { statusEl.textContent = ""; }, 3000); }
-      showSystemToast("🔗 Einladungslink kopiert!", 3000);
-    } catch {
-      // Fallback: prompt
-      prompt("Link kopieren:", data.inviteUrl);
-      if (statusEl) statusEl.textContent = "";
+    // ── Methode 2: writeText (Chrome, Firefox, neueres Safari) ──────────
+    if (!copied && navigator.clipboard?.writeText) {
+      try {
+        const url = await doFetch();
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      } catch (e) {
+        if (e.message === "no_url") throw e;
+      }
     }
+
+    // ── Methode 3: execCommand-Fallback (ältere Browser) ────────────────
+    if (!copied) {
+      const url = await doFetch();
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.style.cssText = "position:fixed;top:0;left:0;width:2em;height:2em;opacity:0;";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      try { copied = document.execCommand("copy"); } catch {}
+      document.body.removeChild(ta);
+      if (!copied) {
+        // Letzter Ausweg: Link im Toast anzeigen zum manuellen Kopieren
+        if (statusEl) statusEl.textContent = "";
+        showSystemToast("🔗 " + url, 10000);
+        return;
+      }
+    }
+
+    if (statusEl) statusEl.textContent = "";
+    showSystemToast("🔗 Link kopiert!", 2500);
 
   } catch (e) {
     if (statusEl) statusEl.textContent = "❌";
-    showSystemToast("⚠️ Netzwerkfehler");
+    showSystemToast(e.message === "no_url"
+      ? "⚠️ Link konnte nicht erstellt werden"
+      : "⚠️ Netzwerkfehler");
+  } finally {
+    setTimeout(() => { _inviteLinkPending = false; }, 5000);
   }
 }
 
@@ -324,6 +392,7 @@ let hasInboxKeys = false;
 let deferredQueue = []; 
 // 🔁 Flush Guards
 let isFlushingDeferred = false;
+let isFlushingDeferredInbound = false;
 let deferredBackoff = 1000;          // Start 1s
 const MAX_DEFERRED_BACKOFF = 15000;  // Max 15s
 
@@ -334,7 +403,12 @@ const MAX_DEFERRED_BACKOFF = 15000;  // Max 15s
 // FIX 3 — canSend ist REIN UI
 // ======================================================
 function canSend() {
-  return true; // UI blockiert nicht mehr wegen pending
+  // Gast: Nachrichtenlimit erreicht → Senden sperren
+  if (_guestData) {
+    const left = Math.max(0, (_guestData.msgLimit || 50) - (_guestData.msgCount || 0));
+    if (left === 0) return false;
+  }
+  return true;
 }
 
 function updateSendButton() {
@@ -701,10 +775,47 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
-  // 👤 GUEST_JOINED: Gast hat die Gruppe betreten → Mitgliederliste neu laden
+  // 👤 MEMBER_JOINED: eingeloggter User über Invite-Link beigetreten → GSK proaktiv pushen
+  if (event?.type === "member_joined" && event.groupId === withUser) {
+    console.log("👤 Neues Mitglied beigetreten:", event.handle);
+    initGroupMembersUI(withUser).catch(() => {});
+    if (event.handle && event.handle !== getMyUser() && !_isGuestMode) {
+      (async () => {
+        try {
+          await getOrCreateGroupSK(event.groupId, getMyUser());
+          const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(event.handle)}`);
+          const devs = Array.isArray(r.devices) ? r.devices : [];
+          if (devs.length) {
+            await distributeGroupSK(event.groupId, getMyUser(),
+              devs.map(d => ({ ...d, memberHandle: event.handle })), apiFetch);
+            console.log("✅ GSK proaktiv an neues Mitglied gesendet:", event.handle);
+          }
+        } catch (e) { console.warn("⚠️ GSK push zu neuem Mitglied fehlgeschlagen:", e); }
+      })();
+    }
+    return;
+  }
+
+  // 👤 GUEST_JOINED: Gast hat die Gruppe betreten → Mitgliederliste neu laden + GSK pushen
   if (event?.type === "guest_joined" && event.groupId === withUser) {
     console.log("👤 Gast beigetreten:", event.handle);
     initGroupMembersUI(withUser).catch(() => {});
+    // Eigenen GSK proaktiv an den neuen Gast senden (Online-Fast-Path)
+    // → Gast kann Nachrichten sofort entschlüsseln ohne auf request_gsk zu warten
+    if (event.handle && !_isGuestMode) {
+      (async () => {
+        try {
+          await getOrCreateGroupSK(event.groupId, getMyUser());
+          const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(event.handle)}`);
+          const devs = Array.isArray(r.devices) ? r.devices : [];
+          if (devs.length) {
+            await distributeGroupSK(event.groupId, getMyUser(),
+              devs.map(d => ({ ...d, memberHandle: event.handle })), apiFetch);
+            console.log("✅ GSK proaktiv an neuen Gast gesendet:", event.handle);
+          }
+        } catch (e) { console.warn("⚠️ GSK push zu Gast fehlgeschlagen:", e); }
+      })();
+    }
     return;
   }
 
@@ -1816,6 +1927,14 @@ if (!e2eReady) return;
 // DMs brauchen sessionKeyBytes; Gruppen nutzen GSK (kein SK nötig)
 if (!isGroupConversation(withUser) && !(sessionKeyBytes instanceof Uint8Array)) return;
 if (deferredInboundMessages.length === 0) return;
+
+// 🔒 Parallel-Guard — verhindert Race-Condition beim Retry-Zähler
+if (isFlushingDeferredInbound) {
+  console.log("⏳ flushDeferredInboundMessages läuft bereits");
+  return;
+}
+isFlushingDeferredInbound = true;
+
   console.log("📥 Flush deferred INBOUND", deferredInboundMessages.length);
 
   const queue = [...deferredInboundMessages];
@@ -1863,10 +1982,12 @@ if (deferredInboundMessages.length === 0) return;
     }
 
     if (text === "__decrypt_failed__") {
-      // Gruppen: nochmal GSK anfordern (bis MAX_INBOUND_RETRIES)
+      // Gruppen: nochmal GSK anfordern (max. 2 Versuche — OperationError = falscher Key,
+      // weiteres Retry hilft nur wenn ein NEUER korrekter GSK eintrifft)
+      const MAX_WRONG_KEY_RETRIES = 2;
       if (isGroupConversation(withUser) && m.from && m.from !== getMyUser()) {
         const retries = deferredInboundRetryCount.get(m.id) || 0;
-        if (retries < MAX_INBOUND_RETRIES) {
+        if (retries < MAX_WRONG_KEY_RETRIES) {
           deferredInboundRetryCount.set(m.id, retries + 1);
           deferredInboundMessages.push(m); // erneut in Queue
           requestGSKFrom(withUser, m.from).catch(() => {});
@@ -1940,6 +2061,8 @@ if (deferredInboundMessages.length === 0) return;
   if (isGroupConversation(withUser)) {
     _markGroupReadDebounced();
   }
+
+  isFlushingDeferredInbound = false;
 }
 
 // ======================================================
@@ -1952,7 +2075,7 @@ async function requestGSKFrom(groupId, senderHandle) {
   if (pendingGskRequests.has(key)) return; // max 1 Request pro Sender pro Session
   pendingGskRequests.add(key);
   try {
-    await apiFetch("/chat/send", {
+    const result = await apiFetch("/chat/send", {
       method: "POST",
       body: JSON.stringify({
         to:            senderHandle,
@@ -1961,13 +2084,20 @@ async function requestGSKFrom(groupId, senderHandle) {
         requestedFrom: senderHandle  // Nur der Angefragte antwortet (Handler-Filter)
       })
     });
+    // apiFetch wirft kein Error bei 429 — gibt { rateLimited: true } zurück
+    // → Key freigeben damit ein späterer Retry möglich ist
+    if (result?.rateLimited) {
+      pendingGskRequests.delete(key);
+      console.warn("⚠️ requestGSKFrom rate-limited — wird beim nächsten Flush erneut versucht");
+      return;
+    }
     console.log("📩 GSK angefordert von:", senderHandle, "in Gruppe:", groupId);
   } catch (e) {
     console.warn("⚠️ requestGSKFrom fehlgeschlagen:", e);
-    // 429 (Rate-Limit) oder 403 (nicht Mitglied) → kein Retry
+    // 403 (nicht Mitglied) → kein Retry
     const status = e?.status ?? e?.code;
-    if (!status || (status !== 429 && status !== 403)) {
-      pendingGskRequests.delete(key); // Retry nur bei echtem Netzwerkfehler
+    if (!status || status !== 403) {
+      pendingGskRequests.delete(key); // Retry bei anderen Fehlern erlauben
     }
   }
 }
@@ -2199,6 +2329,12 @@ if (res?.rateLimited) {
 
 // ✅ Erfolg
 const saved = res.message;
+
+// Gast-Nachrichtenzähler im Banner aktualisieren
+if (_guestData) {
+  _guestData.msgCount = (_guestData.msgCount || 0) + 1;
+  updateGuestBannerCount();
+}
 
 if (saved?.id) {
   cacheSentMessage(saved.id, text);
@@ -3009,15 +3145,19 @@ async function initGroupMembersUI(groupId) {
 
         li.appendChild(nameSpan);
 
-        if (!isMe) {
+        if (!isMe && !_isGuestMode) {
+          const isGuest = m.member_handle.startsWith("guest_");
           const isContact = myContacts.includes(m.member_handle);
           const addBtn = document.createElement("button");
           addBtn.style.cssText = "font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-muted);cursor:pointer;white-space:nowrap;flex-shrink:0;transition:opacity 0.15s;";
 
-          if (isContact) {
+          if (isGuest) {
+            // Gäste können nicht als Kontakt hinzugefügt werden → kein Button
+          } else if (isContact) {
             addBtn.textContent = "✓ Kontakt";
             addBtn.disabled = true;
             addBtn.style.opacity = "0.45";
+            li.appendChild(addBtn);
           } else {
             addBtn.textContent = "+ Anfragen";
             addBtn.addEventListener("click", async (e) => {
@@ -3047,8 +3187,8 @@ async function initGroupMembersUI(groupId) {
                 }, 2000);
               }
             });
+            li.appendChild(addBtn);
           }
-          li.appendChild(addBtn);
         }
 
         memberList.appendChild(li);
@@ -3768,7 +3908,61 @@ async function deleteMessage(messageId) {
 async function processMessage(m) {
   if (!m?.id || !m?.from) return false;
 
-  // Gäste entschlüsseln jetzt via GSK wie reguläre Mitglieder — kein Intercept nötig
+  // ── GSK empfangen (Polling-Fallback für Gäste ohne WebSocket) ────────────
+  // gsk-Nachrichten werden in D1 gespeichert damit Gäste sie via /chat/list erhalten.
+  // Reguläre User empfangen sie bereits via WebSocket (controlSocket.js) — idempotent.
+  // groupId: aus m.groupId (WebSocket-Push) oder withUser (D1/Polling — groupId nicht in Schema).
+  if (m.type === "gsk" && Array.isArray(m.payloads)) {
+    const gskGroupId = m.groupId || (isGroupConversation(withUser) ? withUser : null);
+    if (gskGroupId && !renderedMessageIds.has(m.id)) {
+      renderedMessageIds.add(m.id);
+      receiveGroupSK({
+        from:          m.from,
+        groupId:       gskGroupId,
+        myDeviceId:    getDeviceId(),
+        payloads:      m.payloads,
+        findSenderDeviceJwkFn: async (handle, deviceId) => {
+          try {
+            const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(handle)}`);
+            const devs = Array.isArray(r.devices) ? r.devices : [];
+            return devs.find(d => d.deviceId === deviceId)?.jwk || null;
+          } catch { return null; }
+        }
+      }).then(ok => {
+        if (ok) {
+          console.log("🔑 GSK via Polling empfangen von:", m.from, "→ flush deferred");
+          flushDeferredInboundMessages().catch(() => {});
+        }
+      }).catch(e => console.warn("⚠️ receiveGroupSK (polling):", e));
+    }
+    return false;
+  }
+
+  // ── request_gsk empfangen (Polling-Fallback: Member war offline beim Join) ─
+  // Falls ich derjenige bin der den GSK senden soll → jetzt nachholen.
+  // D1-Polling: m.groupId fehlt (kein DB-Feld) → withUser als Fallback
+  // D1-Polling: m.requestedFrom fehlt → in m.message gespeichert (Fallback)
+  const _reqGskGroupId  = m.groupId || (isGroupConversation(withUser) ? withUser : null);
+  const _reqGskTarget   = m.requestedFrom || m.message; // m.message = requestedFrom (D1-Fallback)
+  if (m.type === "request_gsk" && _reqGskGroupId && _reqGskTarget === getMyUser() && m.from) {
+    if (!renderedMessageIds.has(m.id)) {
+      renderedMessageIds.add(m.id);
+      (async () => {
+        try {
+          await getOrCreateGroupSK(_reqGskGroupId, getMyUser());
+          const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(m.from)}`);
+          const devs = Array.isArray(r.devices) ? r.devices : [];
+          if (devs.length) {
+            await distributeGroupSK(_reqGskGroupId, getMyUser(),
+              devs.map(d => ({ ...d, memberHandle: m.from })), apiFetch);
+            console.log("✅ GSK nachträglich gesendet an:", m.from);
+          }
+        } catch (e) { console.warn("⚠️ request_gsk (polling) response fehlgeschlagen:", e); }
+      })();
+    }
+    return false;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   // System-Messages (join/leave) direkt als UI-Hinweis rendern — kein Decrypt, kein Bubble
   if (m.type === "system") {

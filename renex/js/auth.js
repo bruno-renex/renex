@@ -315,6 +315,14 @@ if (data.authenticated) {
     return;
   }
 
+  // ── Invite-Link-Redirect (eingeloggter User kam über /join/?token=...) ─
+  const _redirectUrl = sessionStorage.getItem("pendingInviteRedirect");
+  if (_redirectUrl) {
+    sessionStorage.removeItem("pendingInviteRedirect");
+    window.location.replace(_redirectUrl);
+    return;
+  }
+
   // ── Gast-Konvertierung (falls Gast vorher registriert hat) ────────────
   const _pendingConvert = sessionStorage.getItem("pendingGuestConvert");
   if (_pendingConvert) {
@@ -331,11 +339,8 @@ if (data.authenticated) {
         body:        JSON.stringify({ guestToken: guestInfo.token }),
       });
 
-      // Direkt in den Chat weiterleiten (nicht Inbox)
-      const chatTarget = guestInfo.convoType === "group"
-        ? guestInfo.convoId
-        : (guestInfo.inviterHandle || handle);
-      window.location.replace(`/chat/?with=${encodeURIComponent(chatTarget)}`);
+      // Nach Gast-Konvertierung → Inbox (nicht direkt in Chat)
+      window.location.replace("/inbox.html");
       return;
     } catch (e) {
       console.warn("⚠️ Gast-Konvertierung fehlgeschlagen:", e);

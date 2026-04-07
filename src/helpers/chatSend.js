@@ -157,8 +157,8 @@ export async function handleChatSend(request, env) {
     : 0;
 
   // HARD SEND RATE LIMIT (global pro User)
-  // GILT NICHT für Control-Messages
-  if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk") {
+  // GILT NICHT für Control-Messages (inkl. request_gsk / gsk)
+  if (type !== "cmk_req" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk" && type !== "request_gsk") {
     const ok = await rateLimit(
       env,
       `chat_send:${me}`,
@@ -171,10 +171,10 @@ export async function handleChatSend(request, env) {
     }
   }
 
-  // CONTROL MESSAGE RATE LIMIT (cmk / cmk_req / epoch_rotate)
-  // Max. 10 Key-Exchange-Messages pro Minute pro User
-  if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set" || type === "gsk") {
-    const ok = await rateLimit(env, `control_send:${me}`, 60_000, 10);
+  // CONTROL MESSAGE RATE LIMIT (cmk / cmk_req / epoch_rotate / gsk / request_gsk)
+  // Max. 20 Key-Exchange-Messages pro Minute pro User
+  if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set" || type === "gsk" || type === "request_gsk") {
+    const ok = await rateLimit(env, `control_send:${me}`, 60_000, 20);
     if (!ok) {
       return json(request, { error: "Control message rate limit exceeded", retryAfterMs: 60000 }, 429);
     }
@@ -317,6 +317,9 @@ export async function handleChatSend(request, env) {
       return json(request, { error: "Cannot request own GSK" }, 400);
     }
     msg.requestedFrom = rf.trim().toLowerCase();
+    // requestedFrom auch in message-Feld speichern (D1 Polling-Fallback:
+    // kein eigenes DB-Feld → Empfänger erkennt request_gsk aus D1 via m.message)
+    msg.message = msg.requestedFrom;
   }
 
   // CMK ist Control + E2E-Hülle, aber KEINE Chat-v2-Message
@@ -360,8 +363,10 @@ export async function handleChatSend(request, env) {
     msg.message = message;
   }
 
-  // D1 INSERT — only real chat messages (not control)
-  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
+  // D1 INSERT — Chat-Messages + GSK/request_gsk (für Gast-Polling nötig)
+  // CMK/epoch/auto_delete sind reine Signalling-Messages ohne Polling-Bedarf.
+  // gsk + request_gsk werden gespeichert damit Gäste (kein WebSocket) sie via /chat/list empfangen.
+  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set") {
     await env.RENEX_DB.prepare(
       `INSERT OR IGNORE INTO messages
          (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id, reply_to_id, reply_from, reply_iv, reply_ct, reply_rotation_index, attachment_key, attachment_type)
@@ -392,7 +397,9 @@ export async function handleChatSend(request, env) {
   }
 
   // Gast-Nachrichtenzähler inkrementieren (nach erfolgreichem INSERT)
-  if (isGuest && guestToken) {
+  // GSK-Control-Messages (gsk / request_gsk) zählen NICHT zum Limit
+  const isGskControlForCounter = type === "gsk" || type === "request_gsk";
+  if (isGuest && guestToken && !isGskControlForCounter) {
     await env.RENEX_DB.prepare(
       "UPDATE guest_sessions SET msg_count = msg_count + 1 WHERE token = ?"
     ).bind(guestToken).run();

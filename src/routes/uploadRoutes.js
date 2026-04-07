@@ -1,5 +1,5 @@
 import { json, param } from '../utils.js';
-import { requireSession, rateLimit } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit } from '../auth.js';
 
 // ======================================================
 // UPLOAD ROUTES: /upload/file, /upload/download
@@ -134,9 +134,11 @@ export async function handleUploadRoutes(request, env, path, params) {
   // Worker fetcht von R2 und streamt zum Client (nach Membership-Check)
   // =========================
   if (path === "/upload/download" && request.method === "GET") {
-    const session = await requireSession(request, env);
+    // Gäste dürfen Dateien aus ihrer zugewiesenen Konversation herunterladen
+    const session = await requireAnySession(request, env);
     if (!session) return json(request, { error: "Not authenticated" }, 401);
-    const me = session.handle;
+    const me      = session.handle;
+    const isGuest = session.isGuest === true;
 
     const r2Key = param(params, "key");
     if (!r2Key || !r2Key.startsWith("files/")) {
@@ -156,6 +158,11 @@ export async function handleUploadRoutes(request, env, path, params) {
     const isDmKey    = /^[a-z0-9_]{1,30}:[a-z0-9_]{1,30}$/.test(convoId);
     if (!isGroupKey && !isDmKey) {
       return json(request, { error: "Invalid key format" }, 400);
+    }
+
+    // Gäste: nur ihre zugewiesene Konversation
+    if (isGuest && convoId !== session.convoId) {
+      return json(request, { error: "Guests can only access their assigned conversation" }, 403);
     }
 
     // Membership-Check

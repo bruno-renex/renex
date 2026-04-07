@@ -21,22 +21,34 @@ function getGuestTokenFromStorage() {
 
 export async function apiFetch(path, options = {}) {
   const guestToken = getGuestTokenFromStorage();
+  const method = (options.method || "GET").toUpperCase();
+
+  // Content-Type nur bei Requests mit Body setzen (POST, PUT, PATCH).
+  // Bei GET-Requests ist Content-Type semantisch falsch (kein Body) und
+  // erzwingt einen CORS-Preflight mit zwei Custom-Headern, was zu
+  // Preflight-Cache-Problemen in Safari/Chrome führen kann.
+  const needsContentType = method !== "GET" && method !== "HEAD" && method !== "DELETE";
+
   const res = await fetch("https://api.renex.id" + path, {
     ...options,
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      ...(needsContentType ? { "Content-Type": "application/json" } : {}),
       ...(guestToken ? { "X-Guest-Token": guestToken } : {}),
       ...(options.headers || {}),
     }
   });
 
   if (res.status === 401) {
-    localStorage.removeItem("my_user");
-    const onLoginPage = window.location.pathname === "/" || window.location.pathname.endsWith("index.html");
-    if (!onLoginPage) {
-      console.warn("🔒 Session expired — redirecting to login");
-      window.location.replace("/index.html");
+    // Gäste haben keine echte Session — kein Redirect, nur Error werfen
+    const isGuest = !!sessionStorage.getItem("guestSession");
+    if (!isGuest) {
+      localStorage.removeItem("my_user");
+      const onLoginPage = window.location.pathname === "/" || window.location.pathname.endsWith("index.html");
+      if (!onLoginPage) {
+        console.warn("🔒 Session expired — redirecting to login");
+        window.location.replace("/index.html");
+      }
     }
     throw new Error("Session expired");
   }

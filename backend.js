@@ -31,40 +31,40 @@ async function fetch(request, env) {
     const params = url.searchParams;
 
     if (path.startsWith('/invite/')) {
-      return handleInviteRoutes(request, env, path, params);
+      return await handleInviteRoutes(request, env, path, params);
     }
     if (path.startsWith('/upload/')) {
-      return handleUploadRoutes(request, env, path, params);
+      return await handleUploadRoutes(request, env, path, params);
     }
     if (path.startsWith('/gif/')) {
-      return handleGifRoutes(request, env, path, params);
+      return await handleGifRoutes(request, env, path, params);
     }
     if (path === '/chat/ws' || path === '/chat/control' || path === '/chat/test') {
-      return handleWsRoutes(request, env, path, params);
+      return await handleWsRoutes(request, env, path, params);
     }
     if (path.startsWith('/chat/keys/') || path.startsWith('/e2e/')) {
-      return handleE2eRoutes(request, env, path, params);
+      return await handleE2eRoutes(request, env, path, params);
     }
     if (path === '/chat/auto-delete') {
-      return handleAutoDeleteRoutes(request, env, path, params);
+      return await handleAutoDeleteRoutes(request, env, path, params);
     }
     if (path.startsWith('/chat/')) {
-      return handleChatRoutes(request, env, path, params);
+      return await handleChatRoutes(request, env, path, params);
     }
     if (path.startsWith('/auth/') || path === '/users/me' || path === '/account') {
-      return handleAuthRoutes(request, env, path, params);
+      return await handleAuthRoutes(request, env, path, params);
     }
     if (path.startsWith('/contacts')) {
-      return handleContactRoutes(request, env, path, params);
+      return await handleContactRoutes(request, env, path, params);
     }
     if (path.startsWith('/groups')) {
-      return handleGroupRoutes(request, env, path, params);
+      return await handleGroupRoutes(request, env, path, params);
     }
     if (path.startsWith('/notifications')) {
-      return handleNotificationRoutes(request, env, path);
+      return await handleNotificationRoutes(request, env, path);
     }
     if (path.startsWith('/presence')) {
-      return handlePresenceRoutes(request, env, path);
+      return await handlePresenceRoutes(request, env, path);
     }
     return json(request, { error: 'Not found' }, 404);
 

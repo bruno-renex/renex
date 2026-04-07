@@ -13,6 +13,7 @@ export function corsHeaders(request) {
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Mime-Type, X-File-Name, X-File-Size, X-Attachment-Type, X-Convo-Id, X-Guest-Token",
     "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Max-Age": "0",   // kein Preflight-Cache → verhindert veraltete Browser-Caches
     "Vary": "Origin",
   };
 

@@ -10,8 +10,8 @@
 
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      background: var(--bg-primary);
-      color: var(--text-primary);
+      background: var(--bg-body, #07070A);
+      color: var(--text-primary, #E6E6EB);
       min-height: 100dvh;
       display: flex;
       flex-direction: column;
@@ -21,8 +21,8 @@
     }
 
     .card {
-      background: var(--bg-secondary);
-      border: 1px solid var(--border-subtle);
+      background: var(--bg-panel, #0D0D11);
+      border: 1px solid var(--border-panel, rgba(255,255,255,0.06));
       border-radius: 20px;
       padding: 36px 32px;
       max-width: 400px;
@@ -38,36 +38,44 @@
       font-weight: 800;
       letter-spacing: 0.25em;
       text-transform: uppercase;
-      color: var(--text-primary);
+      color: var(--text-primary, #E6E6EB);
     }
-    .logo .x { color: var(--accent-voice); }
+    .logo .x { color: var(--accent-voice, #38BDF8); }
 
+    /* Shield-Icon in Accent-Farbe statt Emoji */
     .invite-icon {
-      font-size: 48px;
-      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .invite-icon svg {
+      width: 44px;
+      height: 44px;
+      color: var(--accent-voice, #38BDF8);
+      filter: drop-shadow(0 0 10px var(--accent-voice-glow, rgba(56,189,248,0.35)));
     }
 
     .invite-title {
       font-size: 20px;
       font-weight: 700;
-      color: var(--text-primary);
+      color: var(--text-primary, #E6E6EB);
     }
 
     .invite-sub {
       font-size: 13px;
-      color: var(--text-secondary);
+      color: var(--text-secondary, #9A9AA3);
       line-height: 1.5;
     }
 
+    /* Info-Rows: linke Accent-Linie statt Box */
     .info-row {
       display: flex;
       align-items: center;
-      gap: 10px;
-      background: var(--bg-tertiary, var(--bg-primary));
-      border-radius: 12px;
-      padding: 12px 14px;
+      gap: 12px;
+      border-left: 2px solid var(--accent-voice, #38BDF8);
+      padding: 8px 0 8px 14px;
       font-size: 13px;
-      color: var(--text-secondary);
+      color: var(--text-secondary, #9A9AA3);
       text-align: left;
     }
     .info-row span { flex: 1; }
@@ -80,31 +88,44 @@
       font-size: 15px;
       font-weight: 600;
       cursor: pointer;
-      transition: opacity 0.15s;
+      transition: opacity 0.15s, box-shadow 0.15s;
     }
-    .btn:hover { opacity: 0.85; }
+    .btn:hover { opacity: 0.88; }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+    /* Primary Button mit Glow wie Chat-Bubbles */
     .btn-primary {
-      background: var(--accent-voice);
-      color: #fff;
+      background: var(--accent-voice, #38BDF8);
+      color: #07070A;
+      box-shadow: 0 0 16px var(--accent-voice-glow, rgba(56,189,248,0.35));
+    }
+    .btn-primary:hover {
+      box-shadow: 0 0 24px var(--accent-voice-glow, rgba(56,189,248,0.45));
     }
 
+    /* Ghost-Button: reiner Text-Link, kein Border */
     .btn-ghost {
       background: transparent;
-      border: 1px solid var(--border-subtle);
-      color: var(--text-secondary);
+      border: none;
+      color: var(--text-muted, #6F6F78);
       font-size: 13px;
-      padding: 10px;
+      padding: 8px;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      text-decoration-color: var(--border-subtle, #1C1C24);
+    }
+    .btn-ghost:hover {
+      color: var(--text-secondary, #9A9AA3);
+      opacity: 1;
     }
 
     .status {
       font-size: 13px;
-      color: var(--text-secondary);
+      color: var(--text-secondary, #9A9AA3);
       min-height: 18px;
     }
-    .status.error { color: #ef4444; }
-    .status.ok    { color: #22c55e; }
+    .status.error { color: var(--status-error, #F87171); }
+    .status.ok    { color: var(--status-speaking, #3CE47A); }
 
     .spinner {
       display: inline-block;
@@ -118,22 +139,9 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Expiry badge */
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 4px 10px;
-      border-radius: 99px;
-      font-size: 12px;
-      font-weight: 600;
-      background: rgba(56,189,248,0.12);
-      color: var(--accent-voice);
-    }
-
     .divider {
       border: none;
-      border-top: 1px solid var(--border-subtle);
+      border-top: 1px solid var(--border-subtle, #1C1C24);
     }
 
     #errorCard { display: none; }
@@ -143,14 +151,22 @@
 
 <!-- LADE-STATE -->
 <div class="card" id="loadingCard">
-  <div class="logo">REN<span class="x">E</span>X</div>
+  <div class="logo">RENE<span class="x">X</span></div>
   <div class="status"><span class="spinner"></span> Einladung wird geprüft…</div>
 </div>
 
 <!-- EINLADUNGS-KARTE -->
 <div class="card" id="inviteCard" style="display:none">
-  <div class="logo">REN<span class="x">E</span>X</div>
-  <div class="invite-icon">💬</div>
+  <div class="logo">RENE<span class="x">X</span></div>
+
+  <!-- Shield-Icon in Accent-Farbe -->
+  <div class="invite-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.25C17.25 22.15 21 17.25 21 12V7L12 2z"/>
+      <polyline points="9 12 11 14 15 10"/>
+    </svg>
+  </div>
+
   <div>
     <div class="invite-title" id="chatName">Chat</div>
     <div class="invite-sub" style="margin-top:6px">
@@ -158,17 +174,14 @@
     </div>
   </div>
 
-  <div style="display:flex; flex-direction:column; gap:8px">
+  <div style="display:flex; flex-direction:column; gap:14px">
     <div class="info-row">
-      <span>⏳</span>
-      <span>Zugang für <strong>48 Stunden</strong> — dann kannst du mit einem Passkey speichern</span>
+      <span>Zugang für <strong>48 Stunden</strong> — dann mit Passkey speichern</span>
     </div>
     <div class="info-row">
-      <span>✉️</span>
       <span>Maximal <strong>50 Nachrichten</strong> als Gast</span>
     </div>
     <div class="info-row">
-      <span>🔒</span>
       <span>Ende-zu-Ende verschlüsselt</span>
     </div>
   </div>
@@ -180,7 +193,7 @@
   <hr class="divider" />
 
   <button class="btn btn-ghost" onclick="goLogin()">
-    Ich habe bereits einen Account → Anmelden
+    Anmelden &amp; beitreten
   </button>
 
   <div class="status" id="joinStatus"></div>
@@ -188,7 +201,7 @@
 
 <!-- FEHLER-KARTE -->
 <div class="card" id="errorCard">
-  <div class="logo">REN<span class="x">E</span>X</div>
+  <div class="logo">RENE<span class="x">X</span></div>
   <div class="invite-icon">❌</div>
   <div class="invite-title" id="errorTitle">Einladung ungültig</div>
   <div class="invite-sub" id="errorMsg">Dieser Einladungslink ist abgelaufen oder wurde bereits verwendet.</div>
@@ -218,6 +231,18 @@
 
       document.getElementById("chatName").textContent  = data.displayName || "Chat";
       document.getElementById("invitedBy").textContent = data.createdBy   || "jemandem";
+
+      // Eingeloggter User? → sofort beitreten, kein Klick nötig
+      const myUser = localStorage.getItem("my_user");
+      if (myUser) {
+        hide("loadingCard");
+        // Lade-Karte mit Spinner zeigen, direkt beitreten
+        document.getElementById("loadingCard").querySelector(".status").innerHTML =
+          '<span class="spinner"></span> Beitreten…';
+        show("loadingCard");
+        await joinAsLoggedInUser();
+        return;
+      }
 
       show("inviteCard");
       hide("loadingCard");
@@ -304,9 +329,42 @@
     }
   }
 
+  // ── Join als eingeloggter User ────────────────────────
+  async function joinAsLoggedInUser() {
+    // Status in der Loading-Card anzeigen (kein Klick-Flow)
+    const loadingStatus = document.getElementById("loadingCard").querySelector(".status");
+    const setStatus = (html) => { if (loadingStatus) loadingStatus.innerHTML = html; };
+
+    try {
+      const res  = await fetch(`${API}/invite/join-auth`, {
+        method:      "POST",
+        credentials: "include",
+        headers:     { "Content-Type": "application/json" },
+        body:        JSON.stringify({ token }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        return showError("Fehler beim Beitreten", data.error || "Bitte erneut versuchen.");
+      }
+
+      setStatus("✓ Erfolgreich! Leite weiter…");
+
+      setTimeout(() => {
+        const target = data.convoType === "group" ? data.convoId : (data.inviterHandle || data.convoId);
+        window.location.href = `/chat/?with=${encodeURIComponent(target)}`;
+      }, 600);
+
+    } catch (e) {
+      showError("Netzwerkfehler", "Bitte überprüfe deine Internetverbindung.");
+    }
+  }
+
   // ── Helpers ───────────────────────────────────────────
   function goLogin() {
-    window.location.href = `/?redirect=${encodeURIComponent(location.href)}`;
+    // Join-URL im sessionStorage merken → nach Login zurückspringen
+    sessionStorage.setItem("pendingInviteRedirect", location.href);
+    window.location.href = "/";
   }
 
   function showError(title, msg) {

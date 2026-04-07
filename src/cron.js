@@ -45,4 +45,30 @@ export async function scheduled(event, env) {
   } catch (e) {
     console.error("❌ Auto-Delete Cron fehlgeschlagen:", e);
   }
+
+  // ── Abgelaufene Gast-Mitgliedschaften aufräumen ──────────────────────
+  try {
+    const now = Date.now();
+
+    // Alle abgelaufenen (und nicht konvertierten) Guest-Sessions mit Handle + ConvoId
+    const expiredGuests = await env.RENEX_DB.prepare(
+      `SELECT guest_handle, convo_id FROM guest_sessions
+       WHERE expires_at < ? AND converted_to IS NULL AND guest_handle != ''`
+    ).bind(now).all();
+
+    let removedMembers = 0;
+    for (const g of (expiredGuests.results ?? [])) {
+      if (!g.guest_handle || !g.convo_id) continue;
+      const result = await env.RENEX_DB.prepare(
+        "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ? AND role = 'guest'"
+      ).bind(g.convo_id, g.guest_handle).run();
+      removedMembers += result.meta?.changes ?? 0;
+    }
+
+    if (removedMembers > 0) {
+      console.log(`🧹 Guest-Cleanup: ${removedMembers} abgelaufene Gast-Mitgliedschaften entfernt`);
+    }
+  } catch (e) {
+    console.error("❌ Guest-Cleanup Cron fehlgeschlagen:", e);
+  }
 }

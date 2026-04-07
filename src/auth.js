@@ -93,8 +93,16 @@ export async function requireSession(request, env) {
 // GUEST SESSION AUTH
 // =========================
 
-// Liest das guest_session-Cookie aus dem Request
+// Liest das guest_session-Cookie ODER den X-Guest-Token Header aus dem Request
+// X-Guest-Token wird von apiFetch gesetzt wenn Safari/ITP den Cookie blockiert
 export function getGuestToken(request) {
+  // 1) X-Guest-Token Header (Safari ITP Fallback)
+  const headerToken = request.headers.get("X-Guest-Token");
+  if (headerToken) {
+    const t = String(headerToken).trim();
+    if (GUEST_TOKEN_RE.test(t)) return t;
+  }
+  // 2) Cookie (Standard)
   const cookie = request.headers.get("Cookie") || "";
   const m = cookie.match(/(?:^|;\s*)guest_session=([^;]+)/);
   if (!m) return null;

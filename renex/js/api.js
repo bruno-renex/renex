@@ -7,12 +7,26 @@ if (globalThis.location?.hostname === "app.renex.id") {
   console.log = () => {};
 }
 
+// Gast-Token aus sessionStorage (gesetzt von /join/)
+// Wird als X-Guest-Token Header mitgeschickt wenn kein regulärer Cookie vorhanden
+// (Safari/ITP blockiert Cross-Origin Set-Cookie von api.renex.id)
+function getGuestTokenFromStorage() {
+  try {
+    const raw = sessionStorage.getItem("guestSession");
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return data?.token || null;
+  } catch { return null; }
+}
+
 export async function apiFetch(path, options = {}) {
+  const guestToken = getGuestTokenFromStorage();
   const res = await fetch("https://api.renex.id" + path, {
     ...options,
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      ...(guestToken ? { "X-Guest-Token": guestToken } : {}),
       ...(options.headers || {}),
     }
   });

@@ -99,6 +99,29 @@ function initProfileCircle() {
   circle.textContent = initials;
 }
 
+// ======================================================
+// GUEST DISPLAY NAME  (deterministic, English)
+// guest_3a7f… → "Blue Eagle"  (16 adj × 16 animals = 256 combos)
+// ======================================================
+const _GUEST_ADJ = [
+  'Blue','Red','Green','Golden','Silver','Wild','Swift','Brave',
+  'Dark','Bold','Calm','Fierce','Quiet','Sharp','Bright','Eager'
+];
+const _GUEST_ANI = [
+  'Eagle','Fox','Lynx','Bear','Wolf','Falcon','Otter','Cheetah',
+  'Raven','Hawk','Tiger','Panther','Puma','Cobra','Bison','Jaguar'
+];
+function guestDisplayName(handle) {
+  if (!handle?.startsWith('guest_')) return handle;
+  const hex = handle.slice(6);
+  const a = parseInt(hex.slice(0, 2) || '0', 16) % _GUEST_ADJ.length;
+  const b = parseInt(hex.slice(2, 4) || '0', 16) % _GUEST_ANI.length;
+  return `${_GUEST_ADJ[a]} ${_GUEST_ANI[b]}`;
+}
+function replaceGuestHandles(text) {
+  return String(text).replace(/\bguest_[0-9a-f]+\b/gi, h => guestDisplayName(h));
+}
+
 // ================================
 // INVITE LINK (Gruppen)
 // ================================
@@ -1219,7 +1242,7 @@ function renderGroup(group) {
     const cached  = getPreviewCache(group.id);
     // Für System-Nachrichten: Server-Text als Fallback wenn kein Cache
     const fallbackTs   = group.last_type === "system" ? group.last_ts : null;
-    const fallbackText = group.last_type === "system" ? (group.last_text || "") : null;
+    const fallbackText = group.last_type === "system" ? replaceGuestHandles(group.last_text || "") : null;
     const effectiveCached = cached || (fallbackText !== null ? { text: fallbackText, ts: fallbackTs, from: "__system__" } : null);
     const { text: previewText, muted: previewMuted } = buildPreviewText(effectiveCached, group.last_ts, myUser, group.last_from, true);
     preview.textContent = previewText;

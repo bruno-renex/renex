@@ -300,6 +300,30 @@ async function createInviteLink() {
 window.convertGuest   = convertGuest;
 window.createInviteLink = createInviteLink;
 
+// ======================================================
+// GUEST DISPLAY NAME  (deterministic, English)
+// guest_3a7f… → "Blue Eagle"  (16 adj × 16 animals = 256 combos)
+// ======================================================
+const _GUEST_ADJ = [
+  'Blue','Red','Green','Golden','Silver','Wild','Swift','Brave',
+  'Dark','Bold','Calm','Fierce','Quiet','Sharp','Bright','Eager'
+];
+const _GUEST_ANI = [
+  'Eagle','Fox','Lynx','Bear','Wolf','Falcon','Otter','Cheetah',
+  'Raven','Hawk','Tiger','Panther','Puma','Cobra','Bison','Jaguar'
+];
+function guestDisplayName(handle) {
+  if (!handle?.startsWith('guest_')) return handle;
+  const hex = handle.slice(6); // strip "guest_"
+  const a = parseInt(hex.slice(0, 2) || '0', 16) % _GUEST_ADJ.length;
+  const b = parseInt(hex.slice(2, 4) || '0', 16) % _GUEST_ANI.length;
+  return `${_GUEST_ADJ[a]} ${_GUEST_ANI[b]}`;
+}
+// Replace every raw guest_… token in a text string (for system messages)
+function replaceGuestHandles(text) {
+  return String(text).replace(/\bguest_[0-9a-f]+\b/gi, h => guestDisplayName(h));
+}
+
 function showChatToast({ emoji, from, chatTarget, groupName }) {
   const container = document.getElementById("chat-toast-container");
   if (!container) return;
@@ -803,7 +827,7 @@ if (event?.type === "NEW_MESSAGE") {
     console.log("👤 Gast beigetreten:", event.handle);
     // Toast für den Einlader anzeigen
     if (!_isGuestMode && event.handle) {
-      showSystemToast(`👤 ${event.handle} ist dem Chat beigetreten`, 5000);
+      showSystemToast(`👤 ${guestDisplayName(event.handle)} joined the chat`, 5000);
     }
     initGroupMembersUI(withUser).catch(() => {});
     // Eigenen GSK proaktiv an den neuen Gast senden (Online-Fast-Path)
@@ -3144,7 +3168,7 @@ async function initGroupMembersUI(groupId) {
         nameSpan.appendChild(dot);
 
         const nameText = document.createElement("span");
-        nameText.textContent = `${m.member_handle}${isMe ? " (Du)" : ""}`;
+        nameText.textContent = `${guestDisplayName(m.member_handle)}${isMe ? " (Du)" : ""}`;
         nameSpan.appendChild(nameText);
 
         if (isAdmin) {
@@ -3409,10 +3433,11 @@ async function showSenderPopover(handle, anchorEl, plaintext = "") {
   popoverHeader.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:10px;";
   const avatarDiv = document.createElement("div");
   avatarDiv.style.cssText = "width:34px;height:34px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;flex-shrink:0;";
-  avatarDiv.textContent = handle[0].toUpperCase();
+  const _displayHandle = guestDisplayName(handle);
+  avatarDiv.textContent = _displayHandle[0].toUpperCase();
   const nameSpanPop = document.createElement("span");
   nameSpanPop.style.cssText = "font-size:14px;font-weight:600;color:var(--text-primary);";
-  nameSpanPop.textContent = handle;
+  nameSpanPop.textContent = _displayHandle;
   const presenceSpanPop = document.createElement("span");
   presenceSpanPop.style.cssText = "font-size:11px;color:var(--text-secondary);margin-top:1px;";
   presenceSpanPop.textContent = "…";
@@ -3541,7 +3566,7 @@ div.className = isOwnMessage ? "me" : "other";
 if (!isOwnMessage && isGroupConversation(withUser) && from) {
   const senderEl = document.createElement("div");
   senderEl.className = "sender-name";
-  senderEl.textContent = from;
+  senderEl.textContent = guestDisplayName(from);
   senderEl.style.cursor = "pointer";
   senderEl.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -3979,7 +4004,7 @@ async function processMessage(m) {
   if (m.type === "system") {
     if (renderedMessageIds.has(m.id)) return false;
     renderedMessageIds.add(m.id);
-    const sysText = m.message || m.text || "";
+    const sysText = replaceGuestHandles(m.message || m.text || "");
     showSystemMessage(sysText);
     savePreviewCache(previewConvoId(withUser), { text: sysText, ts: m.ts || Date.now(), from: "__system__" });
     return true;

@@ -100,6 +100,78 @@ function initProfileCircle() {
 }
 
 // ================================
+// INVITE LINK (Gruppen)
+// ================================
+let _invitePending = new Set(); // verhindert Doppelklick pro Gruppe
+
+async function createGroupInviteLink(groupId, groupName, btnEl) {
+  if (_invitePending.has(groupId)) return;
+  _invitePending.add(groupId);
+
+  const orig = btnEl.textContent;
+  btnEl.textContent = "…";
+  btnEl.disabled = true;
+
+  const doFetch = () => fetch(`${API}/invite/create`, {
+    method:      "POST",
+    credentials: "include",
+    headers:     { "Content-Type": "application/json" },
+    body:        JSON.stringify({ convoId: groupId }),
+  }).then(r => r.json().catch(() => ({}))).then(data => {
+    if (!data.inviteUrl) throw new Error("no_url");
+    return data.inviteUrl;
+  });
+
+  try {
+    let copied = false;
+
+    if (navigator.clipboard && window.ClipboardItem) {
+      try {
+        const urlPromise = doFetch();
+        await navigator.clipboard.write([
+          new ClipboardItem({ "text/plain": urlPromise.then(u => new Blob([u], { type: "text/plain" })) })
+        ]);
+        await urlPromise;
+        copied = true;
+      } catch (e) {
+        if (e.message === "no_url") throw e;
+      }
+    }
+
+    if (!copied && navigator.clipboard?.writeText) {
+      try {
+        const url = await doFetch();
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      } catch (e) {
+        if (e.message === "no_url") throw e;
+      }
+    }
+
+    if (!copied) {
+      const url = await doFetch();
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.style.cssText = "position:fixed;top:0;left:0;width:2em;height:2em;opacity:0;";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { copied = document.execCommand("copy"); } catch {}
+      document.body.removeChild(ta);
+    }
+
+    btnEl.textContent = "✓";
+    showToast({ icon: "🔗", title: "Link kopiert!", sub: groupName, durationMs: 3000 });
+    setTimeout(() => { btnEl.textContent = orig; btnEl.disabled = false; _invitePending.delete(groupId); }, 2500);
+
+  } catch (e) {
+    btnEl.textContent = orig;
+    btnEl.disabled = false;
+    _invitePending.delete(groupId);
+    showToast({ icon: "⚠️", title: "Link konnte nicht erstellt werden", durationMs: 4000 });
+  }
+}
+
+// ================================
 // HELPERS
 // ================================
 async function apiFetch(path, options = {}) {
@@ -1180,6 +1252,18 @@ function renderGroup(group) {
   content.appendChild(topRow);
   content.appendChild(previewRow);
 
+  // 🔗 Einladungslink-Button
+  const inviteBtn = document.createElement("button");
+  inviteBtn.textContent = "🔗";
+  inviteBtn.title = "Einladungslink erstellen";
+  inviteBtn.style.cssText = "background:transparent;border:none;color:var(--text-muted);font-size:15px;cursor:pointer;padding:4px 6px;border-radius:4px;flex-shrink:0;transition:color 0.15s;";
+  inviteBtn.onmouseenter = () => inviteBtn.style.color = "var(--accent-voice)";
+  inviteBtn.onmouseleave = () => { if (inviteBtn.textContent === "🔗") inviteBtn.style.color = "var(--text-muted)"; };
+  inviteBtn.onclick = (e) => {
+    e.stopPropagation();
+    createGroupInviteLink(group.id, group.name, inviteBtn);
+  };
+
   // ✕ Verlassen-Button (identisch zum Kontakt-Remove-Button)
   const leaveBtn = document.createElement("button");
   leaveBtn.textContent = "✕";
@@ -1203,6 +1287,7 @@ function renderGroup(group) {
 
   li.appendChild(avatar);
   li.appendChild(content);
+  li.appendChild(inviteBtn);
   li.appendChild(leaveBtn);
   return li;
 }

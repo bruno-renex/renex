@@ -10,8 +10,8 @@ import { requireSession, requireGuestSession, rateLimit, GUEST_TOKEN_RE, GUEST_H
 //   POST /invite/ping     → msg_count aktualisieren + verbleibende Zeit prüfen
 // ======================================================
 
-const GUEST_EXPIRY_MS = 48 * 60 * 60 * 1000; // 48 Stunden
-const GUEST_MSG_LIMIT = 50;                   // 50 Nachrichten
+const GUEST_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 Stunden
+const GUEST_MSG_LIMIT = 20;                   // 20 Nachrichten
 
 // ── Helpers ──────────────────────────────────────────
 function generateGuestToken() {

@@ -4166,8 +4166,12 @@ async function loadMessages() {
 
     // 📌 Für Gruppen: "letzte gelesene ts" in localStorage UND Backend speichern
     // → Inbox-Badge zeigt nur wirklich neue Nachrichten (seit diesem Zeitpunkt)
+    // Control-Messages (gsk, cmk, …) werden ignoriert — sonst springt mark-read
+    // auf deren Timestamp und echte Nachrichten gelten fälschlicherweise als gelesen.
     if (isGroupConversation(withUser) && messages.length > 0) {
-      const newestTs = messages[messages.length - 1]?.ts || 0;
+      const CTRL_TYPES = new Set(['gsk','cmk','cmk_req','cmk_rotate','epoch_rotate','request_gsk']);
+      const realMessages = messages.filter(m => !m.type || !CTRL_TYPES.has(m.type));
+      const newestTs = (realMessages[realMessages.length - 1] ?? messages[messages.length - 1])?.ts || 0;
       if (newestTs) {
         const prevTs = Number(localStorage.getItem(`renex_group_read_${withUser}`) || 0);
         localStorage.setItem(`renex_group_read_${withUser}`, String(newestTs));

@@ -249,10 +249,23 @@ export async function handleInviteRoutes(request, env, path, params) {
         ts:        joinTs,
       };
       if (isGroupConvo) {
+        // System-Message persistieren (sichtbar für alle Mitglieder im Chat)
+        await env.RENEX_DB.prepare(
+          `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+           VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+        ).bind(crypto.randomUUID(), convoId, guestHandle, joinTs,
+          `👤 ${guestHandle} ist dem Chat beigetreten`).run();
+
         // Gruppe: alle anderen Mitglieder benachrichtigen
         await pushToGroupMembers(env, env.RENEX_DB, convoId, guestHandle, guestJoinEvent);
       } else {
-        // DM: nur den Einladenden benachrichtigen
+        // DM: System-Message + Einladenden benachrichtigen
+        await env.RENEX_DB.prepare(
+          `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+           VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+        ).bind(crypto.randomUUID(), convoId, guestHandle, joinTs,
+          `👤 ${guestHandle} ist dem Chat beigetreten`).run();
+
         if (row.created_by) await pushToUserDO(env, row.created_by, guestJoinEvent);
       }
     }

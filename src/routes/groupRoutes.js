@@ -316,6 +316,7 @@ export async function handleGroupRoutes(request, env, path, params) {
                  WHERE m2.convo_id = c.id
                    AND m2.ts > COALESCE(cm.last_read_ts, 0)
                    AND m2.from_user != ?
+                   AND (m2.type IS NULL OR m2.type NOT IN ('gsk','cmk','cmk_req','cmk_rotate','epoch_rotate','request_gsk'))
                ) AS unread_count
         FROM conversations c
         JOIN conversation_members cm  ON c.id = cm.convo_id AND cm.member_handle = ?
@@ -323,6 +324,7 @@ export async function handleGroupRoutes(request, env, path, params) {
         LEFT JOIN (
           SELECT convo_id, MAX(ts) AS last_ts
           FROM messages
+          WHERE type IS NULL OR type NOT IN ('gsk','cmk','cmk_req','cmk_rotate','epoch_rotate','request_gsk')
           GROUP BY convo_id
         ) lm_agg ON lm_agg.convo_id = c.id
         LEFT JOIN messages lm

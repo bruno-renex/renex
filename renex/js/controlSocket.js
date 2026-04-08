@@ -276,6 +276,13 @@ async function processControlMessage(m) {
     return;
   }
 
+  // 10b) GUEST JOINED — Gast über Invite-Link beigetreten
+  if (m.type === "guest_joined") {
+    console.log("👤 Gast beigetreten:", m.handle, "Konversation:", m.groupId);
+    notify({ type: "GUEST_JOINED", groupId: m.groupId, handle: m.handle, ts: m.ts });
+    return;
+  }
+
   // 11) GROUP RENAMED
   if (m.type === "group_renamed" && m.groupId) {
     console.log("✏️ Gruppe umbenannt:", m.groupId, "→", m.newName);

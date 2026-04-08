@@ -312,13 +312,15 @@
 
       // Weiterleitung in den Chat
       setTimeout(() => {
+        const groupName = document.getElementById("chatName")?.textContent || "";
+        const nameParam = groupName ? `&name=${encodeURIComponent(groupName)}` : "";
         if (data.convoType === "group") {
           // Gruppe: withUser = groupUUID
-          window.location.href = `/chat/?with=${encodeURIComponent(data.convoId)}&guest=1`;
+          window.location.href = `/chat/?with=${encodeURIComponent(data.convoId)}&guest=1${nameParam}`;
         } else {
           // DM: withUser = Einladender (damit dmConvoId korrekt berechnet wird)
           const inviter = data.inviterHandle || data.convoId.split(":").find(h => h !== data.guestHandle);
-          window.location.href = `/chat/?with=${encodeURIComponent(inviter)}&guest=1`;
+          window.location.href = `/chat/?with=${encodeURIComponent(inviter)}&guest=1${nameParam}`;
         }
       }, 800);
 

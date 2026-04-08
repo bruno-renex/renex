@@ -796,9 +796,15 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
-  // 👤 GUEST_JOINED: Gast hat die Gruppe betreten → Mitgliederliste neu laden + GSK pushen
-  if (event?.type === "guest_joined" && event.groupId === withUser) {
+  // 👤 GUEST_JOINED: Gast hat die Gruppe/DM betreten → Toast + Mitgliederliste neu laden + GSK pushen
+  if ((event?.type === "GUEST_JOINED" || event?.type === "guest_joined") &&
+      (event.groupId === withUser || event.handle === withUser ||
+       (event.groupId && event.groupId.split(":").includes(withUser)))) {
     console.log("👤 Gast beigetreten:", event.handle);
+    // Toast für den Einlader anzeigen
+    if (!_isGuestMode && event.handle) {
+      showSystemToast(`👤 ${event.handle} ist dem Chat beigetreten`, 5000);
+    }
     initGroupMembersUI(withUser).catch(() => {});
     // Eigenen GSK proaktiv an den neuen Gast senden (Online-Fast-Path)
     // → Gast kann Nachrichten sofort entschlüsseln ohne auf request_gsk zu warten
@@ -2672,9 +2678,14 @@ async function initAutoDeleteUI() {
     }
   } catch {}
 
-  // ⋮ Menü-Button
+  // ⋮ Menü-Button — für Gäste deaktivieren (kein Dropdown, nur statischer Titel)
   const menuBtn = document.getElementById("chat-menu-btn");
   const menuDropdown = document.getElementById("chat-menu-dropdown");
+  if (_isGuestMode && menuBtn) {
+    menuBtn.style.cursor = "default";
+    menuBtn.style.pointerEvents = "none";
+    if (menuDropdown) menuDropdown.style.display = "none";
+  }
   const adSubmenu = document.getElementById("chat-autodelete-submenu");
   const adMenuItem = document.getElementById("chat-menu-autodelete");
 

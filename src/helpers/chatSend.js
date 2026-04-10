@@ -59,7 +59,7 @@ export async function handleChatSend(request, env) {
 
     // Nur die zugewiesene Konvo erlaubt
     if (resolvedConvo !== guestConvoId) {
-      return json(request, { error: "Guests can only send to their assigned conversation" }, 403);
+      return json(request, { error: "Not authorized for this conversation" }, 403);
     }
 
     const isGskControl = type === "gsk" || type === "request_gsk";
@@ -75,9 +75,9 @@ export async function handleChatSend(request, env) {
         "SELECT msg_count, msg_limit, expires_at, converted_to FROM guest_sessions WHERE token = ?"
       ).bind(guestToken).first();
 
-      if (!guestRow)             return json(request, { error: "Guest session not found" }, 404);
-      if (guestRow.converted_to) return json(request, { error: "Session already converted" }, 409);
-      if (Date.now() > guestRow.expires_at) return json(request, { error: "Guest session expired" }, 410);
+      if (!guestRow)             return json(request, { error: "Not authenticated" }, 401);
+      if (guestRow.converted_to) return json(request, { error: "Not authorized" }, 403);
+      if (Date.now() > guestRow.expires_at) return json(request, { error: "Session expired" }, 410);
       if (guestRow.msg_count >= guestRow.msg_limit) {
         return json(request, {
           error:    "Message limit reached",
@@ -164,19 +164,27 @@ export async function handleChatSend(request, env) {
       `chat_send:${me}`,
       2000,
       1,
-      { failOpen: true } // UX: lieber senden als blockieren bei KV-Fehler
+      { failOpen: false } // Security: bei KV-Fehler blockieren statt Spam zulassen
     );
     if (!ok) {
       return json(request, { error: "Send cooldown", retryAfterMs: 2000 }, 429);
     }
   }
 
-  // CONTROL MESSAGE RATE LIMIT (cmk / cmk_req / epoch_rotate / gsk / request_gsk)
+  // CONTROL MESSAGE RATE LIMIT (cmk / cmk_req / epoch_rotate / gsk)
   // Max. 20 Key-Exchange-Messages pro Minute pro User
-  if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set" || type === "gsk" || type === "request_gsk") {
+  if (type === "cmk_req" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set" || type === "gsk") {
     const ok = await rateLimit(env, `control_send:${me}`, 60_000, 20);
     if (!ok) {
       return json(request, { error: "Control message rate limit exceeded", retryAfterMs: 60000 }, 429);
+    }
+  }
+
+  // request_gsk: eigenes grosszügiges Limit (60/min) — Gäste müssen alle Members anfragen
+  if (type === "request_gsk") {
+    const ok = await rateLimit(env, `gsk_req:${me}`, 60_000, 60);
+    if (!ok) {
+      return json(request, { error: "GSK request rate limit exceeded", retryAfterMs: 60000 }, 429);
     }
   }
 
@@ -428,24 +436,11 @@ export async function handleChatSend(request, env) {
   // UNREAD COUNTER (nur DMs — Gruppen haben kein per-Member Tracking)
   // ======================================================
   if (!isGroupMessage && msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
-    const unreadKey = `unread:${other}:${me}`;
-    let count = 0;
-    const rawUnread = await env.RENEX_KV.get(unreadKey);
-    if (rawUnread) {
-      try { count = Number(rawUnread) || 0; } catch {}
-    }
-    count++;
-    await env.RENEX_KV.put(unreadKey, String(count));
-
-    // UNREAD INDEX UPDATE
-    const unreadIndexKey = `unread_index:${other}`;
-    let unreadIndex = {};
-    const rawIndex = await env.RENEX_KV.get(unreadIndexKey);
-    if (rawIndex) {
-      try { unreadIndex = JSON.parse(rawIndex); } catch {}
-    }
-    unreadIndex[me] = count;
-    await env.RENEX_KV.put(unreadIndexKey, JSON.stringify(unreadIndex));
+    // Atomares Increment via D1 — kein Read-Modify-Write Race Condition
+    await env.RENEX_DB.prepare(
+      `INSERT INTO unread_counters (owner, sender, count) VALUES (?, ?, 1)
+       ON CONFLICT(owner, sender) DO UPDATE SET count = count + 1`
+    ).bind(other, me).run();
   }
 
   // Antwort an Client

@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RENEX – Einladung</title>
+  <title>RENEX – Invitation</title>
   <link rel="stylesheet" href="/colors.css" />
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -152,7 +153,7 @@
 <!-- LADE-STATE -->
 <div class="card" id="loadingCard">
   <div class="logo">RENE<span class="x">X</span></div>
-  <div class="status"><span class="spinner"></span> Einladung wird geprüft…</div>
+  <div class="status" id="loadingStatus"><span class="spinner"></span> Checking invitation…</div>
 </div>
 
 <!-- EINLADUNGS-KARTE -->
@@ -169,31 +170,32 @@
 
   <div>
     <div class="invite-title" id="chatName">Chat</div>
-    <div class="invite-sub" style="margin-top:6px">
-      Du wurdest von <strong id="invitedBy"></strong> eingeladen
-    </div>
+    <div class="invite-sub" id="invitedByText" style="margin-top:6px"></div>
   </div>
 
   <div style="display:flex; flex-direction:column; gap:14px">
-    <div class="info-row">
-      <span>Zugang für <strong>24 Stunden</strong> — dann mit Passkey speichern</span>
-    </div>
-    <div class="info-row">
-      <span>Maximal <strong>20 Nachrichten</strong> als Gast</span>
-    </div>
-    <div class="info-row">
-      <span>Ende-zu-Ende verschlüsselt</span>
-    </div>
+    <div class="info-row"><span id="info-access"></span></div>
+    <div class="info-row"><span id="info-messages"></span></div>
+    <div class="info-row"><span id="info-e2e"></span></div>
   </div>
 
-  <button class="btn btn-primary" id="joinBtn" onclick="joinAsGuest()">
-    Als Gast beitreten
+  <!-- Turnstile Widget -->
+  <div class="cf-turnstile"
+       data-sitekey="0x4AAAAAACtyEOf-Gqc2i4DY"
+       data-theme="dark"
+       data-language="en"
+       data-callback="onTurnstileSolved"
+       style="display:flex; justify-content:center;">
+  </div>
+
+  <button class="btn btn-primary" id="joinBtn" onclick="joinAsGuest()" disabled>
+    Join as guest
   </button>
 
   <hr class="divider" />
 
-  <button class="btn btn-ghost" onclick="goLogin()">
-    Anmelden &amp; beitreten
+  <button class="btn btn-ghost" id="loginJoinBtn" onclick="goLogin()">
+    Sign in &amp; join
   </button>
 
   <div class="status" id="joinStatus"></div>
@@ -203,18 +205,37 @@
 <div class="card" id="errorCard">
   <div class="logo">RENE<span class="x">X</span></div>
   <div class="invite-icon">❌</div>
-  <div class="invite-title" id="errorTitle">Einladung ungültig</div>
-  <div class="invite-sub" id="errorMsg">Dieser Einladungslink ist abgelaufen oder wurde bereits verwendet.</div>
-  <button class="btn btn-ghost" onclick="window.location.href='/'">Zur Startseite</button>
+  <div class="invite-title" id="errorTitle">Invalid invitation</div>
+  <div class="invite-sub" id="errorMsg">This invitation link has expired or has already been used.</div>
+  <button class="btn btn-ghost" id="goHomeBtn" onclick="window.location.href='/'">Go to home</button>
 </div>
 
-<script>
+<script type="module">
+  import lang from "/js/i18n.js";
+
   const API = "https://api.renex.id";
   const token = new URLSearchParams(location.search).get("token");
 
+  // ── i18n static strings ───────────────────────────────
+  document.title = lang.invitePageTitle;
+  document.getElementById("loadingStatus").innerHTML = `<span class="spinner"></span> ${lang.checkingInvite}`;
+  document.getElementById("joinBtn").textContent     = lang.joinAsGuestBtn;
+  document.getElementById("loginJoinBtn").textContent = lang.loginAndJoinBtn;
+  document.getElementById("goHomeBtn").textContent   = lang.goHomeBtn;
+  document.getElementById("info-access").innerHTML   = lang.accessFor24h;
+  document.getElementById("info-messages").innerHTML = lang.maxMessages;
+  document.getElementById("info-e2e").textContent    = lang.e2eEncrypted;
+
+  // Turnstile
+  let _cfToken = null;
+  window.onTurnstileSolved = function(t) {
+    _cfToken = t;
+    document.getElementById("joinBtn").disabled = false;
+  };
+
   // ── Startup ───────────────────────────────────────────
   (async () => {
-    if (!token) return showError("Kein Token", "Dieser Link ist ungültig.");
+    if (!token) return showError(lang.invalidInviteTitle, lang.noTokenMsg);
 
     try {
       const res  = await fetch(`${API}/invite/info?token=${encodeURIComponent(token)}`);
@@ -222,23 +243,22 @@
 
       if (!data.valid) {
         const msgs = {
-          expired:   "Dieser Einladungslink ist abgelaufen.",
-          converted: "Dieser Link wurde bereits verwendet.",
-          not_found: "Dieser Link existiert nicht.",
+          expired:   lang.inviteExpiredReason,
+          converted: lang.inviteAlreadyUsed,
+          not_found: lang.inviteNotFound,
         };
-        return showError("Einladung ungültig", msgs[data.reason] || "Unbekannter Fehler.");
+        return showError(lang.invalidInviteTitle, msgs[data.reason] || lang.unknownError);
       }
 
-      document.getElementById("chatName").textContent  = data.displayName || "Chat";
-      document.getElementById("invitedBy").textContent = data.createdBy   || "jemandem";
+      document.getElementById("chatName").textContent = data.displayName || "Chat";
+      document.getElementById("invitedByText").innerHTML = lang.invitedByText(data.createdBy || "?");
 
       // Eingeloggter User? → sofort beitreten, kein Klick nötig
       const myUser = localStorage.getItem("my_user");
       if (myUser) {
         hide("loadingCard");
-        // Lade-Karte mit Spinner zeigen, direkt beitreten
-        document.getElementById("loadingCard").querySelector(".status").innerHTML =
-          '<span class="spinner"></span> Beitreten…';
+        document.getElementById("loadingStatus").innerHTML =
+          `<span class="spinner"></span> ${lang.joiningText}`;
         show("loadingCard");
         await joinAsLoggedInUser();
         return;
@@ -248,17 +268,17 @@
       hide("loadingCard");
 
     } catch (e) {
-      showError("Verbindungsfehler", "Bitte überprüfe deine Internetverbindung.");
+      showError(lang.connectionError, lang.checkConnection);
     }
   })();
 
   // ── Join ─────────────────────────────────────────────
-  async function joinAsGuest() {
+  window.joinAsGuest = async function() {
     const btn = document.getElementById("joinBtn");
     const status = document.getElementById("joinStatus");
     btn.disabled = true;
     status.className = "status";
-    status.innerHTML = '<span class="spinner"></span> Beitreten…';
+    status.innerHTML = `<span class="spinner"></span> ${lang.joiningText}`;
 
     // ── Ephemeres E2E-Schlüsselpaar generieren ────────────────────────
     let publicKeyJwk = null;
@@ -278,23 +298,38 @@
     }
     // ─────────────────────────────────────────────────────────────────
 
+    if (!_cfToken) {
+      status.className = "status error";
+      status.textContent = lang.captchaRequired;
+      btn.disabled = false;
+      return;
+    }
+
     try {
       const res  = await fetch(`${API}/invite/join`, {
         method:      "POST",
         credentials: "include",
         headers:     { "Content-Type": "application/json" },
-        body:        JSON.stringify({ token, publicKeyJwk, guestDeviceId }),
+        body:        JSON.stringify({ token, publicKeyJwk, guestDeviceId, cfTurnstileToken: _cfToken }),
       });
       const data = await res.json();
 
+      if (res.status === 403 || (!res.ok && data.error === "Human verification failed")) {
+        status.className = "status error";
+        status.textContent = lang.captchaFailed;
+        btn.disabled = true;
+        _cfToken = null;
+        if (window.turnstile) window.turnstile.reset();
+        return;
+      }
+
       if (!res.ok || !data.ok) {
         status.className = "status error";
-        status.textContent = data.error || "Fehler beim Beitreten.";
+        status.textContent = data.error || lang.joinErrorDefault;
         btn.disabled = false;
         return;
       }
 
-      // Gast-Daten im sessionStorage für den Chat speichern
       sessionStorage.setItem("guestSession", JSON.stringify({
         guestHandle:   data.guestHandle,
         convoId:       data.convoId,
@@ -304,21 +339,18 @@
         msgLimit:      data.msgLimit,
         msgCount:      data.msgCount,
         deviceId:      guestDeviceId,
-        token,
+        token:         data.sessionToken,
       }));
 
       status.className = "status ok";
-      status.textContent = "Erfolgreich! Leite weiter…";
+      status.textContent = lang.successRedirecting;
 
-      // Weiterleitung in den Chat
       setTimeout(() => {
         const groupName = document.getElementById("chatName")?.textContent || "";
         const nameParam = groupName ? `&name=${encodeURIComponent(groupName)}` : "";
         if (data.convoType === "group") {
-          // Gruppe: withUser = groupUUID
           window.location.href = `/chat/?with=${encodeURIComponent(data.convoId)}&guest=1${nameParam}`;
         } else {
-          // DM: withUser = Einladender (damit dmConvoId korrekt berechnet wird)
           const inviter = data.inviterHandle || data.convoId.split(":").find(h => h !== data.guestHandle);
           window.location.href = `/chat/?with=${encodeURIComponent(inviter)}&guest=1${nameParam}`;
         }
@@ -326,15 +358,14 @@
 
     } catch (e) {
       status.className = "status error";
-      status.textContent = "Netzwerkfehler. Bitte erneut versuchen.";
+      status.textContent = lang.networkErrorRetry;
       btn.disabled = false;
     }
-  }
+  };
 
   // ── Join als eingeloggter User ────────────────────────
   async function joinAsLoggedInUser() {
-    // Status in der Loading-Card anzeigen (kein Klick-Flow)
-    const loadingStatus = document.getElementById("loadingCard").querySelector(".status");
+    const loadingStatus = document.getElementById("loadingStatus");
     const setStatus = (html) => { if (loadingStatus) loadingStatus.innerHTML = html; };
 
     try {
@@ -347,10 +378,10 @@
       const data = await res.json();
 
       if (!res.ok || !data.ok) {
-        return showError("Fehler beim Beitreten", data.error || "Bitte erneut versuchen.");
+        return showError(lang.joinErrorTitle, data.error || lang.joinErrorRetry);
       }
 
-      setStatus("✓ Erfolgreich! Leite weiter…");
+      setStatus("✓ " + lang.successRedirecting);
 
       setTimeout(() => {
         const target = data.convoType === "group" ? data.convoId : (data.inviterHandle || data.convoId);
@@ -358,16 +389,15 @@
       }, 600);
 
     } catch (e) {
-      showError("Netzwerkfehler", "Bitte überprüfe deine Internetverbindung.");
+      showError(lang.connectionError, lang.checkConnection);
     }
   }
 
   // ── Helpers ───────────────────────────────────────────
-  function goLogin() {
-    // Join-URL im sessionStorage merken → nach Login zurückspringen
+  window.goLogin = function() {
     sessionStorage.setItem("pendingInviteRedirect", location.href);
     window.location.href = "/";
-  }
+  };
 
   function showError(title, msg) {
     document.getElementById("errorTitle").textContent = title;

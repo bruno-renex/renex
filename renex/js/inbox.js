@@ -3,6 +3,8 @@ import {
   uploadInboxKeyIfNeeded
 } from "./e2e.js";
 import lang, { getLang, setLang } from "./i18n.js";
+import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
+import { formatTime } from "./shared/timeFormat.js";
 
 // ================================
 // CONFIG
@@ -46,7 +48,7 @@ function showToast({ icon = "👥", title, sub = "", groupId = null, groupName =
       <div class="inbox-toast-title">${title}</div>
       ${sub ? `<div class="inbox-toast-sub">${sub}</div>` : ""}
     </div>
-    <button class="inbox-toast-close" title="Schliessen">✕</button>
+    <button class="inbox-toast-close" title="${lang.closeBtn}">✕</button>
   `;
 
   // Klick auf Toast → Gruppen-Tab aktivieren (+ ggf. zum Chat navigieren)
@@ -99,28 +101,7 @@ function initProfileCircle() {
   circle.textContent = initials;
 }
 
-// ======================================================
-// GUEST DISPLAY NAME  (deterministic, English)
-// guest_3a7f… → "Blue Eagle"  (16 adj × 16 animals = 256 combos)
-// ======================================================
-const _GUEST_ADJ = [
-  'Blue','Red','Green','Golden','Silver','Wild','Swift','Brave',
-  'Dark','Bold','Calm','Fierce','Quiet','Sharp','Bright','Eager'
-];
-const _GUEST_ANI = [
-  'Eagle','Fox','Lynx','Bear','Wolf','Falcon','Otter','Cheetah',
-  'Raven','Hawk','Tiger','Panther','Puma','Cobra','Bison','Jaguar'
-];
-function guestDisplayName(handle) {
-  if (!handle?.startsWith('guest_')) return handle;
-  const hex = handle.slice(6);
-  const a = parseInt(hex.slice(0, 2) || '0', 16) % _GUEST_ADJ.length;
-  const b = parseInt(hex.slice(2, 4) || '0', 16) % _GUEST_ANI.length;
-  return `${_GUEST_ADJ[a]} ${_GUEST_ANI[b]}`;
-}
-function replaceGuestHandles(text) {
-  return String(text).replace(/\bguest_[0-9a-f]+\b/gi, h => guestDisplayName(h));
-}
+// Guest display name & handle replacement → shared/guestUtils.js
 
 // ================================
 // INVITE LINK (Gruppen)
@@ -183,14 +164,14 @@ async function createGroupInviteLink(groupId, groupName, btnEl) {
     }
 
     btnEl.textContent = "✓";
-    showToast({ icon: "🔗", title: "Link kopiert!", sub: groupName, durationMs: 3000 });
+    showToast({ icon: "🔗", title: lang.linkCopiedInfo || lang.linkCopied, sub: groupName, durationMs: 4000 });
     setTimeout(() => { btnEl.textContent = orig; btnEl.disabled = false; _invitePending.delete(groupId); }, 2500);
 
   } catch (e) {
     btnEl.textContent = orig;
     btnEl.disabled = false;
     _invitePending.delete(groupId);
-    showToast({ icon: "⚠️", title: "Link konnte nicht erstellt werden", durationMs: 4000 });
+    showToast({ icon: "⚠️", title: lang.linkCreateFailed, durationMs: 4000 });
   }
 }
 
@@ -332,13 +313,13 @@ function buildPreviewText(cached, serverTs, myUser, fromUser, isGroup) {
   if (cached && Number(cached.ts) >= sTs) {
     // Cache ist aktuell → Text zeigen
     const from = cached.from || "";
-    if (from === "__system__") return { text: cached.text || "", muted: false };
+    if (from === "__system__") return { text: replaceGuestHandles(cached.text || ""), muted: false };
     const fromMe = from === myUser;
-    const prefix = fromMe ? (lang.youPrefix || "Du: ") : (isGroup && from ? `${from}: ` : "");
+    const prefix = fromMe ? (lang.youPrefix || "Du: ") : (isGroup && from ? `${guestDisplayName(from)}: ` : "");
     return { text: `${prefix}${cached.text || ""}`, muted: false };
   }
   // Neue ungelesene Nachricht (kein Cache oder veraltet)
-  const prefix = (isGroup && fromUser && fromUser !== myUser) ? `${fromUser}: ` : "";
+  const prefix = (isGroup && fromUser && fromUser !== myUser) ? `${guestDisplayName(fromUser)}: ` : "";
   return { text: `${prefix}💬 ${lang.newMessage || "Neue Nachricht"}`, muted: false };
 }
 
@@ -352,19 +333,7 @@ function stringToColor(str) {
   return _AVATAR_COLORS[Math.abs(hash) % _AVATAR_COLORS.length];
 }
 
-function formatTime(ts) {
-  if (!ts) return "";
-  const date = new Date(ts);
-  const now  = new Date();
-  const isToday     = date.toDateString() === now.toDateString();
-  const yesterday   = new Date(now); yesterday.setDate(now.getDate() - 1);
-  const isYesterday = date.toDateString() === yesterday.toDateString();
-  if (isToday)     return date.toLocaleTimeString(lang.locale || "de-CH", { hour: "2-digit", minute: "2-digit" });
-  if (isYesterday) return lang.yesterday || "Gestern";
-  const diffDays = Math.floor((now - date) / 86400000);
-  if (diffDays < 7) return date.toLocaleDateString(lang.locale || "de-CH", { weekday: "short" });
-  return date.toLocaleDateString(lang.locale || "de-CH", { day: "2-digit", month: "2-digit" });
-}
+// formatTime → shared/timeFormat.js
 
 let contactRequestInFlight = false;
 
@@ -598,11 +567,11 @@ if (langBtn && langSubmenu) {
             if (evHandle === myUser) {
               // Gruppenname aus _currentGroups holen (nach loadGroups)
               const grp = _currentGroups.find(g => g.id === groupId);
-              const groupName = grp?.name || "neue Gruppe";
+              const groupName = grp?.name || lang.newGroup;
               showToast({
                 icon: "👥",
-                title: `Du wurdest zur Gruppe „${groupName}" eingeladen`,
-                sub: invitedBy ? `Von: ${invitedBy}` : "",
+                title: lang.groupInviteToast(groupName),
+                sub: invitedBy ? lang.invitedByPrefix(invitedBy) : "",
                 groupId,
                 durationMs: 6000
               });
@@ -1170,10 +1139,10 @@ async function loadGroups() {
           if (onlineEl) {
             const total = (g.member_count || 0);
             if (onlineCount > 0) {
-              onlineEl.innerHTML = `${onlineCount} <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade80;margin:0 4px;vertical-align:middle;"></span>· ${total} Mitglieder`;
+              onlineEl.innerHTML = `${onlineCount} <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade80;margin:0 4px;vertical-align:middle;"></span>· ${lang.membersLabel(total)}`;
               onlineEl.style.color = "var(--text-secondary)";
             } else {
-              onlineEl.textContent = `${total} Mitglieder`;
+              onlineEl.textContent = lang.membersLabel(total);
               onlineEl.style.color = "var(--text-secondary)";
             }
           }
@@ -1267,7 +1236,7 @@ function renderGroup(group) {
     const memberCount = document.createElement("span");
     memberCount.dataset.onlineCount = "1";
     memberCount.style.cssText = "font-size:11px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap;";
-    memberCount.textContent = `${group.member_count} Mitglieder`;
+    memberCount.textContent = lang.membersLabel(group.member_count);
     previewRow.appendChild(preview);
     previewRow.appendChild(memberCount);
   }
@@ -1278,7 +1247,7 @@ function renderGroup(group) {
   // 🔗 Einladungslink-Button
   const inviteBtn = document.createElement("button");
   inviteBtn.textContent = "🔗";
-  inviteBtn.title = "Einladungslink erstellen";
+  inviteBtn.title = lang.inviteLinkCreate;
   inviteBtn.style.cssText = "background:transparent;border:none;color:var(--text-muted);font-size:15px;cursor:pointer;padding:4px 6px;border-radius:4px;flex-shrink:0;transition:color 0.15s;";
   inviteBtn.onmouseenter = () => inviteBtn.style.color = "var(--accent-voice)";
   inviteBtn.onmouseleave = () => { if (inviteBtn.textContent === "🔗") inviteBtn.style.color = "var(--text-muted)"; };
@@ -1324,6 +1293,7 @@ const groupInviteSearch  = document.getElementById("group-invite-search");
 const groupInviteAddBtn  = document.getElementById("group-invite-add-btn");
 const groupInvitedChips  = document.getElementById("group-invited-chips");
 const groupInviteDoneBtn = document.getElementById("group-invite-done-btn");
+const groupGuestLinkBtn  = document.getElementById("group-guest-link-btn");
 
 let _pendingGroupId   = null;
 let _invitedHandles   = new Set(); // bereits eingeladene im aktuellen Flow
@@ -1423,9 +1393,9 @@ async function doInviteAll() {
     }));
   } finally {
     groupInviteDoneBtn.disabled = false;
-    groupInviteDoneBtn.textContent = "Fertig";
+    groupInviteDoneBtn.textContent = lang.doneBtn;
     if (errors.length) {
-      alert("Einige Einladungen fehlgeschlagen:\n" + errors.join("\n"));
+      alert(lang.someInvitesFailed + "\n" + errors.join("\n"));
     }
     closeGroupPopup();
   }
@@ -1509,6 +1479,12 @@ groupNameInput?.addEventListener("keydown", (e) => {
 groupCreateConfirm?.addEventListener("click", (e) => { e.stopPropagation(); doCreateGroup(); });
 groupInviteAddBtn?.addEventListener("click",  (e) => { e.stopPropagation(); doInviteOne(); });
 groupInviteDoneBtn?.addEventListener("click", (e) => { e.stopPropagation(); doInviteAll(); });
+groupGuestLinkBtn?.addEventListener("click",  (e) => {
+  e.stopPropagation();
+  if (!_pendingGroupId) return;
+  const groupName = groupNameInput?.value.trim() || "";
+  createGroupInviteLink(_pendingGroupId, groupName, groupGuestLinkBtn);
+});
 
 createGroupBtn?.addEventListener("click", (e) => {
   e.stopPropagation();

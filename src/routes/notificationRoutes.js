@@ -1,5 +1,5 @@
 import { json, readJson } from '../utils.js';
-import { requireSession } from '../auth.js';
+import { requireSession, requireAnySession } from '../auth.js';
 
 // ======================================================
 // NOTIFICATION ROUTES
@@ -9,15 +9,18 @@ import { requireSession } from '../auth.js';
 
 export async function handleNotificationRoutes(request, env, path) {
 
-  const session = await requireSession(request, env);
+  const session = await requireAnySession(request, env);
   if (!session) return json(request, { error: "Not authenticated" }, 401);
   const me = String(session.handle || "").toLowerCase();
+  const isGuest = session.isGuest === true;
 
   switch (path) {
 
     // GET /notifications/muted
     case "/notifications/muted": {
       if (request.method !== "GET") break;
+      // Gäste haben keine Mute-Einstellungen → leere Liste
+      if (isGuest) return json(request, { muted: [] });
       const rows = await env.RENEX_DB.prepare(
         "SELECT convo_id FROM notification_mutes WHERE user_handle = ?"
       ).bind(me).all();
@@ -29,6 +32,7 @@ export async function handleNotificationRoutes(request, env, path) {
     // Body: { convoId: string, mute: boolean }
     case "/notifications/mute": {
       if (request.method !== "POST") break;
+      if (isGuest) return json(request, { error: "Not authorized" }, 403);
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
 

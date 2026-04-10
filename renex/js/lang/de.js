@@ -37,6 +37,10 @@ export default {
   userNotFound:         (handle) => `Nutzer „${handle}" existiert nicht.`,
   notInContacts:        (handle) => `„${handle}" ist nicht in deinen Kontakten. Füge ihn/sie zuerst als Kontakt hinzu.`,
   inviteFailed:         "Einladen fehlgeschlagen: ",
+  groupFull:            "Die Gruppe ist voll (max. 50 Mitglieder).",
+  confirmRemoveMember:  (handle) => `${handle} aus der Gruppe entfernen?`,
+  removeMemberFailed:   "Entfernen fehlgeschlagen: ",
+  youWereRemoved:       "Du wurdest aus der Gruppe entfernt.",
   leaveGroupBtn:        "Verlassen",
   confirmLeaveGroup:    (name) => `Gruppe "${name}" verlassen?`,
   leaveFailed:          "Verlassen fehlgeschlagen: ",
@@ -48,7 +52,11 @@ export default {
   youPrefix:            "Du: ",
 
   // ── Chat-Menü ─────────────────────────────────────────
-  autoDeleteOff:        "Aus",
+  autoDeleteOff:          "Aus",
+  autoDeleteActive:       (label) => `✅ Auto-Delete aktiv: ${label}`,
+  autoDeleteDisabled:     "✅ Auto-Delete deaktiviert",
+  autoDeleteSet:          (label) => `✅ Auto-Delete: ${label}`,
+  autoDeleteProposal:     (label) => `📤 Vorschlag gesendet: ${label}`,
   autoDeleteOneHour:    "1h",
   autoDeleteOneDay:     "24h",
   autoDeleteOneWeek:    "7 Tage",
@@ -56,6 +64,7 @@ export default {
   membersHeading:       "Mitglieder",
 
   // ── Chat-Nachrichten ──────────────────────────────────
+  decryptPending:         "🔒 Nachricht wird entschlüsselt…",
   decryptFailed:          "🔒 Nachricht konnte nicht entschlüsselt werden",
   messageExpired:         "⏱ Nachricht automatisch gelöscht",
   deleteMessageTitle:     "Nachricht löschen",
@@ -67,8 +76,8 @@ export default {
 
   // ── Delete-Account-Dialog ───────────────────────────
   deleteAccountDialogTitle:   "Account löschen",
-  deleteAccountDialogBody:    "Diese Aktion ist unwiderruflich. Alle Nachrichten und Kontakte werden gelöscht.<br><br>Gib deinen Handle zur Bestätigung ein:",
-  deleteAccountPlaceholder:   "Dein Handle",
+  deleteAccountDialogBody:    "Diese Aktion ist unwiderruflich. Alle Nachrichten und Kontakte werden gelöscht.<br><br>Gib deinen Username zur Bestätigung ein:",
+  deleteAccountPlaceholder:   "Dein Username",
   cancelBtn:                  "Abbrechen",
   deleteAccountConfirmBtn:    "Account löschen",
 
@@ -82,10 +91,17 @@ export default {
   rejectBtn:              "Ablehnen",
   accountDeleted:         " (Konto gelöscht)",
   removeFromList:         "Aus Liste entfernen",
-  handleMismatch:         "Handle stimmt nicht überein",
+  handleMismatch:         "Username stimmt nicht überein",
   contactRequestFailed:   "Kontaktanfrage fehlgeschlagen",
   removeContactFailed:    "Kontakt konnte nicht entfernt werden",
   confirmRemoveContact:   (handle) => `Kontakt ${handle} wirklich entfernen?`,
+  closeBtn:               "Schliessen",
+  linkCopied:             "Link kopiert!",
+  linkCopiedInfo:         "Link kopiert — gültig 48h, max. 20 Nachrichten pro Gast",
+  linkCreateFailed:       "Link konnte nicht erstellt werden",
+  inviteLinkCreate:       "Einladungslink erstellen",
+  doneBtn:                "Fertig",
+  someInvitesFailed:      "Einige Einladungen fehlgeschlagen:",
 
   // ── chat/index.html ──────────────────────────────────
   chatPageTitle:        "Chat",
@@ -97,9 +113,94 @@ export default {
   noChatPartner:      "Kein Chat-Partner gewählt",
   chatWith:           (user) => `Chat mit ${user}`,
   sendFailed:         "Nachricht konnte nicht gesendet werden",
+  sendFailedError:    (err) => `⚠️ Senden fehlgeschlagen: ${err}`,
+  unknownError:       "Unbekannter Fehler",
+  renameFailed:       "Umbenennen fehlgeschlagen: ",
+  editFailed:         "Bearbeiten fehlgeschlagen: ",
+  fileLabel:          "Datei",
+  photoLabel:         "📷 Foto",
   maxLengthReached:   (max) => `Maximal ${max} Zeichen erreicht`,
   charCounter:        (len, max) => `${len} / ${max} Zeichen`,
   pleaseWait:         "Bitte kurz warten…",
+
+  // ── Gruppe erstellen Popup ───────────────────────────
+  createGroupLabel:    "Gruppe erstellen",
+  nextBtn:             "Weiter →",
+  invitePeopleLabel:   "Personen einladen",
+  onlyContactsWarning: "Nur eigene Kontakte können eingeladen werden",
+  orSeparator:         "oder",
+  guestInviteLinkBtn:  "🔗 Gast-Einladungslink erstellen",
+
+  // ── Mitglieder ────────────────────────────────────────
+  membersLabel:        (n) => `${n} Mitglieder`,
+  newGroup:            "neue Gruppe",
+  groupInviteToast:    (name) => `Du wurdest zur Gruppe „${name}" eingeladen`,
+  invitedByPrefix:     (by) => `Von: ${by}`,
+
+  // ── Chat-Dropdown ─────────────────────────────────────
+  notificationsLabel:    "Benachrichtigungen",
+  notificationsOn:       "An",
+  notificationsOff:      "Aus",
+  renameGroupLabel:      "✏️ Gruppe umbenennen",
+  createInviteLinkLabel: "🔗 Einladungslink erstellen",
+
+  // ── Gast-Banner ───────────────────────────────────────
+  guestLabel:              "Gastzugang",
+  registerToAddContacts:   "Registriere dich um Kontakte hinzuzufügen",
+  guestMsgLimit:           "⚠️ Nachrichtenlimit erreicht — registriere dich um weiterzuschreiben!",
+  guestJoined:         (name) => `👤 Du bist beigetreten als <strong>${name}</strong>`,
+  expired:             "Abgelaufen",
+  guestLimitReached:   "⚠️ Limit erreicht. Mit einem Passkey in Sekunden anmelden — kein Passwort nötig.",
+  guestExpired:        "⚠️ Gastzugang abgelaufen. Mit einem Passkey in Sekunden anmelden — kein Passwort nötig.",
+  timeRemaining:       "verbleibend",
+  msgsRemaining:       "Nachrichten übrig",
+  convertToPasskey:    "Mit Passkey anmelden",
+
+  // ── Mitglieder-Liste (Chat) ───────────────────────────
+  contactAdded:        "✓ Kontakt",
+  requestContact:      "+ Anfragen",
+  requestPending:      "✓ Ausstehend",
+  requestSentConfirm:  "✓ Gesendet",
+  errorLabel:          "✗ Fehler",
+
+  // ── Diverse ───────────────────────────────────────────
+  cancelTitle:         "Abbrechen",
+  networkError:        "⚠️ Netzwerkfehler",
+  groupNameLabel:      "Gruppenname",
+
+  // ── GIF-Modal ─────────────────────────────────────────
+  gifSearchPlaceholder: "GIF suchen…",
+  gifTitle:             "GIF suchen",
+  gifSearching:         "Suche…",
+  photoTitle:           "Foto senden",
+  fileTitle:            "Datei senden",
+
+  // ── Join/Invite Page ──────────────────────────────────
+  invitePageTitle:         "RENEX – Einladung",
+  checkingInvite:          "Einladung wird geprüft…",
+  invitedByText:           (by) => `Du wurdest von <strong>${by}</strong> eingeladen`,
+  accessFor24h:            "Zugang für <strong>24 Stunden</strong> — dann mit Passkey speichern",
+  maxMessages:             "Maximal <strong>20 Nachrichten</strong> als Gast",
+  e2eEncrypted:            "Ende-zu-Ende verschlüsselt",
+  joinAsGuestBtn:          "Als Gast beitreten",
+  loginAndJoinBtn:         "Anmelden & beitreten",
+  invalidInviteTitle:      "Einladung ungültig",
+  inviteExpiredDefaultMsg: "Dieser Einladungslink ist abgelaufen oder wurde bereits verwendet.",
+  goHomeBtn:               "Zur Startseite",
+  noTokenMsg:              "Dieser Link ist ungültig.",
+  inviteExpiredReason:     "Dieser Einladungslink ist abgelaufen.",
+  inviteAlreadyUsed:       "Dieser Link wurde bereits verwendet.",
+  inviteNotFound:          "Dieser Link existiert nicht.",
+  joiningText:             "Beitreten…",
+  captchaRequired:         "Bitte zuerst die Sicherheitsprüfung abschliessen.",
+  captchaFailed:           "Sicherheitsprüfung fehlgeschlagen. Bitte erneut versuchen.",
+  joinErrorDefault:        "Fehler beim Beitreten.",
+  successRedirecting:      "Erfolgreich! Leite weiter…",
+  connectionError:         "Verbindungsfehler",
+  checkConnection:         "Bitte überprüfe deine Internetverbindung.",
+  joinErrorTitle:          "Fehler beim Beitreten",
+  joinErrorRetry:          "Bitte erneut versuchen.",
+  networkErrorRetry:       "Netzwerkfehler. Bitte erneut versuchen.",
 
   // ── Locale ───────────────────────────────────────────
   locale: "de-DE",

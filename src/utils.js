@@ -54,6 +54,8 @@ export function checkCsrf(request) {
 // SAFE JSON HELPER
 // =========================
 export async function readJson(request) {
+  const ct = request.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) return null;
   try {
     return await request.json();
   } catch {
@@ -184,3 +186,56 @@ export function dmConvoId(a, b) {
 
 // Backward-Kompatibilität: bestehende Importe müssen nicht sofort angepasst werden
 export const convoId = dmConvoId;
+
+// ======================================================
+// UUID / Group-ID Validation
+// ======================================================
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUUID(value) {
+  return UUID_RE.test(String(value));
+}
+
+export const isValidGroupId = isUUID;
+
+export function validateConvoId(convoId) {
+  if (!convoId || typeof convoId !== "string") return null;
+  if (UUID_RE.test(convoId)) return "group";
+  if (/^[a-z0-9_]{1,30}:[a-z0-9_]{1,30}$/.test(convoId)) return "dm";
+  return null;
+}
+
+// ======================================================
+// System Message Helper (D1)
+// ======================================================
+export function insertSystemMessage(db, { convoId, fromUser, message }) {
+  const id = crypto.randomUUID();
+  const ts = Date.now();
+  return db.prepare(
+    `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+     VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+  ).bind(id, convoId, fromUser, ts, message);
+}
+
+// ======================================================
+// Guest Token / Handle Generation
+// ======================================================
+export function generateGuestToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return "guest_" + Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function generateGuestHandle() {
+  const bytes = crypto.getRandomValues(new Uint8Array(4));
+  return "guest_" + Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ======================================================
+// Contact Version Bump (KV)
+// ======================================================
+export async function bumpContactsVersion(env, ...handles) {
+  const ts = String(Date.now());
+  await Promise.all(handles.map(h =>
+    env.RENEX_KV.put(`contacts_v:${h}`, ts, { expirationTtl: 86400 })
+  ));
+}

@@ -92,8 +92,7 @@ async function getDeviceSecretB64() {
   const legacy = localStorage.getItem("device_secret");
 
   if (legacy) {
-    console.log("🔄 Migriere device_secret nach IndexedDB");
-    await idbSet("device_secret", legacy);
+      await idbSet("device_secret", legacy);
     return legacy;
   }
 
@@ -105,7 +104,6 @@ async function getDeviceSecretB64() {
 
   await idbSet("device_secret", s);
 
-  console.log("🆕 device_secret neu erzeugt");
   return s;
 }
 
@@ -122,15 +120,27 @@ function bytesToB64(bytes) {
   return btoa(bin);
 }
 
-async function getDeviceStorageKey() {
-  // Key aus device_secret ableiten (stabil pro Gerät)
-const secretB64 = await getDeviceSecretB64();
-const secretBytes = b64ToBytes(secretB64);
+async function getDeviceStorageKey(userHandle) {
+  // Key aus device_secret + userHandle ableiten (isoliert pro User pro Gerät)
+  const secretB64 = await getDeviceSecretB64();
+  const secretBytes = b64ToBytes(secretB64);
 
-  return crypto.subtle.importKey(
-    "raw",
-    secretBytes,
-    { name: "AES-GCM" },
+  // Basis-Key für HKDF importieren
+  const baseKey = await crypto.subtle.importKey(
+    "raw", secretBytes,
+    { name: "HKDF" },
+    false, ["deriveKey"]
+  );
+
+  // User-spezifischen AES-GCM Key ableiten
+  const info = userHandle
+    ? new TextEncoder().encode(`renex:storage:${userHandle.toLowerCase()}`)
+    : new TextEncoder().encode("renex:storage:global"); // Fallback für Migration
+
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
     false,
     ["encrypt", "decrypt"]
   );
@@ -179,26 +189,33 @@ async function decryptFromStorage(storageKey, ivB64, ctB64) {
 
 // ✅ Export: CMK holen oder erstellen (32 bytes)
 export async function getOrCreateCMK(peerHandle) {
+  const me = (localStorage.getItem("my_user") || "").toLowerCase();
   const key = cmkIdbKey(peerHandle);
-  const storageKey = await getDeviceStorageKey();
+  const storageKey     = await getDeviceStorageKey(me);
+  const globalKey      = await getDeviceStorageKey(null); // Migration: alter globaler Key
 
   // 1) laden (wenn vorhanden)
   const saved = await idbGet(key);
   if (saved && saved.ivB64 && saved.ctB64) {
+    // Erst mit user-spezifischem Key versuchen
     try {
       const cmkBytes = await decryptFromStorage(storageKey, saved.ivB64, saved.ctB64);
-
-      if (!(cmkBytes instanceof Uint8Array) || cmkBytes.length !== 32) {
-        throw new Error("CMK hat ungültige Länge");
-      }
-
-      console.log("🔐 CMK geladen:", peerHandle);
+      if (!(cmkBytes instanceof Uint8Array) || cmkBytes.length !== 32) throw new Error("bad length");
       return cmkBytes;
-
-    } catch (e) {
-      // ❗WICHTIG: NICHT neu erzeugen -> sonst sind alte Chats tot
-      console.error("❌ CMK konnte nicht entschlüsselt werden – möglicher device_secret Verlust", e);
-      throw new Error("CMK_DECRYPT_FAILED");
+    } catch {
+      // Migration: mit altem globalem Key versuchen + re-encrypten
+      try {
+        const cmkBytes = await decryptFromStorage(globalKey, saved.ivB64, saved.ctB64);
+        if (!(cmkBytes instanceof Uint8Array) || cmkBytes.length !== 32) throw new Error("bad length");
+        // Re-encrypten mit user-spezifischem Key
+        const enc = await encryptForStorage(storageKey, cmkBytes);
+        await idbSet(key, enc);
+        return cmkBytes;
+      } catch (e) {
+        // ❗WICHTIG: NICHT neu erzeugen -> sonst sind alte Chats tot
+        console.error("❌ CMK konnte nicht entschlüsselt werden – möglicher device_secret Verlust", e);
+        throw new Error("CMK_DECRYPT_FAILED");
+      }
     }
   }
 
@@ -207,14 +224,15 @@ export async function getOrCreateCMK(peerHandle) {
   const enc = await encryptForStorage(storageKey, cmk);
   await idbSet(key, enc);
 
-  console.log("✅ CMK erstellt & gespeichert:", peerHandle);
   return cmk;
 }
 
 export async function getCMKIfExists(peerHandle) {
+  const me = (localStorage.getItem("my_user") || "").toLowerCase();
   const newKey = cmkIdbKey(peerHandle);
   const oldKey = `cmk:${String(peerHandle).toLowerCase()}`;
-  const storageKey = await getDeviceStorageKey();
+  const storageKey = await getDeviceStorageKey(me);
+  const globalKey  = await getDeviceStorageKey(null); // Migration: alter globaler Key
 
   // 1️⃣ Versuche neuen Key
   let saved = await idbGet(newKey);
@@ -224,7 +242,6 @@ export async function getCMKIfExists(peerHandle) {
     const legacy = await idbGet(oldKey);
 
     if (legacy && legacy.ivB64 && legacy.ctB64) {
-      console.log("🔄 Migriere alten CMK → neues Namespace-Format");
 
       // alten unter neuem speichern
       await idbSet(newKey, legacy);
@@ -245,20 +262,22 @@ saved = legacy;
 
   if (!saved || !saved.ivB64 || !saved.ctB64) return null;
 
+  // Erst user-spezifischen Key versuchen, dann globalen (Migration)
   try {
-    const cmkBytes = await decryptFromStorage(
-      storageKey,
-      saved.ivB64,
-      saved.ctB64
-    );
-
-    if (!(cmkBytes instanceof Uint8Array) || cmkBytes.length !== 32)
-      return null;
-
+    const cmkBytes = await decryptFromStorage(storageKey, saved.ivB64, saved.ctB64);
+    if (!(cmkBytes instanceof Uint8Array) || cmkBytes.length !== 32) return null;
     return cmkBytes;
-
   } catch {
-    return null;
+    try {
+      const cmkBytes = await decryptFromStorage(globalKey, saved.ivB64, saved.ctB64);
+      if (!(cmkBytes instanceof Uint8Array) || cmkBytes.length !== 32) return null;
+      // Re-encrypten mit user-spezifischem Key
+      const enc = await encryptForStorage(storageKey, cmkBytes);
+      await idbSet(newKey, enc);
+      return cmkBytes;
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -267,12 +286,11 @@ export async function importAndStoreCMKFromPeer(peerHandle, cmkBytes) {
     throw new Error("❌ CMK ungültig (muss 32 bytes sein)");
   }
 
+  const me = (localStorage.getItem("my_user") || "").toLowerCase();
   const key = cmkIdbKey(peerHandle);
-  const storageKey = await getDeviceStorageKey();
+  const storageKey = await getDeviceStorageKey(me);
   const enc = await encryptForStorage(storageKey, cmkBytes);
   await idbSet(key, enc);
-
-  console.log("✅ CMK von Peer importiert & gespeichert:", peerHandle);
 }
 
 export async function storePeerDevices(peerHandle, devices) {
@@ -428,11 +446,9 @@ export async function initE2EKeys() {
   const existingPublicKey  = await loadPublicKey();
 
   if (existingPrivateKey && existingPublicKey) {
-    console.log("🔐 E2E: Keypair bereits vorhanden");
-    return true;
+      return true;
   }
 
-  console.log("🔐 E2E: Erzeuge neues Keypair");
 
   const keyPair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
@@ -443,7 +459,6 @@ export async function initE2EKeys() {
   await storePrivateKey(keyPair.privateKey);
   await idbSet("e2e-public-key", keyPair.publicKey);
 
-  console.log("✅ E2E Keypair erzeugt & gespeichert");
   return true;
 }
 
@@ -468,10 +483,7 @@ async function pubkeyUploadedFlag(deviceId) {
 }
 
 export async function debugPrintMyPublicKey() {
-  const pub = await loadPublicKey();
-  if (!pub) return console.warn("🔑 Noch kein Public Key gespeichert");
-  const jwk = await crypto.subtle.exportKey("jwk", pub);
-  console.log("📌 MEIN PUBLIC KEY JWK:", jwk);
+  // Deaktiviert — JWK-Ausgabe in Prod-Konsole nicht sicher
 }
 
 // ======================================================
@@ -500,7 +512,6 @@ export async function uploadInboxKeyIfNeeded() {
     body: JSON.stringify({ jwk, deviceId, sigPub })
   });
 
-  console.log("📮 Inbox-Key + SigPub hochgeladen:", deviceId);
 }
 
 // ======================================================
@@ -553,11 +564,17 @@ export async function getRotationMap(sessionId) {
   return (await idbGet(`cmk:rotation-map:${sessionId}`)) || [];
 }
 
+const MAX_ROTATION_MAP_ENTRIES = 50;
+
 export async function appendToRotationMap(sessionId, fromIndex, cmkBytes) {
   const map = await getRotationMap(sessionId);
   const filtered = map.filter(e => e.fromIndex < fromIndex);
   filtered.push({ fromIndex, cmkBytes: Array.from(cmkBytes) });
-  await idbSet(`cmk:rotation-map:${sessionId}`, filtered);
+  // Auf letzte 50 Einträge begrenzen (älteste zuerst — slice von hinten)
+  const trimmed = filtered.length > MAX_ROTATION_MAP_ENTRIES
+    ? filtered.slice(-MAX_ROTATION_MAP_ENTRIES)
+    : filtered;
+  await idbSet(`cmk:rotation-map:${sessionId}`, trimmed);
 }
 
 export function findCmkForRotationIndex(rotationMap, rotationIndex) {

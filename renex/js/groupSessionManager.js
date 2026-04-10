@@ -69,7 +69,6 @@ export async function generateGroupSK(groupId, myHandle) {
   const keyBytes = crypto.getRandomValues(new Uint8Array(32));
   await idbSet(gskKey(groupId, myHandle), keyBytes);
   await idbSet(gskChainKey(groupId, myHandle), 0);
-  console.log("🔑 Group Sender Key generiert:", { groupId, myHandle });
   return keyBytes;
 }
 
@@ -91,7 +90,6 @@ export async function getOrCreateGroupSK(groupId, myHandle) {
  */
 export async function storeReceivedGroupSK(groupId, senderHandle, keyBytes) {
   await idbSet(gskKey(groupId, senderHandle), keyBytes);
-  console.log("📥 Group Sender Key empfangen:", { groupId, senderHandle });
 }
 
 /**
@@ -126,7 +124,12 @@ export async function nextChainIndex(groupId, myHandle) {
  * Group Message Key: HKDF(GSK, info={groupId}:{senderHandle}:{chainIndex})
  * Jede Nachricht hat einen einzigartigen MK → AES-GCM encrypt/decrypt.
  */
-export async function deriveGroupMK(skBytes, groupId, senderHandle, chainIndex) {
+// Aktueller Salt (v1) — domain-spezifisch statt 32 zero bytes
+const HKDF_SALT_V1 = new TextEncoder().encode("renex:gmk:v1");
+// Legacy Salt (v0) — für Rückwärtskompatibilität mit alten Nachrichten
+const HKDF_SALT_V0 = new Uint8Array(32);
+
+export async function deriveGroupMK(skBytes, groupId, senderHandle, chainIndex, salt = HKDF_SALT_V1) {
   const info = new TextEncoder().encode(
     `renex-group:${groupId}:${senderHandle}:${chainIndex}`
   );
@@ -136,12 +139,7 @@ export async function deriveGroupMK(skBytes, groupId, senderHandle, chainIndex) 
   );
 
   return crypto.subtle.deriveKey(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt: new Uint8Array(32),
-      info
-    },
+    { name: "HKDF", hash: "SHA-256", salt, info },
     baseKey,
     { name: "AES-GCM", length: 256 },
     false,
@@ -196,11 +194,18 @@ export async function decryptGroupMessage(groupId, senderHandle, ivB64, ctB64, c
   }
 
   try {
-    const mk = await deriveGroupMK(skBytes, groupId, senderHandle, chainIndex);
     const iv = b64ToBytes(ivB64);
     const ct = b64ToBytes(ctB64);
-    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, mk, ct.buffer);
-    return new TextDecoder().decode(plain);
+    // Erst neuen Salt (v1) versuchen, dann Legacy-Salt (v0) für ältere Nachrichten
+    for (const salt of [HKDF_SALT_V1, HKDF_SALT_V0]) {
+      try {
+        const mk = await deriveGroupMK(skBytes, groupId, senderHandle, chainIndex, salt);
+        const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, mk, ct.buffer);
+        return new TextDecoder().decode(plain);
+      } catch { /* nächsten Salt versuchen */ }
+    }
+    console.warn("❌ Group MK decrypt failed (alle Salts):", { groupId, senderHandle, chainIndex });
+    return "__decrypt_failed__";
   } catch (e) {
     console.warn("❌ Group MK decrypt failed:", { groupId, senderHandle, chainIndex, error: String(e) });
     return "__decrypt_failed__";
@@ -246,7 +251,6 @@ export async function distributeGroupSK(groupId, myHandle, allDevices, apiFetch)
     })
   });
 
-  console.log("📤 GSK distribuiert:", { groupId, myHandle, devices: allDevices.length });
   return true;
 }
 
@@ -266,8 +270,7 @@ export async function distributeGroupSK(groupId, myHandle, allDevices, apiFetch)
 export async function receiveGroupSK({ from, groupId, myDeviceId, payloads, findSenderDeviceJwkFn }) {
   const p = payloads?.find(x => x.deviceId === myDeviceId);
   if (!p) {
-    console.log("ℹ️ GSK payload nicht für dieses Device", { myDeviceId });
-    return false;
+      return false;
   }
 
   const myPriv = await loadPrivateKey();
@@ -349,7 +352,6 @@ export async function rewrapGroupSKForNewDevice(groupId, myHandle, newDevices, a
     })
   });
 
-  console.log("🔑 GSK für neues Device re-wrapped:", { groupId, myHandle, newDevices: newDevices.length });
   return true;
 }
 

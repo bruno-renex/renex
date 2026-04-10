@@ -1,13 +1,5 @@
-import { json, readJson, corsHeaders, checkCsrf } from '../utils.js';
+import { json, readJson, corsHeaders, checkCsrf, bumpContactsVersion } from '../utils.js';
 import { requireSession, rateLimit, pushToUserDO } from '../auth.js';
-
-// Bumpt contacts_v KV-Token für beide beteiligten User → ETag wird ungültig
-async function bumpContactsVersion(env, ...handles) {
-  const ts = String(Date.now());
-  await Promise.all(handles.map(h =>
-    env.RENEX_KV.put(`contacts_v:${h}`, ts, { expirationTtl: 86400 })
-  ));
-}
 
 // ======================================================
 // CONTACT ROUTES: /contacts, /contacts/list,

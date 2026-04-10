@@ -36,8 +36,8 @@ export async function requireSession(request, env) {
   const token = getToken(request);
   if (!token) return null;
 
-  // Minimaler Token-Guard (gegen Müll/Abuse)
-  if (typeof token !== "string" || token.length < 20 || token.length > 200) {
+  // Token-Format: "sess_" + UUID = exakt 41 Zeichen
+  if (typeof token !== "string" || token.length !== 41 || !token.startsWith("sess_")) {
     return null;
   }
 
@@ -278,17 +278,27 @@ export async function pushToUserDO(env, handle, event) {
 }
 
 // ── Event an alle Gruppen-Mitglieder pushen ───────────
-// Liest Mitglieder aus conversation_members, pusht an jeden (ausser Sender).
+// Liest Mitglieder aus KV-Cache (TTL 60s), fällt auf D1 zurück bei Cache-Miss.
 // Parallel via Promise.allSettled — ein offline User blockiert keine anderen.
+const GROUP_MEMBERS_CACHE_TTL = 60; // Sekunden
+
 export async function pushToGroupMembers(env, db, groupId, senderHandle, event) {
   let members;
+  const cacheKey = `grp_members:${groupId}`;
   try {
-    const rows = await db.prepare(
-      "SELECT member_handle FROM conversation_members WHERE convo_id = ?"
-    ).bind(groupId).all();
-    members = (rows.results || []).map(r => r.member_handle);
+    const cached = await env.RENEX_KV.get(cacheKey);
+    if (cached) {
+      members = JSON.parse(cached);
+    } else {
+      const rows = await db.prepare(
+        "SELECT member_handle FROM conversation_members WHERE convo_id = ?"
+      ).bind(groupId).all();
+      members = (rows.results || []).map(r => r.member_handle);
+      // Cache für 60s schreiben (fire-and-forget)
+      env.RENEX_KV.put(cacheKey, JSON.stringify(members), { expirationTtl: GROUP_MEMBERS_CACHE_TTL }).catch(() => {});
+    }
   } catch (e) {
-    console.warn("pushToGroupMembers: D1 lookup failed", groupId, e);
+    console.warn("pushToGroupMembers: lookup failed", groupId, e);
     return;
   }
 

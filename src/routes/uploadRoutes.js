@@ -1,4 +1,4 @@
-import { json, param } from '../utils.js';
+import { json, param, isUUID } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit } from '../auth.js';
 
 // ======================================================
@@ -83,7 +83,7 @@ export async function handleUploadRoutes(request, env, path, params) {
     }
     // SECURITY: convoId muss entweder UUID (Gruppe) oder handle:handle (DM) sein
     // Verhindert Path-Traversal im R2-Key und stellt sicher, dass der Uploader Mitglied ist
-    const isGroupConvo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(convoId);
+    const isGroupConvo = isUUID(convoId);
     const isDmConvo    = /^[a-z0-9_]{1,30}:[a-z0-9_]{1,30}$/.test(convoId);
     if (!isGroupConvo && !isDmConvo) {
       return json(request, { error: "Invalid convoId format" }, 400);
@@ -154,7 +154,7 @@ export async function handleUploadRoutes(request, env, path, params) {
     if (parts.length !== 3) return json(request, { error: "Invalid key format" }, 400);
     const convoId = parts[1];
     // convoId muss UUID (Gruppe) oder handle:handle (DM) sein
-    const isGroupKey = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(convoId);
+    const isGroupKey = isUUID(convoId);
     const isDmKey    = /^[a-z0-9_]{1,30}:[a-z0-9_]{1,30}$/.test(convoId);
     if (!isGroupKey && !isDmKey) {
       return json(request, { error: "Invalid key format" }, 400);
@@ -162,7 +162,7 @@ export async function handleUploadRoutes(request, env, path, params) {
 
     // Gäste: nur ihre zugewiesene Konversation
     if (isGuest && convoId !== session.convoId) {
-      return json(request, { error: "Guests can only access their assigned conversation" }, 403);
+      return json(request, { error: "Not authorized for this conversation" }, 403);
     }
 
     // Membership-Check

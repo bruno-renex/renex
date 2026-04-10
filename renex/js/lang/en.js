@@ -37,6 +37,10 @@ export default {
   userNotFound:         (handle) => `User "${handle}" does not exist.`,
   notInContacts:        (handle) => `"${handle}" is not in your contacts. Add them as a contact first.`,
   inviteFailed:         "Invite failed: ",
+  groupFull:            "This group is full (max. 50 members).",
+  confirmRemoveMember:  (handle) => `Remove ${handle} from the group?`,
+  removeMemberFailed:   "Remove failed: ",
+  youWereRemoved:       "You were removed from this group.",
   leaveGroupBtn:        "Leave",
   confirmLeaveGroup:    (name) => `Leave group "${name}"?`,
   leaveFailed:          "Leave failed: ",
@@ -48,7 +52,11 @@ export default {
   youPrefix:            "You: ",
 
   // ── Chat menu ─────────────────────────────────────────
-  autoDeleteOff:        "Off",
+  autoDeleteOff:          "Off",
+  autoDeleteActive:       (label) => `✅ Auto-Delete active: ${label}`,
+  autoDeleteDisabled:     "✅ Auto-Delete disabled",
+  autoDeleteSet:          (label) => `✅ Auto-Delete: ${label}`,
+  autoDeleteProposal:     (label) => `📤 Proposal sent: ${label}`,
   autoDeleteOneHour:    "1h",
   autoDeleteOneDay:     "24h",
   autoDeleteOneWeek:    "7 days",
@@ -56,6 +64,7 @@ export default {
   membersHeading:       "Members",
 
   // ── Chat messages ─────────────────────────────────────
+  decryptPending:         "🔒 Decrypting message…",
   decryptFailed:          "🔒 Message could not be decrypted",
   messageExpired:         "⏱ Message automatically deleted",
   deleteMessageTitle:     "Delete message",
@@ -67,8 +76,8 @@ export default {
 
   // ── Delete-Account-Dialog ───────────────────────────
   deleteAccountDialogTitle:   "Delete account",
-  deleteAccountDialogBody:    "This action is irreversible. All messages and contacts will be deleted.<br><br>Enter your handle to confirm:",
-  deleteAccountPlaceholder:   "Your handle",
+  deleteAccountDialogBody:    "This action is irreversible. All messages and contacts will be deleted.<br><br>Enter your username to confirm:",
+  deleteAccountPlaceholder:   "Your username",
   cancelBtn:                  "Cancel",
   deleteAccountConfirmBtn:    "Delete account",
 
@@ -82,10 +91,17 @@ export default {
   rejectBtn:              "Reject",
   accountDeleted:         " (account deleted)",
   removeFromList:         "Remove from list",
-  handleMismatch:         "Handle does not match",
+  handleMismatch:         "Username does not match",
   contactRequestFailed:   "Contact request failed",
   removeContactFailed:    "Could not remove contact",
   confirmRemoveContact:   (handle) => `Really remove contact ${handle}?`,
+  closeBtn:               "Close",
+  linkCopied:             "Link copied!",
+  linkCopiedInfo:         "Link copied — valid 48h, max. 20 messages per guest",
+  linkCreateFailed:       "Could not create link",
+  inviteLinkCreate:       "Create invite link",
+  doneBtn:                "Done",
+  someInvitesFailed:      "Some invites failed:",
 
   // ── chat/index.html ──────────────────────────────────
   chatPageTitle:        "Chat",
@@ -97,9 +113,94 @@ export default {
   noChatPartner:      "No chat partner selected",
   chatWith:           (user) => `Chat with ${user}`,
   sendFailed:         "Message could not be sent",
+  sendFailedError:    (err) => `⚠️ Send failed: ${err}`,
+  unknownError:       "Unknown error",
+  renameFailed:       "Rename failed: ",
+  editFailed:         "Edit failed: ",
+  fileLabel:          "File",
+  photoLabel:         "📷 Photo",
   maxLengthReached:   (max) => `Maximum ${max} characters reached`,
   charCounter:        (len, max) => `${len} / ${max} characters`,
   pleaseWait:         "Please wait a moment…",
+
+  // ── Create Group Popup ───────────────────────────────
+  createGroupLabel:    "Create group",
+  nextBtn:             "Next →",
+  invitePeopleLabel:   "Invite people",
+  onlyContactsWarning: "Only your own contacts can be invited",
+  orSeparator:         "or",
+  guestInviteLinkBtn:  "🔗 Create guest invite link",
+
+  // ── Members ────────────────────────────────────────
+  membersLabel:        (n) => `${n} members`,
+  newGroup:            "new group",
+  groupInviteToast:    (name) => `You were invited to the group "${name}"`,
+  invitedByPrefix:     (by) => `From: ${by}`,
+
+  // ── Chat Dropdown ─────────────────────────────────────
+  notificationsLabel:    "Notifications",
+  notificationsOn:       "On",
+  notificationsOff:      "Off",
+  renameGroupLabel:      "✏️ Rename group",
+  createInviteLinkLabel: "🔗 Create invite link",
+
+  // ── Guest Banner ───────────────────────────────────────
+  guestLabel:              "Guest",
+  registerToAddContacts:   "Sign up to add contacts",
+  guestMsgLimit:           "⚠️ Message limit reached — sign up to keep writing!",
+  guestJoined:         (name) => `👤 You joined as <strong>${name}</strong>`,
+  expired:             "Expired",
+  guestLimitReached:   "⚠️ Limit reached. Sign in with a Passkey in seconds — no password needed.",
+  guestExpired:        "⚠️ Guest access expired. Sign in with a Passkey in seconds — no password needed.",
+  timeRemaining:       "remaining",
+  msgsRemaining:       "messages left",
+  convertToPasskey:    "Sign in with Passkey",
+
+  // ── Member List (Chat) ───────────────────────────────
+  contactAdded:        "✓ Contact",
+  requestContact:      "+ Request",
+  requestPending:      "✓ Pending",
+  requestSentConfirm:  "✓ Sent",
+  errorLabel:          "✗ Error",
+
+  // ── Misc ───────────────────────────────────────────
+  cancelTitle:         "Cancel",
+  networkError:        "⚠️ Network error",
+  groupNameLabel:      "Group name",
+
+  // ── GIF Modal ─────────────────────────────────────────
+  gifSearchPlaceholder: "Search GIF…",
+  gifTitle:             "Search GIF",
+  gifSearching:         "Searching…",
+  photoTitle:           "Send photo",
+  fileTitle:            "Send file",
+
+  // ── Join/Invite Page ──────────────────────────────────
+  invitePageTitle:         "RENEX – Invitation",
+  checkingInvite:          "Checking invitation…",
+  invitedByText:           (by) => `You were invited by <strong>${by}</strong>`,
+  accessFor24h:            "Access for <strong>24 hours</strong> — then save with a Passkey",
+  maxMessages:             "Up to <strong>20 messages</strong> as a guest",
+  e2eEncrypted:            "End-to-end encrypted",
+  joinAsGuestBtn:          "Join as guest",
+  loginAndJoinBtn:         "Sign in & join",
+  invalidInviteTitle:      "Invalid invitation",
+  inviteExpiredDefaultMsg: "This invitation link has expired or has already been used.",
+  goHomeBtn:               "Go to home",
+  noTokenMsg:              "This link is invalid.",
+  inviteExpiredReason:     "This invitation link has expired.",
+  inviteAlreadyUsed:       "This link has already been used.",
+  inviteNotFound:          "This link does not exist.",
+  joiningText:             "Joining…",
+  captchaRequired:         "Please complete the security check first.",
+  captchaFailed:           "Security check failed. Please try again.",
+  joinErrorDefault:        "Error while joining.",
+  successRedirecting:      "Success! Redirecting…",
+  connectionError:         "Connection error",
+  checkConnection:         "Please check your internet connection.",
+  joinErrorTitle:          "Error joining",
+  joinErrorRetry:          "Please try again.",
+  networkErrorRetry:       "Network error. Please try again.",
 
   // ── Locale ───────────────────────────────────────────
   locale: "en-GB",

@@ -1,4 +1,4 @@
-import { json, readJson, param } from '../utils.js';
+import { json, readJson, param, isUUID } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit, isAcceptedContact, pushToUserDO } from '../auth.js';
 
 // ======================================================
@@ -258,21 +258,23 @@ export async function handleE2eRoutes(request, env, path, params) {
           try { deviceIds = JSON.parse(rawIdx); } catch {}
         }
 
-        const devices = [];
-        for (const deviceId of deviceIds) {
-          const raw = await env.RENEX_KV.get(`e2e:inbox:${user}:${deviceId}`);
-          if (!raw) continue;
-
-          try {
-            const entry = { deviceId, jwk: JSON.parse(raw) };
-            // Signing Public Key mitsenden (falls vorhanden)
-            const rawSig = await env.RENEX_KV.get(`e2e:inbox:sigpub:${user}:${deviceId}`);
-            if (rawSig) {
-              try { entry.sigPub = JSON.parse(rawSig); } catch {}
-            }
-            devices.push(entry);
-          } catch {}
-        }
+        const deviceEntries = await Promise.all(
+          deviceIds.map(async (deviceId) => {
+            const [raw, rawSig] = await Promise.all([
+              env.RENEX_KV.get(`e2e:inbox:${user}:${deviceId}`),
+              env.RENEX_KV.get(`e2e:inbox:sigpub:${user}:${deviceId}`),
+            ]);
+            if (!raw) return null;
+            try {
+              const entry = { deviceId, jwk: JSON.parse(raw) };
+              if (rawSig) {
+                try { entry.sigPub = JSON.parse(rawSig); } catch {}
+              }
+              return entry;
+            } catch { return null; }
+          })
+        );
+        const devices = deviceEntries.filter(Boolean);
 
         return json(request, { devices });
       }
@@ -409,6 +411,9 @@ export async function handleE2eRoutes(request, env, path, params) {
         if (!session) return json(request, { error: "Not authenticated" }, 401);
 
         const me = String(session.handle || "").toLowerCase();
+
+        const rl = await rateLimit(env, `cmk_fetch:${me}`, 60_000, 30);
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
         const from = (param(params, "from") || "").toLowerCase();
 
         if (!from || !/^[a-z0-9_]+$/.test(from) || from === me) {

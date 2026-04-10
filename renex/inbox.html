@@ -516,25 +516,32 @@
     <button id="create-group-btn" data-i18n-title="createGroupBtn" title="Gruppe erstellen"
       style="position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;font-size:26px;border:none;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,0.35);display:none;align-items:center;justify-content:center;transition:transform 0.15s,box-shadow 0.15s;z-index:200;line-height:1;">＋</button>
     <!-- FAB Popup: Gruppe erstellen -->
-    <div id="create-group-popup" style="display:none;position:fixed;bottom:90px;right:28px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,0.4);padding:14px;z-index:201;width:260px;">
+    <div id="create-group-popup" style="display:none;position:fixed;bottom:90px;right:28px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,0.4);padding:14px;z-index:201;width:260px;max-height:calc(100vh - 120px);overflow-y:auto;">
       <!-- Schritt 1: Gruppenname -->
       <div id="group-step-1">
-        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Gruppe erstellen</div>
-        <input id="group-name-input" type="text" data-i18n-placeholder="groupNamePlaceholder" placeholder="Gruppenname" autocomplete="off" autocorrect="off" autocapitalize="off"
+        <div data-i18n="createGroupLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Create group</div>
+        <input id="group-name-input" type="text" data-i18n-placeholder="groupNamePlaceholder" placeholder="Group name" autocomplete="off" autocorrect="off" autocapitalize="off"
           style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;margin-bottom:8px;" />
-        <button id="group-create-confirm-btn" style="width:100%;padding:8px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer;">Weiter →</button>
+        <button id="group-create-confirm-btn" data-i18n="nextBtn" style="width:100%;padding:8px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer;">Next →</button>
       </div>
       <!-- Schritt 2: Mitglieder einladen -->
       <div id="group-step-2" style="display:none;">
-        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Personen einladen</div>
+        <div data-i18n="invitePeopleLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Invite people</div>
         <div style="display:flex;gap:6px;margin-bottom:8px;">
           <input id="group-invite-search" type="text" placeholder="Username…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
             style="flex:1;min-width:0;padding:7px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:13px;outline:none;" />
           <button id="group-invite-add-btn" style="padding:7px 11px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:16px;font-weight:700;cursor:pointer;line-height:1;">+</button>
         </div>
-        <div id="group-invite-error" style="display:none;font-size:11px;color:var(--status-error);margin-bottom:6px;padding:4px 6px;background:rgba(255,59,48,0.1);border-radius:6px;">Nur eigene Kontakte können eingeladen werden</div>
-        <div id="group-invited-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:0;margin-bottom:8px;"></div>
-        <button id="group-invite-done-btn" style="width:100%;padding:7px;border-radius:8px;border:none;background:var(--bg-panel-alt);color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;">Fertig</button>
+        <div id="group-invite-error" data-i18n="onlyContactsWarning" style="display:none;font-size:11px;color:var(--status-error);margin-bottom:6px;padding:4px 6px;background:rgba(255,59,48,0.1);border-radius:6px;">Only your own contacts can be invited</div>
+        <div id="group-invited-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:0;max-height:100px;overflow-y:auto;margin-bottom:8px;"></div>
+        <!-- Separator -->
+        <div style="display:flex;align-items:center;gap:8px;margin:2px 0 8px;">
+          <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
+          <span data-i18n="orSeparator" style="font-size:11px;color:var(--text-muted,#6F6F78);">or</span>
+          <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
+        </div>
+        <button id="group-guest-link-btn" data-i18n="guestInviteLinkBtn" style="width:100%;padding:7px;border-radius:8px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;margin-bottom:8px;">🔗 Create guest invite link</button>
+        <button id="group-invite-done-btn" data-i18n="doneBtn" style="width:100%;padding:7px;border-radius:8px;border:none;background:var(--bg-panel-alt);color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;">Done</button>
       </div>
     </div>
   </div>

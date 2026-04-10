@@ -1,4 +1,4 @@
-import { json, param, corsHeaders, dmConvoId } from '../utils.js';
+import { json, param, corsHeaders, dmConvoId, isUUID, validateConvoId, generateGuestToken, generateGuestHandle } from '../utils.js';
 import { requireSession, requireGuestSession, rateLimit, GUEST_TOKEN_RE, GUEST_HANDLE_RE, pushToGroupMembers, pushToUserDO } from '../auth.js';
 
 // ======================================================
@@ -10,27 +10,9 @@ import { requireSession, requireGuestSession, rateLimit, GUEST_TOKEN_RE, GUEST_H
 //   POST /invite/ping     → msg_count aktualisieren + verbleibende Zeit prüfen
 // ======================================================
 
-const GUEST_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 Stunden
-const GUEST_MSG_LIMIT = 20;                   // 20 Nachrichten
-
-// ── Helpers ──────────────────────────────────────────
-function generateGuestToken() {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return "guest_" + Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-function generateGuestHandle() {
-  const bytes = crypto.getRandomValues(new Uint8Array(4));
-  return "guest_" + Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-function validateConvoId(convoId) {
-  if (!convoId || typeof convoId !== "string") return null;
-  const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(convoId);
-  const isDm    = /^[a-z0-9_]{1,30}:[a-z0-9_]{1,30}$/.test(convoId);
-  if (!isGroup && !isDm) return null;
-  return isGroup ? "group" : "dm";
-}
+const GUEST_EXPIRY_MS    = 48 * 60 * 60 * 1000;
+const GUEST_SESSION_MS   = 24 * 60 * 60 * 1000;
+const GUEST_MSG_LIMIT    = 20;
 
 export async function handleInviteRoutes(request, env, path, params) {
 
@@ -109,17 +91,21 @@ export async function handleInviteRoutes(request, env, path, params) {
       return json(request, { error: "Invalid token" }, 400);
     }
 
-    // Rate Limit: 20 Info-Anfragen pro Minute pro Token
-    const rlOk = await rateLimit(env, `invite_info:${token.slice(0, 16)}`, 60_000, 20);
-    if (!rlOk) return json(request, { error: "Rate limit exceeded" }, 429);
+    // Rate Limit: IP-basiert (30/min) + voller Token (10/min)
+    // Voller Token verhindert Prefix-Enumeration; IP-Limit verhindert verteilte Enumeration
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const rlIp    = await rateLimit(env, `invite_info_ip:${ip}`,    60_000, 30);
+    if (!rlIp)    return json(request, { error: "Rate limit exceeded" }, 429);
+    const rlToken = await rateLimit(env, `invite_info_tok:${token}`, 60_000, 10);
+    if (!rlToken) return json(request, { error: "Rate limit exceeded" }, 429);
 
+    // Nur Invite-Template-Rows (guest_handle leer) → keine Session-Rows
     const row = await env.RENEX_DB.prepare(
-      "SELECT convo_id, convo_type, created_by, expires_at, converted_to FROM guest_sessions WHERE token = ?"
+      "SELECT convo_id, convo_type, created_by, expires_at FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '')"
     ).bind(token).first();
 
-    if (!row)               return json(request, { valid: false, reason: "not_found" }, 404);
-    if (row.converted_to)   return json(request, { valid: false, reason: "converted" }, 410);
-    if (Date.now() > row.expires_at) return json(request, { valid: false, reason: "expired" }, 410);
+    if (!row)                         return json(request, { valid: false, reason: "not_found" }, 404);
+    if (Date.now() > row.expires_at)  return json(request, { valid: false, reason: "expired" }, 410);
 
     // Anzeigenamen der Konversation ermitteln
     let displayName = row.created_by + "'s Chat";
@@ -153,151 +139,138 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { token, publicKeyJwk, guestDeviceId } = body;
+    const { token, publicKeyJwk, guestDeviceId, cfTurnstileToken } = body;
     if (!token || !GUEST_TOKEN_RE.test(token)) {
       return json(request, { error: "Invalid token" }, 400);
     }
 
-    let row = await env.RENEX_DB.prepare(
-      "SELECT * FROM guest_sessions WHERE token = ?"
-    ).bind(token).first();
-
-    if (!row)               return json(request, { error: "Invite not found" }, 404);
-    if (row.converted_to)   return json(request, { error: "Invite already converted" }, 410);
-    if (Date.now() > row.expires_at) return json(request, { error: "Invite expired" }, 410);
-
-    // Gast-Handle vergeben (nur beim ersten Join)
-    let guestHandle = row.guest_handle;
-    const isFirstJoin = !guestHandle || !GUEST_HANDLE_RE.test(guestHandle);
-
-    if (isFirstJoin) {
-      // Kollisionsfreien Handle sicherstellen (extrem unwahrscheinlich, aber sicher)
-      let attempts = 0;
-      do {
-        guestHandle = generateGuestHandle();
-        const existing = await env.RENEX_DB.prepare(
-          "SELECT 1 FROM guest_sessions WHERE guest_handle = ? AND token != ?"
-        ).bind(guestHandle, token).first();
-        if (!existing) break;
-        attempts++;
-      } while (attempts < 5);
-
-      await env.RENEX_DB.prepare(
-        "UPDATE guest_sessions SET guest_handle = ? WHERE token = ?"
-      ).bind(guestHandle, token).run();
-
-      const joinTs = Date.now();
-      let convoId = row.convo_id;
-
-      // ── DM-Einladung ohne vordefinierte Konversation ─────────────────
-      // Neue 1:1-Konversation zwischen Einladendem und Gast erstellen
-      if (!convoId || convoId === "") {
-        convoId = dmConvoId(row.created_by, guestHandle);
-        await env.RENEX_DB.prepare(
-          `INSERT OR IGNORE INTO conversations (id, type, name, created_at, created_by)
-           VALUES (?, 'dm', NULL, ?, ?)`
-        ).bind(convoId, joinTs, row.created_by).run();
-
-        // Einladenden als Mitglied eintragen
-        await env.RENEX_DB.prepare(
-          `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
-           VALUES (?, ?, 'member', ?)`
-        ).bind(convoId, row.created_by, joinTs).run();
-
-        // guest_sessions.convo_id nachträglich setzen
-        await env.RENEX_DB.prepare(
-          "UPDATE guest_sessions SET convo_id = ? WHERE token = ?"
-        ).bind(convoId, token).run();
-
-        // row lokal aktualisieren (wird weiter unten für KV-Session verwendet)
-        row = { ...row, convo_id: convoId };
+    // ── Turnstile Bot-Schutz ──────────────────────────────────────────────
+    // TURNSTILE_SECRET als Worker-Secret setzen: npx wrangler secret put TURNSTILE_SECRET
+    // Ohne Secret → Test-Modus (akzeptiert Cloudflare-Test-Tokens)
+    const tsSecret = env.TURNSTILE_SECRET || "1x0000000000000000000000000000000AA";
+    try {
+      const formData = new URLSearchParams();
+      formData.set("secret",   tsSecret);
+      formData.set("response", cfTurnstileToken || "");
+      formData.set("remoteip", ip);
+      const tsRes = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+        method:  "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body:    formData.toString(),
+      });
+      const tsData = await tsRes.json().catch(() => ({}));
+      if (!tsData.success) {
+        console.warn("⚠️ Turnstile failed:", JSON.stringify(tsData));
+        return json(request, { error: "Human verification failed", codes: tsData["error-codes"] }, 403);
       }
-
-      // Gast als Mitglied der Konversation eintragen (Rolle: 'guest')
-      await env.RENEX_DB.prepare(
-        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
-         VALUES (?, ?, 'guest', ?)`
-      ).bind(convoId, guestHandle, joinTs).run();
-
-      // Ephemeren E2E-Public-Key des Gastes in KV speichern (für GSK-Distribution)
-      // Format: gdev_[24 hex chars] — kein reguläres deviceId-Format → sicher isoliert
-      if (
-        publicKeyJwk && typeof publicKeyJwk === "object" &&
-        typeof guestDeviceId === "string" && /^gdev_[0-9a-f]{24}$/.test(guestDeviceId)
-      ) {
-        const keyTtlSec = Math.max(60, Math.floor((row.expires_at - Date.now()) / 1000));
-        await env.RENEX_KV.put(
-          `e2e:inbox:${guestHandle}:${guestDeviceId}`,
-          JSON.stringify(publicKeyJwk),
-          { expirationTtl: keyTtlSec }
-        );
-        await env.RENEX_KV.put(
-          `e2e:inbox:index:${guestHandle}`,
-          JSON.stringify([guestDeviceId]),
-          { expirationTtl: keyTtlSec }
-        );
-        console.log("🔐 Gast-E2E-Key gespeichert:", guestHandle, guestDeviceId);
-      }
-
-      // Bestehende Mitglieder benachrichtigen (damit sie _groupHasGuests setzen)
-      const isGroupConvo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(convoId);
-      const guestJoinEvent = {
-        id:        crypto.randomUUID(),
-        type:      "guest_joined",
-        groupId:   convoId,
-        handle:    guestHandle,
-        ts:        joinTs,
-      };
-      if (isGroupConvo) {
-        // System-Message persistieren (sichtbar für alle Mitglieder im Chat)
-        await env.RENEX_DB.prepare(
-          `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
-           VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
-        ).bind(crypto.randomUUID(), convoId, guestHandle, joinTs,
-          `👤 ${guestHandle} ist dem Chat beigetreten`).run();
-
-        // Gruppe: alle anderen Mitglieder benachrichtigen
-        await pushToGroupMembers(env, env.RENEX_DB, convoId, guestHandle, guestJoinEvent);
-      } else {
-        // DM: System-Message + Einladenden benachrichtigen
-        await env.RENEX_DB.prepare(
-          `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
-           VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
-        ).bind(crypto.randomUUID(), convoId, guestHandle, joinTs,
-          `👤 ${guestHandle} ist dem Chat beigetreten`).run();
-
-        if (row.created_by) await pushToUserDO(env, row.created_by, guestJoinEvent);
-      }
+    } catch (e) {
+      console.warn("⚠️ Turnstile verification error:", e);
+      return json(request, { error: "Verification service unavailable. Please try again." }, 503);
     }
 
-    // KV-Session-Cache setzen (für schnellen Auth-Lookup)
-    const ttlSec = Math.max(60, Math.floor((row.expires_at - Date.now()) / 1000));
-    const guestSession = {
-      handle:   guestHandle,
-      isGuest:  true,
-      token,
-      convoId:  row.convo_id,
-      expiresAt: row.expires_at,
-      msgLimit: row.msg_limit,
-      msgCount: row.msg_count,
-    };
-    await env.RENEX_KV.put(`guest_session:${token}`, JSON.stringify(guestSession), {
-      expirationTtl: ttlSec,
-    });
+    // ── Invite-Template-Row laden (guest_handle leer = unbenutzte Vorlage) ─
+    const inviteRow = await env.RENEX_DB.prepare(
+      "SELECT * FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '')"
+    ).bind(token).first();
 
-    // Guest-Session-Cookie setzen (separates Cookie vom normalen "session=")
-    const cookieVal = `guest_session=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Max-Age=${ttlSec}; Path=/`;
+    if (!inviteRow)                        return json(request, { error: "Invite not found" }, 404);
+    if (Date.now() > inviteRow.expires_at) return json(request, { error: "Invite expired" }, 410);
+
+    // ── Neue unabhängige Session erzeugen (Option B: jeder Join = eigene Session) ─
+    const now            = Date.now();
+    const sessionToken   = generateGuestToken();                       // neuer einzigartiger Session-Token
+    const sessionExpires = now + GUEST_SESSION_MS;                     // 24h ab jetzt
+
+    // Kollisionsfreien Handle sicherstellen
+    let guestHandle;
+    let attempts = 0;
+    do {
+      guestHandle = generateGuestHandle();
+      const clash = await env.RENEX_DB.prepare(
+        "SELECT 1 FROM guest_sessions WHERE guest_handle = ?"
+      ).bind(guestHandle).first();
+      if (!clash) break;
+      attempts++;
+    } while (attempts < 5);
+
+    const joinTs  = now;
+    let convoId   = inviteRow.convo_id;
+
+    // ── DM ohne vordefinierte Konversation → neue DM-Konvo erstellen ─────
+    if (!convoId || convoId === "") {
+      convoId = dmConvoId(inviteRow.created_by, guestHandle);
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversations (id, type, name, created_at, created_by)
+         VALUES (?, 'dm', NULL, ?, ?)`
+      ).bind(convoId, joinTs, inviteRow.created_by).run();
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+         VALUES (?, ?, 'member', ?)`
+      ).bind(convoId, inviteRow.created_by, joinTs).run();
+    }
+
+    // Gast als Mitglied eintragen (Rolle: 'guest')
+    await env.RENEX_DB.prepare(
+      `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+       VALUES (?, ?, 'guest', ?)`
+    ).bind(convoId, guestHandle, joinTs).run();
+
+    // ── Ephemeren E2E-Key speichern ───────────────────────────────────────
+    if (
+      publicKeyJwk && typeof publicKeyJwk === "object" &&
+      typeof guestDeviceId === "string" && /^gdev_[0-9a-f]{24}$/.test(guestDeviceId)
+    ) {
+      const keyTtl = Math.max(60, Math.floor((sessionExpires - now) / 1000));
+      await env.RENEX_KV.put(`e2e:inbox:${guestHandle}:${guestDeviceId}`, JSON.stringify(publicKeyJwk), { expirationTtl: keyTtl });
+      await env.RENEX_KV.put(`e2e:inbox:index:${guestHandle}`,           JSON.stringify([guestDeviceId]), { expirationTtl: keyTtl });
+      console.log("🔐 Gast-E2E-Key gespeichert:", guestHandle, guestDeviceId);
+    }
+
+    // ── System-Message + WS-Notification ─────────────────────────────────
+    const isGroupConvo  = isUUID(convoId);
+    const guestJoinEvent = {
+      id: crypto.randomUUID(), type: "guest_joined",
+      groupId: convoId, handle: guestHandle, ts: joinTs,
+    };
+    await env.RENEX_DB.prepare(
+      `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+       VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+    ).bind(crypto.randomUUID(), convoId, guestHandle, joinTs, `👤 ${guestHandle} ist dem Chat beigetreten`).run();
+    if (isGroupConvo) {
+      await pushToGroupMembers(env, env.RENEX_DB, convoId, guestHandle, guestJoinEvent);
+    } else {
+      if (inviteRow.created_by) await pushToUserDO(env, inviteRow.created_by, guestJoinEvent);
+    }
+
+    // ── Session-Row in D1 anlegen ─────────────────────────────────────────
+    await env.RENEX_DB.prepare(
+      `INSERT INTO guest_sessions
+         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL)`
+    ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle).run();
+
+    // ── KV-Session-Cache (schneller Auth-Lookup) ──────────────────────────
+    const ttlSec = Math.max(60, Math.floor((sessionExpires - now) / 1000));
+    await env.RENEX_KV.put(`guest_session:${sessionToken}`, JSON.stringify({
+      handle: guestHandle, isGuest: true, token: sessionToken,
+      convoId, expiresAt: sessionExpires,
+      msgLimit: inviteRow.msg_limit, msgCount: 0,
+    }), { expirationTtl: ttlSec });
+
+    // Cookie: Session-Token (nicht der Invite-Token!)
+    const cookieVal = `guest_session=${encodeURIComponent(sessionToken)}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Max-Age=${ttlSec}; Path=/`;
 
     return new Response(JSON.stringify({
       ok:            true,
       guestHandle,
-      convoId:       row.convo_id,
-      convoType:     row.convo_type,
-      inviterHandle: row.created_by,
-      expiresAt:     row.expires_at,
-      msgLimit:      row.msg_limit,
-      msgCount:      row.msg_count,
+      convoId,
+      convoType:     inviteRow.convo_type,
+      inviterHandle: inviteRow.created_by,
+      expiresAt:     sessionExpires,
+      msgLimit:      inviteRow.msg_limit,
+      msgCount:      0,
       deviceId:      guestDeviceId || null,
+      sessionToken,  // für X-Guest-Token Header Fallback (Safari ITP)
     }), {
       status: 200,
       headers: {
@@ -334,12 +307,12 @@ export async function handleInviteRoutes(request, env, path, params) {
       "SELECT * FROM guest_sessions WHERE token = ?"
     ).bind(guestToken).first();
 
-    if (!row)             return json(request, { error: "Guest session not found" }, 404);
-    if (row.converted_to) return json(request, { error: "Already converted" }, 409);
+    if (!row)             return json(request, { error: "Not authenticated" }, 401);
+    if (row.converted_to) return json(request, { error: "Not authorized" }, 403);
 
     const guestHandle = row.guest_handle;
     if (!guestHandle || !GUEST_HANDLE_RE.test(guestHandle)) {
-      return json(request, { error: "Guest session not initialized" }, 400);
+      return json(request, { error: "Invalid session" }, 400);
     }
 
     // Alle Nachrichten des Gastes in dieser Konversation übertragen
@@ -365,6 +338,27 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     // KV-Cache löschen
     await env.RENEX_KV.delete(`guest_session:${guestToken}`);
+    env.RENEX_KV.delete(`grp_members:${row.convo_id}`).catch(() => {});
+
+    // System-Message: "Guest Blue Eagle ist jetzt reto_frei"
+    if (isUUID(row.convo_id)) {
+      const convertTs = Date.now();
+      await env.RENEX_DB.prepare(
+        `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+         VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+      ).bind(crypto.randomUUID(), row.convo_id, realHandle, convertTs,
+        `${guestHandle} ist jetzt ${realHandle}`).run();
+
+      // Live-Event an alle Mitglieder → Mitgliederliste + Chat refreshen
+      pushToGroupMembers(env, env.RENEX_DB, row.convo_id, null, {
+        id:         crypto.randomUUID(),
+        type:       "GUEST_CONVERTED",
+        groupId:    row.convo_id,
+        oldHandle:  guestHandle,
+        newHandle:  realHandle,
+        ts:         convertTs
+      }).catch(() => {});
+    }
 
     return json(request, {
       ok:        true,
@@ -381,7 +375,7 @@ export async function handleInviteRoutes(request, env, path, params) {
   // ────────────────────────────────────────────────────
   if (path === "/invite/ping" && request.method === "POST") {
     const guest = await requireGuestSession(request, env);
-    if (!guest) return json(request, { error: "No guest session" }, 401);
+    if (!guest) return json(request, { error: "Not authenticated" }, 401);
 
     // Aktuellen msg_count aus D1 lesen (KV kann veraltet sein)
     const row = await env.RENEX_DB.prepare(
@@ -449,7 +443,7 @@ export async function handleInviteRoutes(request, env, path, params) {
       ).bind(convoId, me, Date.now()).run();
 
       // Andere Mitglieder benachrichtigen
-      const isGroupConvo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(convoId);
+      const isGroupConvo = isUUID(convoId);
       if (isGroupConvo) {
         const members = await env.RENEX_DB.prepare(
           "SELECT member_handle FROM conversation_members WHERE convo_id = ? AND member_handle != ?"

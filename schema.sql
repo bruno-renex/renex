@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS conversation_members (
 CREATE INDEX IF NOT EXISTS idx_conv_members_handle
   ON conversation_members(member_handle);
 
+CREATE INDEX IF NOT EXISTS idx_conv_members_handle_convo
+  ON conversation_members(member_handle, convo_id);
+
 -- ======================================================
 -- Messages
 -- convo_id → references conversations.id
@@ -95,6 +98,14 @@ CREATE TABLE IF NOT EXISTS notification_mutes (
   convo_id    TEXT NOT NULL,
   muted_at    INTEGER NOT NULL,
   PRIMARY KEY (user_handle, convo_id)
+);
+
+-- Unread DM Counters — atomar via D1 (ersetzt KV unread:* + unread_index:*)
+CREATE TABLE IF NOT EXISTS unread_counters (
+  owner  TEXT NOT NULL,   -- Empfänger
+  sender TEXT NOT NULL,   -- Absender
+  count  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (owner, sender)
 );
 
 -- ======================================================

@@ -37,6 +37,10 @@ export default {
   userNotFound:         (handle) => `El usuario "${handle}" no existe.`,
   notInContacts:        (handle) => `"${handle}" no está en tus contactos. Agrégalo primero como contacto.`,
   inviteFailed:         "Error al invitar: ",
+  groupFull:            "El grupo está lleno (máx. 50 miembros).",
+  confirmRemoveMember:  (handle) => `¿Eliminar a ${handle} del grupo?`,
+  removeMemberFailed:   "Error al eliminar: ",
+  youWereRemoved:       "Has sido eliminado del grupo.",
   leaveGroupBtn:        "Salir",
   confirmLeaveGroup:    (name) => `¿Salir del grupo "${name}"?`,
   leaveFailed:          "Error al salir: ",
@@ -48,7 +52,11 @@ export default {
   youPrefix:            "Tú: ",
 
   // ── Menú de chat ─────────────────────────────────────
-  autoDeleteOff:        "Desactivado",
+  autoDeleteOff:          "Desactivado",
+  autoDeleteActive:       (label) => `✅ Auto-Delete activo: ${label}`,
+  autoDeleteDisabled:     "✅ Auto-Delete desactivado",
+  autoDeleteSet:          (label) => `✅ Auto-Delete: ${label}`,
+  autoDeleteProposal:     (label) => `📤 Propuesta enviada: ${label}`,
   autoDeleteOneHour:    "1h",
   autoDeleteOneDay:     "24h",
   autoDeleteOneWeek:    "7 días",
@@ -56,6 +64,7 @@ export default {
   membersHeading:       "Miembros",
 
   // ── Mensajes de chat ──────────────────────────────────
+  decryptPending:         "🔒 Descifrando mensaje…",
   decryptFailed:          "🔒 No se pudo descifrar el mensaje",
   messageExpired:         "⏱ Mensaje eliminado automáticamente",
   deleteMessageTitle:     "Eliminar mensaje",
@@ -86,6 +95,13 @@ export default {
   contactRequestFailed:   "Error al enviar la solicitud",
   removeContactFailed:    "No se pudo eliminar el contacto",
   confirmRemoveContact:   (handle) => `¿Eliminar el contacto ${handle}?`,
+  closeBtn:               "Cerrar",
+  linkCopied:             "¡Link copiado!",
+  linkCopiedInfo:         "Link copiado — válido 48h, máx. 20 mensajes por invitado",
+  linkCreateFailed:       "No se pudo crear el link",
+  inviteLinkCreate:       "Crear link de invitación",
+  doneBtn:                "Listo",
+  someInvitesFailed:      "Algunas invitaciones fallaron:",
 
   // ── chat/index.html ──────────────────────────────────
   chatPageTitle:        "Chat",
@@ -97,9 +113,94 @@ export default {
   noChatPartner:      "Ningún contacto seleccionado",
   chatWith:           (user) => `Chat con ${user}`,
   sendFailed:         "No se pudo enviar el mensaje",
+  sendFailedError:    (err) => `⚠️ Error al enviar: ${err}`,
+  unknownError:       "Error desconocido",
+  renameFailed:       "Error al renombrar: ",
+  editFailed:         "Error al editar: ",
+  fileLabel:          "Archivo",
+  photoLabel:         "📷 Foto",
   maxLengthReached:   (max) => `Máximo de ${max} caracteres alcanzado`,
   charCounter:        (len, max) => `${len} / ${max} caracteres`,
   pleaseWait:         "Por favor espera un momento…",
+
+  // ── Crear grupo Popup ────────────────────────────────
+  createGroupLabel:    "Crear grupo",
+  nextBtn:             "Siguiente →",
+  invitePeopleLabel:   "Invitar personas",
+  onlyContactsWarning: "Solo tus propios contactos pueden ser invitados",
+  orSeparator:         "o",
+  guestInviteLinkBtn:  "🔗 Crear link de invitación para invitados",
+
+  // ── Miembros ─────────────────────────────────────────
+  membersLabel:        (n) => `${n} miembros`,
+  newGroup:            "nuevo grupo",
+  groupInviteToast:    (name) => `Fuiste invitado al grupo "${name}"`,
+  invitedByPrefix:     (by) => `De: ${by}`,
+
+  // ── Menú de chat ─────────────────────────────────────
+  notificationsLabel:    "Notificaciones",
+  notificationsOn:       "Activadas",
+  notificationsOff:      "Desactivadas",
+  renameGroupLabel:      "✏️ Renombrar grupo",
+  createInviteLinkLabel: "🔗 Crear link de invitación",
+
+  // ── Banner de invitado ────────────────────────────────
+  guestLabel:              "Invitado",
+  registerToAddContacts:   "Regístrate para añadir contactos",
+  guestMsgLimit:           "⚠️ Límite de mensajes alcanzado — ¡regístrate para seguir escribiendo!",
+  guestJoined:         (name) => `👤 Te uniste como <strong>${name}</strong>`,
+  expired:             "Expirado",
+  guestLimitReached:   "⚠️ Límite alcanzado. Inicia sesión con Passkey en segundos — sin contraseña.",
+  guestExpired:        "⚠️ Acceso de invitado expirado. Inicia sesión con Passkey en segundos — sin contraseña.",
+  timeRemaining:       "restante",
+  msgsRemaining:       "mensajes restantes",
+  convertToPasskey:    "Iniciar sesión con Passkey",
+
+  // ── Lista de miembros (Chat) ──────────────────────────
+  contactAdded:        "✓ Contacto",
+  requestContact:      "+ Solicitar",
+  requestPending:      "✓ Pendiente",
+  requestSentConfirm:  "✓ Enviado",
+  errorLabel:          "✗ Error",
+
+  // ── Diversos ─────────────────────────────────────────
+  cancelTitle:         "Cancelar",
+  networkError:        "⚠️ Error de red",
+  groupNameLabel:      "Nombre del grupo",
+
+  // ── Modal GIF ────────────────────────────────────────
+  gifSearchPlaceholder: "Buscar GIF…",
+  gifTitle:             "Buscar GIF",
+  gifSearching:         "Buscando…",
+  photoTitle:           "Enviar foto",
+  fileTitle:            "Enviar archivo",
+
+  // ── Página de invitación (join) ───────────────────────
+  invitePageTitle:         "RENEX – Invitación",
+  checkingInvite:          "Verificando invitación…",
+  invitedByText:           (by) => `Fuiste invitado por <strong>${by}</strong>`,
+  accessFor24h:            "Acceso por <strong>24 horas</strong> — luego guarda con Passkey",
+  maxMessages:             "Hasta <strong>20 mensajes</strong> como invitado",
+  e2eEncrypted:            "Cifrado de extremo a extremo",
+  joinAsGuestBtn:          "Unirse como invitado",
+  loginAndJoinBtn:         "Iniciar sesión y unirse",
+  invalidInviteTitle:      "Invitación inválida",
+  inviteExpiredDefaultMsg: "Este link de invitación ha expirado o ya fue utilizado.",
+  goHomeBtn:               "Ir al inicio",
+  noTokenMsg:              "Este link es inválido.",
+  inviteExpiredReason:     "Este link de invitación ha expirado.",
+  inviteAlreadyUsed:       "Este link ya fue utilizado.",
+  inviteNotFound:          "Este link no existe.",
+  joiningText:             "Uniéndose…",
+  captchaRequired:         "Por favor, completa la verificación de seguridad primero.",
+  captchaFailed:           "Verificación de seguridad fallida. Por favor, inténtalo de nuevo.",
+  joinErrorDefault:        "Error al unirse.",
+  successRedirecting:      "¡Éxito! Redirigiendo…",
+  connectionError:         "Error de conexión",
+  checkConnection:         "Por favor, verifica tu conexión a internet.",
+  joinErrorTitle:          "Error al unirse",
+  joinErrorRetry:          "Por favor, inténtalo de nuevo.",
+  networkErrorRetry:       "Error de red. Por favor, inténtalo de nuevo.",
 
   // ── Locale ───────────────────────────────────────────
   locale: "es-ES",

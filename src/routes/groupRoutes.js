@@ -1,4 +1,4 @@
-import { json, readJson, param, checkCsrf } from '../utils.js';
+import { json, readJson, param, checkCsrf, isValidGroupId, insertSystemMessage } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit, pushToGroupMembers } from '../auth.js';
 
 // ======================================================
@@ -6,6 +6,7 @@ import { requireSession, requireAnySession, rateLimit, pushToGroupMembers } from
 // POST /groups/create        — Gruppe erstellen
 // POST /groups/invite        — Mitglied einladen
 // POST /groups/leave         — Gruppe verlassen
+// POST /groups/remove        — Admin: Mitglied entfernen
 // POST /groups/rename        — Admin: Gruppe umbenennen
 // GET  /groups/list          — Meine Gruppen
 // GET  /groups/members       — Mitglieder einer Gruppe
@@ -14,11 +15,7 @@ import { requireSession, requireAnySession, rateLimit, pushToGroupMembers } from
 // ======================================================
 
 const MAX_GROUP_NAME   = 64;
-const MAX_MEMBERS      = 50;   // Phase 1: max 50 Member, skalierbar via GroupChatDO
-
-// UUID-Check (verhindert Handle-Injection als groupId)
-const GROUP_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function isValidGroupId(id) { return GROUP_ID_RE.test(String(id)); }
+const MAX_MEMBERS      = 50;
 
 export async function handleGroupRoutes(request, env, path, params) {
 
@@ -39,7 +36,7 @@ export async function handleGroupRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/groups/create": {
       if (request.method !== "POST") break;
-      if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
+      if (isGuest) return json(request, { error: "Not authorized" }, 403);
 
       const rl = await rateLimit(env, `groups_create:${me}`, 60_000, 5);
       if (!rl) return json(request, { error: "Too many requests" }, 429);
@@ -76,7 +73,7 @@ export async function handleGroupRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/groups/invite": {
       if (request.method !== "POST") break;
-      if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
+      if (isGuest) return json(request, { error: "Not authorized" }, 403);
 
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
@@ -126,6 +123,7 @@ export async function handleGroupRoutes(request, env, path, params) {
         `INSERT INTO conversation_members (convo_id, member_handle, role, joined_at)
          VALUES (?, ?, 'member', ?)`
       ).bind(groupId, invitee, Date.now()).run();
+      env.RENEX_KV.delete(`grp_members:${groupId}`).catch(() => {});
 
       // System-Message persistieren
       const joinTs = Date.now();
@@ -155,7 +153,7 @@ export async function handleGroupRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/groups/rename": {
       if (request.method !== "POST") break;
-      if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
+      if (isGuest) return json(request, { error: "Not authorized" }, 403);
 
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
@@ -213,7 +211,7 @@ export async function handleGroupRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/groups/leave": {
       if (request.method !== "POST") break;
-      if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
+      if (isGuest) return json(request, { error: "Not authorized" }, 403);
 
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
@@ -229,6 +227,7 @@ export async function handleGroupRoutes(request, env, path, params) {
       await env.RENEX_DB.prepare(
         "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
       ).bind(groupId, me).run();
+      env.RENEX_KV.delete(`grp_members:${groupId}`).catch(() => {});
 
       // ── Admin-Nachfolge (Option D) ──────────────────────────────────────────
       // War der Verlassende Admin und gibt es keine weiteren Admins mehr?
@@ -377,6 +376,50 @@ export async function handleGroupRoutes(request, env, path, params) {
       const rows = await env.RENEX_DB.prepare(
         "SELECT member_handle, role, joined_at FROM conversation_members WHERE convo_id = ? ORDER BY joined_at ASC"
       ).bind(groupId).all();
+      const allMembers = rows.results || [];
+
+      // ── Lazy Cleanup: abgelaufene Gäste automatisch entfernen ──
+      const guestMembers = allMembers.filter(m => m.member_handle.startsWith("guest_"));
+      const expiredGuests = [];
+      if (guestMembers.length > 0) {
+        const now = Date.now();
+        for (const gm of guestMembers) {
+          // Gast-Session in DB prüfen: abgelaufen oder nicht mehr vorhanden?
+          const session = await env.RENEX_DB.prepare(
+            "SELECT expires_at, converted_to FROM guest_sessions WHERE guest_handle = ? LIMIT 1"
+          ).bind(gm.member_handle).first();
+          // Abgelaufen: keine Session, Session expired, oder bereits konvertiert
+          if (!session || (session.expires_at && session.expires_at < now) || session.converted_to) {
+            expiredGuests.push(gm.member_handle);
+          }
+        }
+        // Abgelaufene Gäste entfernen + System-Messages
+        for (const handle of expiredGuests) {
+          await env.RENEX_DB.prepare(
+            "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+          ).bind(groupId, handle).run();
+          await env.RENEX_DB.prepare(
+            `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+             VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+          ).bind(crypto.randomUUID(), groupId, handle, Date.now(),
+            `${handle} hat den Chat verlassen (Session abgelaufen)`).run();
+        }
+        if (expiredGuests.length > 0) {
+          env.RENEX_KV.delete(`grp_members:${groupId}`).catch(() => {});
+          // Event an verbleibende Mitglieder senden
+          pushToGroupMembers(env, env.RENEX_DB, groupId, null, {
+            id: crypto.randomUUID(),
+            type: "GROUP_MEMBER_LEFT",
+            groupId,
+            handles: expiredGuests,
+            reason: "session_expired",
+            ts: Date.now()
+          }).catch(() => {});
+        }
+      }
+
+      // Bereinigte Liste zurückgeben (ohne abgelaufene Gäste)
+      const activeMembers = allMembers.filter(m => !expiredGuests.includes(m.member_handle));
 
       const groupInfo = await env.RENEX_DB.prepare(
         "SELECT id, name, created_at, created_by FROM conversations WHERE id = ?"
@@ -384,8 +427,76 @@ export async function handleGroupRoutes(request, env, path, params) {
 
       return json(request, {
         group:   groupInfo,
-        members: rows.results || []
+        members: activeMembers
       });
+    }
+
+    // ──────────────────────────────────────────────────
+    // POST /groups/remove
+    // Body: { groupId, handle }  — Admin only
+    // ──────────────────────────────────────────────────
+    case "/groups/remove": {
+      if (request.method !== "POST") break;
+      if (isGuest) return json(request, { error: "Not authorized" }, 403);
+
+      const rl = await rateLimit(env, `groups_remove:${me}`, 60_000, 20);
+      if (!rl) return json(request, { error: "Too many requests" }, 429);
+
+      const body = await readJson(request);
+      if (!body) return json(request, { error: "Invalid JSON" }, 400);
+
+      const { groupId, handle } = body;
+      if (!isValidGroupId(groupId)) return json(request, { error: "Invalid groupId" }, 400);
+      if (!handle || typeof handle !== "string") return json(request, { error: "Invalid handle" }, 400);
+
+      const target = handle.toLowerCase();
+      if (target === me) return json(request, { error: "Cannot remove yourself" }, 400);
+
+      // Admin-Check
+      const myMembership = await env.RENEX_DB.prepare(
+        "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+      ).bind(groupId, me).first();
+      if (!myMembership) return json(request, { error: "Not a member" }, 403);
+      if (myMembership.role !== "admin") return json(request, { error: "Admin only" }, 403);
+
+      // Ziel-Mitglied prüfen (toleriert abgelaufene Gäste — idempotentes Löschen)
+      const targetMembership = await env.RENEX_DB.prepare(
+        "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+      ).bind(groupId, target).first();
+
+      // Entfernen (auch wenn nicht mehr in DB → idempotent, kein 404)
+      if (targetMembership) {
+        await env.RENEX_DB.prepare(
+          "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+        ).bind(groupId, target).run();
+      } else {
+        // Fallback: Case-insensitive Suche (Gast-Handles können abweichen)
+        await env.RENEX_DB.prepare(
+          "DELETE FROM conversation_members WHERE convo_id = ? AND LOWER(member_handle) = LOWER(?)"
+        ).bind(groupId, target).run();
+      }
+      env.RENEX_KV.delete(`grp_members:${groupId}`).catch(() => {});
+
+      // System-Message
+      const removeTs = Date.now();
+      await env.RENEX_DB.prepare(
+        `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+         VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+      ).bind(crypto.randomUUID(), groupId, me, removeTs,
+        `${me} hat ${target} aus der Gruppe entfernt`).run();
+
+      // Verbleibende Members + entferntes Mitglied benachrichtigen
+      const removeEvent = {
+        id:      crypto.randomUUID(),
+        type:    "group_member_removed",
+        groupId,
+        handle:  target,
+        removedBy: me,
+        ts:      removeTs
+      };
+      await pushToGroupMembers(env, env.RENEX_DB, groupId, null, removeEvent);
+
+      return json(request, { ok: true });
     }
 
     // ──────────────────────────────────────────────────
@@ -415,7 +526,7 @@ export async function handleGroupRoutes(request, env, path, params) {
       }
 
       if (request.method === "POST") {
-        if (isGuest) return json(request, { error: "Not allowed for guests" }, 403);
+        if (isGuest) return json(request, { error: "Not authorized" }, 403);
         const body = await readJson(request);
         if (!body) return json(request, { error: "Invalid JSON" }, 400);
         const { groupId, days } = body;

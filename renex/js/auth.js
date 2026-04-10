@@ -290,6 +290,9 @@ try {
   
 if (data.authenticated) {
   localStorage.setItem("my_user", handle);
+  // Alte Gast-Session löschen — sonst wird requireAnySession fälschlicherweise
+  // die Gast-Session zurückgeben statt der echten Session
+  sessionStorage.removeItem("guestSession");
 
   // ✅ HIER IST SCHRITT 2: deviceId erzwingen (SOFORT nach erfolgreichem Login)
   getDeviceId();

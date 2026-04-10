@@ -31,35 +31,84 @@ import {
 
 import { apiFetch } from "./api.js";
 import lang from "./i18n.js";
+import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
+import { formatTimestamp } from "./shared/timeFormat.js";
 import {
   encryptGroupMessage,
   decryptGroupMessage,
   getOrCreateGroupSK,
   getGroupSK,
   distributeGroupSK,
-  receiveGroupSK
+  receiveGroupSK,
+  rotateGroupSK
 } from "./groupSessionManager.js";
-// ======================================================
-// CONFIG
-// ======================================================
-const API = "https://api.renex.id";
-const MAX_MESSAGE_LENGTH = 1000;
-const SEND_COOLDOWN_MS = 2000;
-const deferredInboundMessages = [];
-const deferredInboundIds = new Set();
-// GSK-Requests: verhindert Spam (max 1 Request pro Sender pro Session)
-const pendingGskRequests = new Set();
+
+// ── Extracted Modules ──────────────────────────────────────
+import {
+  API, MAX_MESSAGE_LENGTH, SEND_COOLDOWN_MS, EPOCH_MS,
+  ROTATION_THRESHOLD, ROTATION_INTERVAL_MS, MAX_DEFERRED_BACKOFF,
+  MAX_INBOUND_RETRIES, MAX_DECRYPT_CACHE, INBOX_KEY_TTL,
+  REACTION_EMOJIS, _guestData, _isGuestMode,
+  _VALID_HANDLE, _VALID_UUID, _VALID_DM_ID
+} from "./chatState.js";
+import {
+  abToB64, b64ToAb, e2eEncrypt, e2eDecrypt, e2eEncryptBytes,
+  generateFileKey, exportKeyB64, importKeyB64,
+  compressImage, downloadAndDecryptFile,
+  uploadFile as _uploadFile,
+  uploadMyPublicKeyIfNeeded as _uploadMyPublicKeyIfNeeded,
+  escapeHtml, linkify, lruCacheSet as _lruCacheSet
+} from "./chatCrypto.js";
+import {
+  isAutoDeleted, decryptFailedText, autoDeleteLabel,
+  sweepExpiredMessages, startExpirySweep, stopExpirySweep,
+  showAutoDeleteBanner, updateAutoDeleteHeaderLabel,
+  showAutoDeleteProposal,
+  initAutoDeleteUI,
+  setup as setupAutoDelete
+} from "./chatAutoDelete.js";
+import {
+  fetchPresence, formatLastSeen, presenceLabel,
+  initDMPresence,
+  fetchAcceptedContacts, invalidateContactsCache,
+  setup as setupPresence
+} from "./chatPresence.js";
+import {
+  showReplyBar, clearReplyBar, getReplyState,
+  reactionsCache, renderReactionBar, sendReaction,
+  closeContextMenu, showContextMenu, attachContextMenu,
+  showReactionPicker,
+  setup as setupContextMenu
+} from "./chatContextMenu.js";
+
+// ── Wrappers für Module mit Kontext-Abhängigkeiten ──
+function uploadFile(file, attachmentType) {
+  return _uploadFile(file, attachmentType, { isGroupConversation, withUser, getMyUser, showSystemToast });
+}
+function uploadMyPublicKeyIfNeeded() {
+  return _uploadMyPublicKeyIfNeeded(getDeviceId, loadPublicKey, apiFetch);
+}
+function lruCacheSet(key, value) {
+  _lruCacheSet(decryptedCache, MAX_DECRYPT_CACHE, key, value);
+}
 
 // ======================================================
 // REACTION TOAST
 // ======================================================
 // Einfacher System-Toast (kein Klick-Ziel) — für Fehler, Warnungen, Infos
-function showSystemToast(text, durationMs = 4000) {
+function showSystemToast(text, durationMs = 4000, isHtml = false) {
   const container = document.getElementById("chat-toast-container");
   if (!container) return;
   const toast = document.createElement("div");
   toast.style.cssText = "pointer-events:auto;background:var(--bg-secondary,#1e1e1e);border:1px solid var(--border,#333);border-radius:12px;padding:10px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(0,0,0,.4);animation:chatToastIn .25s ease;";
-  toast.innerHTML = `<span style="font-size:13px;color:var(--text-primary,#fff);">${text}</span>`;
+  const span = document.createElement("span");
+  span.style.cssText = "font-size:13px;color:var(--text-primary,#fff);";
+  if (isHtml) {
+    span.innerHTML = text; // nur für vertrauenswürdige i18n-Strings mit <strong> etc.
+  } else {
+    span.textContent = text; // default: XSS-sicher
+  }
+  toast.appendChild(span);
   if (!document.getElementById("chat-toast-style")) {
     const s = document.createElement("style");
     s.id = "chat-toast-style";
@@ -79,9 +128,18 @@ let _guestCountdownTimer = null;
 function showGuestBanner() {
   const banner = document.getElementById("guest-banner");
   if (!banner || !_guestData) return;
+
+  // Gastname im Banner anzeigen
+  const displayName = _guestData.guestHandle ? guestDisplayName(_guestData.guestHandle) : lang.guestLabel;
+  const nameEl = document.getElementById("guest-name-display");
+  if (nameEl) nameEl.textContent = displayName;
+
   banner.style.display = "flex";
   updateGuestBannerCount();
   _startGuestCountdown();
+
+  // Toast beim Beitreten
+  showSystemToast(lang.guestJoined(displayName), 5000, true);
 }
 
 function updateGuestBannerCount() {
@@ -97,10 +155,10 @@ function updateGuestBannerCount() {
     el.style.color = "#ef4444";
     const timerEl = document.getElementById("guest-timer-display");
     if (timerEl) {
-      timerEl.textContent = "Abgelaufen";
+      timerEl.textContent = lang.expired;
       timerEl.style.color = "#ef4444";
     }
-    showSystemToast("⚠️ Limit erreicht. Mit einem Passkey in Sekunden anmelden — kein Passwort nötig.", 10000);
+    showSystemToast(lang.guestLimitReached, 10000);
     // Eingabe sperren
     if (inputEl) inputEl.disabled = true;
     updateSendButton();
@@ -115,24 +173,31 @@ function _startGuestCountdown() {
     const ms = Math.max(0, _guestData.expiresAt - Date.now());
     const h  = Math.floor(ms / 3_600_000);
     const m  = Math.floor((ms % 3_600_000) / 60_000);
-    const s  = Math.floor((ms % 60_000) / 1_000);
-    timerEl.textContent = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
-    // Ablauf-Warnung (< 6 Stunden)
-    if (ms > 0 && ms < 6 * 3_600_000) timerEl.style.color = "#f59e0b";
+    // Unter 1h: Minuten + Sekunden zeigen; sonst: Stunden + Minuten
+    if (ms > 0 && ms < 3_600_000) {
+      const s = Math.floor((ms % 60_000) / 1_000);
+      timerEl.textContent = `${m}m ${String(s).padStart(2,"0")}s`;
+    } else {
+      timerEl.textContent = `${h}h ${String(m).padStart(2,"0")}m`;
+    }
+    // Ablauf-Warnung (< 1 Stunde)
+    if (ms > 0 && ms < 3_600_000) timerEl.style.color = "#f59e0b";
     if (ms === 0) {
-      timerEl.textContent = "Abgelaufen";
+      timerEl.textContent = lang.expired;
       timerEl.style.color = "#ef4444";
       // Interval stoppen — kein weiterer Tick nötig
       clearInterval(_guestCountdownTimer);
       _guestCountdownTimer = null;
-      showSystemToast("⚠️ Gastzugang abgelaufen. Mit einem Passkey in Sekunden anmelden — kein Passwort nötig.", 10000);
+      showSystemToast(lang.guestExpired, 10000);
       // Eingabe sperren
       if (inputEl) inputEl.disabled = true;
       updateSendButton();
     }
   };
   tick();
-  _guestCountdownTimer = setInterval(tick, 1000);
+  // Über 1h: alle 60s ticken reicht; unter 1h: jede Sekunde für Sekunden-Anzeige
+  const intervalMs = (_guestData?.expiresAt && (_guestData.expiresAt - Date.now()) > 3_600_000) ? 60_000 : 1_000;
+  _guestCountdownTimer = setInterval(tick, intervalMs);
 }
 
 // Gast-Nachricht als Klartext senden (kein E2E)
@@ -164,7 +229,7 @@ async function guestSendMessage(text) {
 
     if (res.status === 429 && data?.error === "Message limit reached") {
       if (pendingDiv) { pendingDiv.remove(); pendingByTempId.delete(tempId); }
-      showSystemToast("⚠️ Nachrichtenlimit erreicht — registriere dich um weiterzuschreiben!", 8000);
+      showSystemToast(lang.guestMsgLimit, 8000);
       const btn = document.getElementById("guest-convert-btn");
       if (btn) { btn.style.animation = "pulse 0.6s ease 2"; btn.style.background = "#ef4444"; }
       return;
@@ -172,7 +237,7 @@ async function guestSendMessage(text) {
 
     if (!res.ok) {
       if (pendingDiv) { pendingDiv.remove(); pendingByTempId.delete(tempId); }
-      showSystemToast("⚠️ Senden fehlgeschlagen: " + (data?.error || "Unbekannter Fehler"));
+      showSystemToast(lang.sendFailedError(data?.error || lang.unknownError));
       return;
     }
 
@@ -284,13 +349,13 @@ async function createInviteLink() {
     }
 
     if (statusEl) statusEl.textContent = "";
-    showSystemToast("🔗 Link kopiert!", 2500);
+    showSystemToast("🔗 " + (lang.linkCopiedInfo || lang.linkCopied), 4000);
 
   } catch (e) {
     if (statusEl) statusEl.textContent = "❌";
     showSystemToast(e.message === "no_url"
-      ? "⚠️ Link konnte nicht erstellt werden"
-      : "⚠️ Netzwerkfehler");
+      ? lang.linkCreateFailed
+      : lang.networkError);
   } finally {
     setTimeout(() => { _inviteLinkPending = false; }, 5000);
   }
@@ -300,29 +365,7 @@ async function createInviteLink() {
 window.convertGuest   = convertGuest;
 window.createInviteLink = createInviteLink;
 
-// ======================================================
-// GUEST DISPLAY NAME  (deterministic, English)
-// guest_3a7f… → "Blue Eagle"  (16 adj × 16 animals = 256 combos)
-// ======================================================
-const _GUEST_ADJ = [
-  'Blue','Red','Green','Golden','Silver','Wild','Swift','Brave',
-  'Dark','Bold','Calm','Fierce','Quiet','Sharp','Bright','Eager'
-];
-const _GUEST_ANI = [
-  'Eagle','Fox','Lynx','Bear','Wolf','Falcon','Otter','Cheetah',
-  'Raven','Hawk','Tiger','Panther','Puma','Cobra','Bison','Jaguar'
-];
-function guestDisplayName(handle) {
-  if (!handle?.startsWith('guest_')) return handle;
-  const hex = handle.slice(6); // strip "guest_"
-  const a = parseInt(hex.slice(0, 2) || '0', 16) % _GUEST_ADJ.length;
-  const b = parseInt(hex.slice(2, 4) || '0', 16) % _GUEST_ANI.length;
-  return `${_GUEST_ADJ[a]} ${_GUEST_ANI[b]}`;
-}
-// Replace every raw guest_… token in a text string (for system messages)
-function replaceGuestHandles(text) {
-  return String(text).replace(/\bguest_[0-9a-f]+\b/gi, h => guestDisplayName(h));
-}
+// Guest display name & handle replacement → shared/guestUtils.js
 
 function showChatToast({ emoji, from, chatTarget, groupName }) {
   const container = document.getElementById("chat-toast-container");
@@ -354,9 +397,7 @@ function showChatToast({ emoji, from, chatTarget, groupName }) {
 // ======================================================
 // CMK v2 – Epoch Definition (GLOBAL)
 // ======================================================
-
-// ⏱️ 1 Stunde pro Epoch (stabil, push-freundlich, group-fähig)
-const EPOCH_MS = 3_600_000;
+// EPOCH_MS, MAX_MESSAGE_LENGTH, SEND_COOLDOWN_MS etc. → chatState.js
 
 // ======================================================
 // DOM ELEMENTS
@@ -378,13 +419,13 @@ let unreadCount = 0;
 let lastSendTime = 0;
 let cooldownTimer = null;
 let sendFailsafeTimer = null;
-let fallbackFlushTimer = null; // Race-Guard: Fallback-CMK Flush verzögern bis Authority-CMK ankommt
+let fallbackFlushTimer = null;
 let e2eReady = false;
 let lastSendBtnState = null;
-let sessionKeyBytes = null;   // Uint8Array(32) — current SK
-let sessionCmkBytes = null;   // Uint8Array(32) — CMK (für Re-Derivation alter Epochs)
-let sessionRotationIndex = 0; // aktueller Rotation-Index
-let sentMessageCount = 0;     // Zähler für Rotation-Trigger
+let sessionKeyBytes = null;
+let sessionCmkBytes = null;
+let sessionRotationIndex = 0;
+let sentMessageCount = 0;
 
 // Recovery nach IDB-Reset: falls rotationIndex=0 aber laut Backend höher → sync
 async function recoverRotationIndexIfNeeded(sid) {
@@ -404,9 +445,12 @@ async function recoverRotationIndexIfNeeded(sid) {
     console.warn("[rotationIndex] Recovery fehlgeschlagen:", e);
   }
 }
-const ROTATION_THRESHOLD = 50;
-const ROTATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
+// ROTATION_THRESHOLD, ROTATION_INTERVAL_MS → chatState.js
 let timeRotationTimer = null;
+const deferredInboundMessages = [];
+const deferredInboundIds = new Set();
+const pendingGskRequests = new Set();
+const gskRequestCooldown = new Map();
 const skCache = new Map();    // "sid:rotationIndex" → Uint8Array(32)
 let hasInboxKeys = false;
 
@@ -418,7 +462,7 @@ let deferredQueue = [];
 let isFlushingDeferred = false;
 let isFlushingDeferredInbound = false;
 let deferredBackoff = 1000;          // Start 1s
-const MAX_DEFERRED_BACKOFF = 15000;  // Max 15s
+// MAX_DEFERRED_BACKOFF → chatState.js
 
 // ======================================================
 // SEND-BUTTON LOGIK (zentral)
@@ -474,13 +518,7 @@ inputEl.value = text;
 sendBtn.click();  
 }
 
-// ======================================================
-// GUEST SESSION — Erkennung aus sessionStorage (gesetzt durch /join/)
-// ======================================================
-const _guestData = (() => {
-  try { return JSON.parse(sessionStorage.getItem("guestSession") || "null"); } catch { return null; }
-})();
-const _isGuestMode = !!(_guestData?.guestHandle && _guestData?.token);
+// Guest session → chatState.js (_guestData, _isGuestMode)
 
 // ======================================================
 // URL PARAMS
@@ -488,11 +526,7 @@ const _isGuestMode = !!(_guestData?.guestHandle && _guestData?.token);
 const params = new URLSearchParams(window.location.search);
 withUser = params.get("with");
 
-// ── Sicherheit: withUser nur erlaubte Zeichen (a-z0-9_:- oder UUID) ──────
-// Verhindert XSS/Injection via manipulierte URLs
-const _VALID_HANDLE = /^[a-z0-9_]{1,64}$/i;
-const _VALID_UUID   = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const _VALID_DM_ID  = /^[a-z0-9_]{1,32}:[a-z0-9_]{1,32}$/i;
+// Validation patterns → chatState.js
 if (!withUser || !(_VALID_HANDLE.test(withUser) || _VALID_UUID.test(withUser) || _VALID_DM_ID.test(withUser))) {
   alert(lang.noChatPartner);
   throw new Error("withUser ungültig oder fehlt");
@@ -799,20 +833,39 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
+  // 🔄 GUEST_CONVERTED: Gast hat sich registriert → Mitgliederliste + Chat refreshen
+  if (event?.type === "GUEST_CONVERTED" && event.groupId === withUser) {
+    console.log("🔄 Gast konvertiert:", event.oldHandle, "→", event.newHandle);
+    initGroupMembersUI(withUser).catch(() => {});
+    loadMessages().catch(() => {});
+    return;
+  }
+
   // 👤 MEMBER_JOINED: eingeloggter User über Invite-Link beigetreten → GSK proaktiv pushen
   if (event?.type === "member_joined" && event.groupId === withUser) {
-    console.log("👤 Neues Mitglied beigetreten:", event.handle);
     initGroupMembersUI(withUser).catch(() => {});
-    if (event.handle && event.handle !== getMyUser() && !_isGuestMode) {
+    const myHandle = _isGuestMode ? _guestData?.guestHandle : getMyUser();
+    if (event.handle && event.handle !== myHandle && myHandle) {
       (async () => {
         try {
-          await getOrCreateGroupSK(event.groupId, getMyUser());
+          await getOrCreateGroupSK(event.groupId, myHandle);
           const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(event.handle)}`);
           const devs = Array.isArray(r.devices) ? r.devices : [];
           if (devs.length) {
-            await distributeGroupSK(event.groupId, getMyUser(),
+            await distributeGroupSK(event.groupId, myHandle,
               devs.map(d => ({ ...d, memberHandle: event.handle })), apiFetch);
-            console.log("✅ GSK proaktiv an neues Mitglied gesendet:", event.handle);
+          } else {
+            // Race: neues Mitglied hat Key noch nicht hochgeladen → nach 3s nochmal versuchen
+            setTimeout(async () => {
+              try {
+                const r2 = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(event.handle)}`);
+                const devs2 = Array.isArray(r2.devices) ? r2.devices : [];
+                if (devs2.length) {
+                  await distributeGroupSK(event.groupId, myHandle,
+                    devs2.map(d => ({ ...d, memberHandle: event.handle })), apiFetch);
+                }
+              } catch (e2) { console.warn("⚠️ GSK retry push zu neuem Mitglied fehlgeschlagen:", e2); }
+            }, 3000);
           }
         } catch (e) { console.warn("⚠️ GSK push zu neuem Mitglied fehlgeschlagen:", e); }
       })();
@@ -832,19 +885,45 @@ if (event?.type === "NEW_MESSAGE") {
     initGroupMembersUI(withUser).catch(() => {});
     // Eigenen GSK proaktiv an den neuen Gast senden (Online-Fast-Path)
     // → Gast kann Nachrichten sofort entschlüsseln ohne auf request_gsk zu warten
-    if (event.handle && !_isGuestMode) {
+    const myHandleForGuestJoin = _isGuestMode ? _guestData?.guestHandle : getMyUser();
+    if (event.handle && myHandleForGuestJoin && event.handle !== myHandleForGuestJoin) {
       (async () => {
         try {
-          await getOrCreateGroupSK(event.groupId, getMyUser());
+          await getOrCreateGroupSK(event.groupId, myHandleForGuestJoin);
           const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(event.handle)}`);
           const devs = Array.isArray(r.devices) ? r.devices : [];
           if (devs.length) {
-            await distributeGroupSK(event.groupId, getMyUser(),
+            await distributeGroupSK(event.groupId, myHandleForGuestJoin,
               devs.map(d => ({ ...d, memberHandle: event.handle })), apiFetch);
-            console.log("✅ GSK proaktiv an neuen Gast gesendet:", event.handle);
+          } else {
+            // Race: Gast-Key-Upload läuft noch → nach 3s nochmal versuchen
+            setTimeout(async () => {
+              try {
+                const r2 = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(event.handle)}`);
+                const devs2 = Array.isArray(r2.devices) ? r2.devices : [];
+                if (devs2.length) {
+                  await distributeGroupSK(event.groupId, myHandleForGuestJoin,
+                    devs2.map(d => ({ ...d, memberHandle: event.handle })), apiFetch);
+                }
+              } catch (e2) { console.warn("⚠️ GSK retry push fehlgeschlagen:", e2); }
+            }, 3000);
           }
         } catch (e) { console.warn("⚠️ GSK push zu Gast fehlgeschlagen:", e); }
       })();
+    }
+    return;
+  }
+
+  // 🚫 GROUP_MEMBER_REMOVED: Mitglied wurde entfernt
+  if (event?.type === "group_member_removed" && event.groupId === withUser) {
+    const myHandle = getMyUser();
+    if (event.handle === myHandle) {
+      // Ich wurde entfernt → Chat verlassen
+      alert(lang.youWereRemoved || "You were removed from this group.");
+      window.location.href = "/";
+    } else {
+      initGroupMembersUI(withUser).catch(() => {});
+      loadMessages().catch(() => {});
     }
     return;
   }
@@ -858,9 +937,11 @@ if (event?.type === "NEW_MESSAGE") {
 
   // 🔑 REQUEST_GSK: ein Gruppen-Mitglied fehlt unser GSK → sofort re-distribuieren
   if (event?.type === "REQUEST_GSK" && event.groupId === withUser) {
-    const myHandle = getMyUser();
+    const myHandle = _isGuestMode ? _guestData?.guestHandle : getMyUser();
     if (!myHandle || event.from === myHandle) return;
-    console.log("🔑 REQUEST_GSK → re-distribuiere GSK an:", event.from);
+    // Cache immer invalidieren: bei GUEST_JOINED könnte ein leeres Ergebnis gecacht worden sein
+    // (Race: Gast-Key-Upload kommt nach dem GUEST_JOINED Event → stale empty cache)
+    invalidateInboxKeyCache(event.from);
     fetchInboxKeys(event.from)
       .then(devices => {
         if (!devices?.length) return;
@@ -881,7 +962,7 @@ if (event?.type === "NEW_MESSAGE") {
     } else if (event.action === "accept") {
       const activeDays = event.days || null; // days=0 → null (deaktiviert)
       updateAutoDeleteHeaderLabel(activeDays, true);
-      showAutoDeleteBanner(activeDays ? `✅ Auto-Delete aktiv: ${autoDeleteLabel(activeDays)}` : "✅ Auto-Delete deaktiviert", "success");
+      showAutoDeleteBanner(activeDays ? lang.autoDeleteActive(autoDeleteLabel(activeDays)) : lang.autoDeleteDisabled, "success");
     } else if (event.action === "decline" || event.action === "cancel") {
       const restoreDays = event.original_days || null;
       if (restoreDays) {
@@ -951,264 +1032,7 @@ if (event?.type === "NEW_MESSAGE") {
 
 const renderedMessageIds = new Set();   // echte Server-IDs
 
-// ── Reply-State ───────────────────────────────────────────
-let _replyState = null; // { id, from, plaintext }
-
-const replyBar       = document.getElementById("reply-bar");
-const replyBarFrom   = document.getElementById("reply-bar-from");
-const replyBarText   = document.getElementById("reply-bar-text");
-const replyBarCancel = document.getElementById("reply-bar-cancel");
-
-function showReplyBar(id, from, plaintext) {
-  _replyState = { id, from, plaintext };
-  if (replyBarFrom) replyBarFrom.textContent = from + ": ";
-  if (replyBarText) replyBarText.textContent = plaintext.slice(0, 80) + (plaintext.length > 80 ? "…" : "");
-  replyBar?.classList.add("visible");
-  document.getElementById("msg-input")?.focus();
-}
-
-function clearReplyBar() {
-  _replyState = null;
-  replyBar?.classList.remove("visible");
-  if (replyBarFrom) replyBarFrom.textContent = "";
-  if (replyBarText) replyBarText.textContent = "";
-}
-
-replyBarCancel?.addEventListener("click", clearReplyBar);
-
-// ── Reaktionen ────────────────────────────────────────────
-const REACTION_EMOJIS = ["💀","🔥","🗿","😭","🫡","💯","🤝"];
-// Cache: messageId → { emoji: [handles] }
-const reactionsCache = new Map();
-
-function renderReactionBar(div, messageId) {
-  let bar = div.querySelector(".reaction-bar");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.className = "reaction-bar";
-    // Nach timestamp einfügen
-    const ts = div.querySelector(".timestamp");
-    if (ts) ts.after(bar); else div.appendChild(bar);
-  }
-  bar.innerHTML = "";
-  const data = reactionsCache.get(messageId) || {};
-  const me = getMyUser();
-  Object.entries(data).forEach(([emoji, handles]) => {
-    if (!handles.length) return;
-    const pill = document.createElement("button");
-    pill.className = "reaction-pill" + (handles.includes(me) ? " mine" : "");
-    pill.title = handles.join(", ");
-    const emojiSpan = document.createElement("span");
-    emojiSpan.textContent = emoji;
-    const countSpan = document.createElement("span");
-    countSpan.className = "reaction-count";
-    countSpan.textContent = handles.length > 1 ? String(handles.length) : "";
-    pill.append(emojiSpan, countSpan);
-    pill.addEventListener("click", (e) => { e.stopPropagation(); sendReaction(messageId, emoji, div); });
-    bar.appendChild(pill);
-  });
-}
-
-async function sendReaction(messageId, emoji, div) {
-  try {
-    const res = await apiFetch("/chat/react", {
-      method: "POST",
-      body: JSON.stringify({ messageId, emoji })
-    });
-    if (res.reactions) {
-      reactionsCache.set(messageId, res.reactions);
-      renderReactionBar(div, messageId);
-    }
-  } catch (e) { console.warn("React failed", e); }
-}
-
-// ======================================================
-// CONTEXT MENU (Long-Press + Right-Click)
-// ======================================================
-let _ctxMenu = null;
-
-function closeContextMenu() {
-  if (_ctxMenu) { _ctxMenu.remove(); _ctxMenu = null; }
-}
-
-document.addEventListener("click",  closeContextMenu);
-document.addEventListener("scroll", closeContextMenu, { passive: true });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeContextMenu(); });
-
-function showContextMenu(div, { id, from, textEl, ts }) {
-  closeContextMenu();
-  const isOwn = from === getMyUser();
-  const EDIT_MS = 15 * 60 * 1000;
-  const canEdit = isOwn && ts && Date.now() - Number(ts) < EDIT_MS;
-  const canReact = !isOwn && !!id; // Reaktionen nur auf fremde Nachrichten
-  const canReply = !!id;
-  const canDelete = isOwn && id;
-
-  const menu = document.createElement("div");
-  menu.id = "msg-context-menu";
-  _ctxMenu = menu;
-
-  // Emoji-Reihe (nur für fremde Nachrichten)
-  if (canReact) {
-    const emojiRow = document.createElement("div");
-    emojiRow.className = "ctx-emoji-row";
-    const myReactions = (reactionsCache.get(id) || {});
-    REACTION_EMOJIS.forEach(emoji => {
-      const btn = document.createElement("button");
-      btn.className = "ctx-emoji-btn";
-      const handles = myReactions[emoji] || [];
-      if (handles.includes(getMyUser())) btn.classList.add("active");
-      btn.textContent = emoji;
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        closeContextMenu();
-        const res = await apiFetch("/chat/react", {
-          method: "POST",
-          body: JSON.stringify({ messageId: id, emoji })
-        });
-        if (res.reactions) { reactionsCache.set(id, res.reactions); renderReactionBar(div, id); }
-      });
-      emojiRow.appendChild(btn);
-    });
-    menu.appendChild(emojiRow);
-  }
-
-  // Antworten
-  if (canReply) {
-    const replyItem = document.createElement("div");
-    replyItem.className = "ctx-item";
-    replyItem.innerHTML = '<span class="ctx-item-icon">↩️</span> Antworten';
-    replyItem.addEventListener("click", (e) => {
-      e.stopPropagation();
-      closeContextMenu();
-      showReplyBar(id, from, textEl?.textContent || "");
-    });
-    menu.appendChild(replyItem);
-  }
-
-  // Bearbeiten (nur eigene, innerhalb 15 min)
-  if (canEdit) {
-    const editItem = document.createElement("div");
-    editItem.className = "ctx-item";
-    editItem.innerHTML = '<span class="ctx-item-icon">✏️</span> Bearbeiten';
-    editItem.addEventListener("click", (e) => {
-      e.stopPropagation();
-      closeContextMenu();
-      startInlineEdit(div, id, textEl?.textContent || "");
-    });
-    menu.appendChild(editItem);
-  }
-
-  // Divider + Löschen
-  if (canDelete) {
-    if (canReply || canEdit) {
-      const divider = document.createElement("div");
-      divider.className = "ctx-divider";
-      menu.appendChild(divider);
-    }
-    const delItem = document.createElement("div");
-    delItem.className = "ctx-item danger";
-    delItem.innerHTML = '<span class="ctx-item-icon">🗑️</span> Löschen';
-    delItem.addEventListener("click", (e) => {
-      e.stopPropagation();
-      closeContextMenu();
-      if (confirm(lang.confirmDeleteMessage)) deleteMessage(id);
-    });
-    menu.appendChild(delItem);
-  }
-
-  if (!menu.children.length) return; // nichts anzuzeigen
-
-  document.body.appendChild(menu);
-
-  // Position berechnen
-  const rect = div.getBoundingClientRect();
-  const mw = menu.offsetWidth || 180;
-  const mh = menu.offsetHeight || 160;
-  let x = isOwn ? rect.right - mw : rect.left;
-  let y = rect.top - mh - 6;
-  if (y < 8) y = rect.bottom + 6;
-  if (x + mw > window.innerWidth - 8) x = window.innerWidth - mw - 8;
-  if (x < 8) x = 8;
-  menu.style.left = x + "px";
-  menu.style.top  = y + "px";
-}
-
-function attachContextMenu(div, opts) {
-  let longPressTimer = null;
-  let _didScroll = false;
-
-  // Long-Press (Mobile/Touch only)
-  div.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
-    if (e.pointerType === "mouse") return; // Desktop: Linksklick statt Long-Press
-    _didScroll = false;
-    longPressTimer = setTimeout(() => {
-      longPressTimer = null;
-      if (!_didScroll) showContextMenu(div, getLiveOpts(div, opts));
-    }, 500);
-  }, { passive: true });
-
-  div.addEventListener("pointerup",    () => { clearTimeout(longPressTimer); longPressTimer = null; });
-  div.addEventListener("pointercancel",() => { clearTimeout(longPressTimer); longPressTimer = null; });
-  div.addEventListener("pointermove",  (e) => {
-    if (Math.abs(e.movementX) > 5 || Math.abs(e.movementY) > 5) {
-      _didScroll = true;
-      clearTimeout(longPressTimer); longPressTimer = null;
-    }
-  }, { passive: true });
-
-  // Linksklick (Desktop + Mobile als Alternative)
-  div.addEventListener("click", (e) => {
-    if (e.target.closest(".sender-name")) return; // Sender-Popover hat Vorrang
-    if (e.target.closest(".reaction-pill")) return; // Reaction-Pills stoppen selbst
-    if (e.target.closest(".reply-quote")) return;   // Quote-Block scrollt zur Nachricht
-    if (e.target.closest(".reaction-bar")) return;  // Reaction-Bar ignorieren
-    e.stopPropagation();
-    showContextMenu(div, getLiveOpts(div, opts));
-  });
-
-  // Rechtsklick: nichts tun (Browser-Default unterdrücken)
-  div.addEventListener("contextmenu", (e) => { e.preventDefault(); });
-}
-
-// textEl live auslesen damit auch nach Edit der aktuelle Text kommt
-function getLiveOpts(div, opts) {
-  const liveTextEl = div.querySelector(".msg-text") || opts.textEl;
-  return { ...opts, textEl: liveTextEl };
-}
-
-function showReactionPicker(div, messageId) {
-  // Nur einen Picker gleichzeitig
-  document.querySelectorAll(".reaction-picker.visible").forEach(p => {
-    p.classList.remove("visible");
-  });
-  let picker = div.querySelector(".reaction-picker");
-  if (!picker) {
-    picker = document.createElement("div");
-    picker.className = "reaction-picker";
-    REACTION_EMOJIS.forEach(emoji => {
-      const btn = document.createElement("button");
-      btn.textContent = emoji;
-      btn.title = emoji;
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        picker.classList.remove("visible");
-        sendReaction(messageId, emoji, div);
-      });
-      picker.appendChild(btn);
-    });
-    div.appendChild(picker);
-  }
-  picker.classList.toggle("visible");
-  // Klick ausserhalb schliesst Picker
-  setTimeout(() => {
-    document.addEventListener("click", function close() {
-      picker.classList.remove("visible");
-      document.removeEventListener("click", close);
-    }, { once: true });
-  }, 0);
-}
+// Reply Bar, Reactions, Context Menu → chatContextMenu.js
 const pendingByTempId = new Map();      // tempId -> div
 // 🔥 Status Tracking (verhindert verlorene Updates)
 const renderedMessageStatus = new Map(); // messageId -> status
@@ -1216,11 +1040,11 @@ const renderedMessageStatus = new Map(); // messageId -> status
 const deletedMessageIds = new Set();
 // 🔁 Retry-Zähler für deferred inbound Messages (GSK-Wartezeit)
 const deferredInboundRetryCount = new Map(); // messageId → retryCount
-const MAX_INBOUND_RETRIES = 4; // nach 4 Flush-Runden → permanent failed
+// MAX_INBOUND_RETRIES → chatState.js
 // 🔐 Decrypt Cache: verhindert doppelte Crypto + doppelte Logs
 // LRU-Eviction: ältesten Eintrag löschen statt ganzen Cache (Map iteriert in Einfügereihenfolge)
 const decryptedCache = new Map(); // msg.id -> plaintext
-const MAX_DECRYPT_CACHE = 2000;
+// MAX_DECRYPT_CACHE → chatState.js
 
 // ── Inbox Preview Cache ──────────────────────────────────
 // Speichert die letzte entschlüsselte Nachricht pro Konversation in localStorage
@@ -1238,13 +1062,7 @@ function savePreviewCache(convoId, { text, ts, from }) {
     }));
   } catch {}
 }
-function lruCacheSet(key, value) {
-  if (decryptedCache.has(key)) decryptedCache.delete(key); // ans Ende verschieben (LRU)
-  decryptedCache.set(key, value);
-  if (decryptedCache.size > MAX_DECRYPT_CACHE) {
-    decryptedCache.delete(decryptedCache.keys().next().value); // ältesten löschen
-  }
-}
+// lruCacheSet → chatCrypto.js (wrapper at top of file)
 
 
 // ======================================================
@@ -1309,88 +1127,13 @@ return true;
 // TTL-Cache: vermeidet redundante KV-Reads bei device_added / CMK-Rotation
 // ======================================================
 const inboxKeyCache = new Map(); // handle → { devices, expiresAt }
-const INBOX_KEY_TTL = 30_000;   // 30s: kurz genug dass neue Devices erscheinen
+// INBOX_KEY_TTL → chatState.js
 
 export function invalidateInboxKeyCache(handle) {
   inboxKeyCache.delete(handle);
 }
 
-// ── Presence Helpers ──────────────────────────────────────────────────────
-// 90s In-Memory-Cache: reduziert KV-Reads um ~66%
-const _presenceCache = {};          // handle → { status, ts }
-const PRESENCE_CACHE_TTL = 90_000;  // 90 Sekunden
-
-async function fetchPresence(handles) {
-  if (!handles?.length) return {};
-  try {
-    const unique = [...new Set(handles.map(h => h.toLowerCase()))].filter(Boolean);
-    const now = Date.now();
-
-    // Cache-Hit: alle Handles noch frisch?
-    const stale = unique.filter(h => !_presenceCache[h] || now - _presenceCache[h].ts > PRESENCE_CACHE_TTL);
-    if (stale.length === 0) {
-      // Alle aus Cache zurückgeben
-      return Object.fromEntries(unique.map(h => [h, _presenceCache[h].status]));
-    }
-
-    // Nur veraltete Handles fetchen
-    const fetched = await apiFetch(`/presence?handles=${encodeURIComponent(stale.join(","))}`);
-    // Cache updaten
-    for (const h of stale) {
-      _presenceCache[h] = { status: fetched?.[h] ?? null, ts: now };
-    }
-    // Ergebnis zusammenführen (Cache + frisch)
-    return Object.fromEntries(unique.map(h => [h, _presenceCache[h]?.status ?? null]));
-  } catch { return {}; }
-}
-
-function formatLastSeen(ts) {
-  if (!ts) return "";
-  const diff = Date.now() - Number(ts);
-  if (diff < 60_000)      return "gerade eben";
-  if (diff < 3_600_000)   return `vor ${Math.floor(diff / 60_000)} Min.`;
-  if (diff < 86_400_000)  return `vor ${Math.floor(diff / 3_600_000)} Std.`;
-  const days = Math.floor(diff / 86_400_000);
-  return `vor ${days} Tag${days === 1 ? "" : "en"}`;
-}
-
-function presenceLabel(status) {
-  if (!status) return "";
-  if (status.online) return "🟢 Online";
-  if (status.lastSeen) return `⚫ ${formatLastSeen(status.lastSeen)}`;
-  return "";
-}
-
-/// DM-Header: Presence-Status anzeigen und alle 90s refreshen
-async function initDMPresence() {
-  const subEl = document.getElementById("dm-presence-status");
-  if (!subEl || !withUser || isGroupConversation(withUser)) return;
-  async function update() {
-    // Cache umgehen für DM-Header: immer frisch lesen
-    delete _presenceCache[withUser.toLowerCase()];
-    const p = await fetchPresence([withUser]);
-    const status = p?.[withUser];
-    if (!status) { subEl.textContent = ""; return; }
-    subEl.textContent = presenceLabel(status);
-    subEl.style.color = status.online ? "#4ade80" : "var(--text-secondary)";
-  }
-  await update();
-  setInterval(update, 90_000);
-}
-
-// Akzeptierte Kontakte für Invite-Autocomplete (lazy, gecacht pro Session)
-let _cachedAcceptedContacts = null;
-async function fetchAcceptedContacts() {
-  if (_cachedAcceptedContacts) return _cachedAcceptedContacts;
-  try {
-    const data = await apiFetch("/contacts/list");
-    _cachedAcceptedContacts = (data.contacts || [])
-      .filter(c => c.status === "accepted")
-      .map(c => c.contact_handle || c.handle || "")
-      .filter(Boolean);
-  } catch { _cachedAcceptedContacts = []; }
-  return _cachedAcceptedContacts;
-}
+// Presence & Contacts → chatPresence.js
 
 async function fetchInboxKeys(peerHandle) {
   // Cache-Hit?
@@ -1543,22 +1286,28 @@ if (!e2eReady || !(sessionKeyBytes instanceof Uint8Array)) {
 
 if (typeof decrypted === "string") {
 
-  // 🔏 Signatur prüfen (nur bei Peer-Nachrichten mit sig-Feld)
+  // 🔏 Signatur prüfen
   let finalText = decrypted;
-  if (msg.from !== getMyUser() && msg.sig && msg.deviceId) {
+  if (msg.from !== getMyUser() && msg.deviceId) {
     const sigPub = await getSigPubForDevice(msg.from, msg.deviceId);
     if (sigPub) {
-      const sigOk = await verifyMessageSig(
-        msg.ivB64, msg.ctB64,
-        msg.sid || sessionId, baseEpoch,  // signierte Epoch = msg.epoch, nicht Loop-var ep
-        msg.sig, sigPub
-      );
-      if (!sigOk) {
-        console.warn("🚨 Signatur-Fehler — mögliche Manipulation!", msg.id);
+      // sigPub bekannt → Signatur ist Pflicht
+      if (!msg.sig) {
+        console.warn("🚨 Fehlende Signatur — mögliche Manipulation!", msg.id);
         finalText = "⚠️ [Nachricht konnte nicht verifiziert werden]";
+      } else {
+        const sigOk = await verifyMessageSig(
+          msg.ivB64, msg.ctB64,
+          msg.sid || sessionId, ep,
+          msg.sig, sigPub
+        );
+        if (!sigOk) {
+          console.warn("🚨 Signatur ungültig — mögliche Manipulation!", msg.id);
+          finalText = "⚠️ [Nachricht konnte nicht verifiziert werden]";
+        }
       }
     }
-    // kein sigPub → alte Nachricht oder Upload ausstehend → nicht warnen
+    // kein sigPub → alte Nachricht oder Peer-Keys noch nicht gecacht → akzeptieren
   }
 
   // ✅ Cache setzen (vor return) — LRU-Eviction via lruCacheSet
@@ -1596,208 +1345,8 @@ if (typeof decrypted === "string") {
   }
 }
 
-// ======================================================
-// E2E: BASE64 HELPERS (für iv/ciphertext)
-// ======================================================
-function abToB64(ab) {
-  const bytes = new Uint8Array(ab);
-  let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary);
-}
-
-function b64ToAb(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
-
-// ======================================================
-// E2E: Encrypt / Decrypt (AES-GCM)
-// ======================================================
-async function e2eEncrypt(aesKey, plaintext) {
-  const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV empfohlen
-  const data = new TextEncoder().encode(plaintext);
-
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    aesKey,
-    data
-  );
-
-  return {
-    ivB64: abToB64(iv.buffer),
-    ctB64: abToB64(ciphertext)
-  };
-}
-
-async function e2eDecrypt(aesKey, ivB64, ctB64) {
-  const iv = new Uint8Array(b64ToAb(ivB64));
-  const ciphertext = b64ToAb(ctB64);
-
-  const plaintextBuf = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
-    aesKey,
-    ciphertext
-  );
-
-  return new TextDecoder().decode(plaintextBuf);
-}
-
-// ======================================================
-// FILE UPLOAD: Encrypt / Compress / Upload zu R2
-// ======================================================
-
-// Binary ArrayBuffer → AES-GCM verschlüsseln
-async function e2eEncryptBytes(aesKey, bytes) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, bytes);
-  return { ivB64: abToB64(iv.buffer), ctBytes: new Uint8Array(ct) };
-}
-
-// AES-256-GCM Key erzeugen (ephemeral, pro File)
-async function generateFileKey() {
-  return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-}
-
-// AES Key → Base64
-async function exportKeyB64(aesKey) {
-  const raw = await crypto.subtle.exportKey("raw", aesKey);
-  return abToB64(raw);
-}
-
-// Base64 → AES Key
-async function importKeyB64(b64) {
-  const raw = b64ToAb(b64);
-  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["decrypt"]);
-}
-
-// Bild clientseitig komprimieren (max 1200px, JPEG 80%)
-async function compressImage(file) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const objUrl = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(objUrl);
-      const MAX_PX = 1200;
-      const scale = Math.min(1, MAX_PX / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w; canvas.height = h;
-      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-      canvas.toBlob(blob => {
-        if (!blob) { reject(new Error("Compression failed")); return; }
-        blob.arrayBuffer().then(resolve).catch(reject);
-      }, "image/jpeg", 0.80);
-    };
-    img.onerror = () => { URL.revokeObjectURL(objUrl); reject(new Error("Image load failed")); };
-    img.src = objUrl;
-  });
-}
-
-// Datei hochladen: komprimieren → verschlüsseln → Worker-Upload → R2
-// Gibt { attachmentPayloadJson, r2Key, attachmentType } zurück
-async function uploadFile(file, attachmentType) {
-  const MAX_SIZE = 10 * 1024 * 1024;
-  if (file.size > MAX_SIZE) {
-    showSystemToast("⚠️ Datei zu gross (max. 10 MB)");
-    return null;
-  }
-
-  let fileBytes;
-  if (attachmentType === "photo") {
-    try { fileBytes = await compressImage(file); }
-    catch { fileBytes = await file.arrayBuffer(); }
-  } else {
-    fileBytes = await file.arrayBuffer();
-  }
-
-  // Ephemeral File-Key erzeugen
-  const fileKey = await generateFileKey();
-  const { ivB64: fileIvB64, ctBytes } = await e2eEncryptBytes(fileKey, fileBytes);
-  const fileKeyB64 = await exportKeyB64(fileKey);
-
-  // convoId bestimmen
-  const isGroup = isGroupConversation(withUser);
-  const myConvoId = isGroup ? withUser : [getMyUser(), withUser].sort().join(":");
-
-  // Encrypted Bytes direkt durch Worker zu R2 hochladen
-  let r2Key;
-  try {
-    const uploadRes = await fetch("https://api.renex.id/upload/file", {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "X-Mime-Type": file.type || "application/octet-stream",
-        "X-File-Name": file.name,
-        "X-File-Size": String(ctBytes.byteLength),
-        "X-Attachment-Type": attachmentType,
-        "X-Convo-Id": myConvoId,
-      },
-      body: ctBytes,
-    });
-    if (!uploadRes.ok) {
-      const err = await uploadRes.json().catch(() => ({}));
-      throw new Error(err.error || `HTTP ${uploadRes.status}`);
-    }
-    const data = await uploadRes.json();
-    r2Key = data.r2Key;
-  } catch (e) {
-    console.error("[upload] Fehler:", e);
-    showSystemToast(`⚠️ Upload fehlgeschlagen: ${e.message}`);
-    return null;
-  }
-
-  // Attachment-Payload (geht in die E2E-verschlüsselte Nachricht)
-  const attachmentPayloadJson = JSON.stringify({
-    r2Key,
-    fileKeyB64,
-    fileIvB64,
-    mimeType: file.type || "application/octet-stream",
-    fileName: file.name,
-    fileSize: fileBytes.byteLength,
-  });
-
-  return { attachmentPayloadJson, r2Key, attachmentType };
-}
-
-// Encrypted R2 File herunterladen und dekryptieren → ArrayBuffer
-async function downloadAndDecryptFile(r2Key, fileKeyB64, fileIvB64) {
-  const res = await fetch(`https://api.renex.id/upload/download?key=${encodeURIComponent(r2Key)}`, {
-    credentials: "include"
-  });
-  if (!res.ok) throw new Error("Download failed");
-  const ctBytes = await res.arrayBuffer();
-  const fileKey = await importKeyB64(fileKeyB64);
-  const iv = new Uint8Array(b64ToAb(fileIvB64));
-  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, fileKey, ctBytes);
-  return plain;
-}
-
-// ======================================================
-// E2E: PUBLIC KEY UPLOAD (NUR HIER)
-// ======================================================
-async function uploadMyPublicKeyIfNeeded() {
-  const deviceId = getDeviceId();
-
-  const pub = await loadPublicKey();
-  if (!pub) {
-    console.warn("❌ Kein Public Key vorhanden");
-    return false;
-  }
-
-  const jwk = await crypto.subtle.exportKey("jwk", pub);
-
-  await apiFetch("/chat/keys/upload", {
-    method: "POST",
-    body: JSON.stringify({ jwk, deviceId })
-  });
-
-  console.log("✅ Public Key hochgeladen:", deviceId);
-  return true;
-}
+// Crypto functions → chatCrypto.js
+// uploadFile, uploadMyPublicKeyIfNeeded → chatCrypto.js (wrapped above)
 
 // ======================================================
 // SESSION HELPERS
@@ -1986,7 +1535,10 @@ isFlushingDeferredInbound = true;
     console.debug("[flush]", { from: m.from, ts: m.ts, result: text === null ? "null(deferred)" : text === "__decrypt_failed__" ? "FAILED" : text === "__control__" ? "control" : "OK:"+String(text).slice(0,20) });
 
     if (text === null || text === "__control__") {
-      // GSK noch nicht verfügbar → Retry-Zähler erhöhen
+      // GSK noch nicht verfügbar → GSK aktiv anfordern + Retry-Zähler erhöhen
+      if (text === null && isGroupConversation(withUser) && m.from) {
+        requestGSKFrom(withUser, m.from).catch(() => {});
+      }
       const retries = (deferredInboundRetryCount.get(m.id) || 0) + 1;
       deferredInboundRetryCount.set(m.id, retries);
       if (retries >= MAX_INBOUND_RETRIES) {
@@ -2052,7 +1604,10 @@ isFlushingDeferredInbound = true;
     if (existingBubble) {
       // .msg-text explizit verwenden — verhindert dass reply-quote überschrieben wird
       const textEl = existingBubble.querySelector(".msg-text");
-      if (textEl) textEl.textContent = text;
+      if (textEl) {
+        const linkedEdit = linkify(text);
+        if (linkedEdit !== escapeHtml(text)) { textEl.innerHTML = linkedEdit; } else { textEl.textContent = text; }
+      }
     } else {
       // msg: m mitgeben damit Reply-Quote-Block korrekt gerendert wird
       m.replyPlaintext = null;
@@ -2101,7 +1656,16 @@ isFlushingDeferredInbound = true;
 // Der Sender antwortet mit distributeGroupSK() gezielt für unsere Devices
 // ======================================================
 async function requestGSKFrom(groupId, senderHandle) {
+  // Eigene GSK kann man nicht anfordern
+  const _self = _isGuestMode ? _guestData?.guestHandle : getMyUser();
+  if (!senderHandle || senderHandle === _self) return;
+
   const key = `${groupId}:${senderHandle}`;
+
+  // Noch im Cooldown nach 429?
+  const cooldownUntil = gskRequestCooldown.get(key);
+  if (cooldownUntil && Date.now() < cooldownUntil) return;
+
   if (pendingGskRequests.has(key)) return; // max 1 Request pro Sender pro Session
   pendingGskRequests.add(key);
   try {
@@ -2115,20 +1679,22 @@ async function requestGSKFrom(groupId, senderHandle) {
       })
     });
     // apiFetch wirft kein Error bei 429 — gibt { rateLimited: true } zurück
-    // → Key freigeben damit ein späterer Retry möglich ist
+    // → 30s Cooldown setzen damit nicht sofort erneut versucht wird
     if (result?.rateLimited) {
       pendingGskRequests.delete(key);
-      console.warn("⚠️ requestGSKFrom rate-limited — wird beim nächsten Flush erneut versucht");
+      gskRequestCooldown.set(key, Date.now() + 30_000);
+      console.warn("⚠️ requestGSKFrom rate-limited — 30s Cooldown");
       return;
     }
-    console.log("📩 GSK angefordert von:", senderHandle, "in Gruppe:", groupId);
+    gskRequestCooldown.delete(key);
+    // Nach 10s: pendingGskRequests freigeben damit Retry möglich falls keine Antwort kommt
+    setTimeout(() => pendingGskRequests.delete(key), 10_000);
   } catch (e) {
     console.warn("⚠️ requestGSKFrom fehlgeschlagen:", e);
-    // 403 (nicht Mitglied) → kein Retry
+    // 403 (nicht Mitglied) oder 400 (own GSK) → kein Retry
     const status = e?.status ?? e?.code;
-    if (!status || status !== 403) {
-      pendingGskRequests.delete(key); // Retry bei anderen Fehlern erlauben
-    }
+    if (status === 403 || status === 400) return;
+    pendingGskRequests.delete(key); // Retry bei anderen Fehlern erlauben
   }
 }
 
@@ -2239,14 +1805,14 @@ if (now - lastSendTime < SEND_COOLDOWN_MS) {
       tempId,
       ts:            now,
       status:        "pending",
-      replyToId:     _replyState?.id       || null,
-      replyFrom:     _replyState?.from     || null,
-      replyPlaintext: _replyState?.plaintext || null
+      replyToId:     getReplyState()?.id       || null,
+      replyFrom:     getReplyState()?.from     || null,
+      replyPlaintext: getReplyState()?.plaintext || null
     });
     if (pendingDiv) pendingByTempId.set(tempId, pendingDiv);
 
     // _replyState sichern VOR clearReplyBar (sonst ist es null beim Encrypt)
-    const _savedReplyState = _replyState ? { ..._replyState } : null;
+    const _savedReplyState = getReplyState() ? { ...getReplyState() } : null;
 
     inputEl.value = "";
     clearReplyBar();
@@ -2521,39 +2087,7 @@ function showSystemMessage(text) {
   scrollToBottom();
 }
 
-// ======================================================
-// 🗑️ AUTO-DELETE SWEEP — ersetzt abgelaufene Nachrichten live
-// ======================================================
-let _sweepInterval = null;
-
-function sweepExpiredMessages() {
-  if (!messagesEl || !_autoDeleteDays) return;
-  // Alle Nachrichten-Bubbles (eigene + empfangene) erfassen
-  const bubbles = Array.from(messagesEl.querySelectorAll("[data-ts]"))
-    .filter(el => el.classList.contains("me") || el.classList.contains("other"));
-  for (const el of bubbles) {
-    const ts = Number(el.dataset.ts);
-    if (!ts || !isAutoDeleted(ts)) continue;
-    // Element direkt in System-Message umwandeln (robuster als replaceWith)
-    el.className = "system";
-    el.removeAttribute("data-id");
-    el.removeAttribute("data-temp-id");
-    el.removeAttribute("data-ts");
-    el.innerHTML = "";
-    el.textContent = lang.messageExpired || "⏱ Nachricht automatisch gelöscht";
-  }
-}
-
-function startExpirySwep() {
-  if (_sweepInterval) return;
-  // Alle 10 Sekunden prüfen ob Nachrichten abgelaufen sind
-  _sweepInterval = setInterval(sweepExpiredMessages, 10_000);
-}
-
-function stopExpirySweep() {
-  if (_sweepInterval) { clearInterval(_sweepInterval); _sweepInterval = null; }
-}
-
+// Auto-Delete sweep → chatAutoDelete.js
 function isUserAtBottom() {
   if (!messagesEl) return true; // ⬅️ WICHTIG
   const threshold = 80;
@@ -2562,294 +2096,7 @@ function isUserAtBottom() {
   return distance <= threshold;
 }
 
-// ======================================================
-// 🗑️ AUTO-DELETE UI
-// ======================================================
-function autoDeleteLabel(days) {
-  if (!days) return lang.autoDeleteOff || "Aus";
-  const d = Number(days);
-  if (d <= 0.05) return lang.autoDeleteOneHour || "1h";
-  const map = {
-    1:  lang.autoDeleteOneDay      || "24h",
-    7:  lang.autoDeleteOneWeek     || "7 Tage",
-    30: lang.autoDeleteThirtyDays  || "30 Tage",
-  };
-  return map[d] ?? `${d} Tage`;
-}
-
-function showAutoDeleteBanner(text, type = "info") {
-  let banner = document.getElementById("auto-delete-banner");
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.id = "auto-delete-banner";
-    banner.style.cssText = "position:sticky;top:0;z-index:10;padding:8px 16px;font-size:13px;text-align:center;transition:opacity 0.3s;";
-    document.getElementById("messages")?.prepend(banner);
-  }
-  banner.style.background = type === "success" ? "var(--accent)" : "var(--bg-panel)";
-  banner.style.color = type === "success" ? "#fff" : "var(--text-secondary)";
-  banner.textContent = text;
-  banner.style.display = "block";
-  setTimeout(() => { banner.style.opacity = "0"; setTimeout(() => banner.remove(), 300); }, 4000);
-}
-
-function showAutoDeleteProposal(days) {
-  let bar = document.getElementById("auto-delete-proposal");
-  if (bar) bar.remove();
-  bar = document.createElement("div");
-  bar.id = "auto-delete-proposal";
-  bar.style.cssText = "position:sticky;top:0;z-index:10;padding:10px 16px;background:var(--bg-panel);border-bottom:1px solid var(--border-panel);display:flex;align-items:center;gap:10px;font-size:13px;";
-  // XSS-safe: DOM-Konstruktion statt innerHTML mit User-Daten
-  const adTextSpan = document.createElement("span");
-  adTextSpan.style.flex = "1";
-  const adStrong1 = document.createElement("strong");
-  adStrong1.textContent = withUser;
-  const adStrong2 = document.createElement("strong");
-  adStrong2.textContent = autoDeleteLabel(days);
-  if (days) {
-    adTextSpan.append("🗑️ ", adStrong1, " schlägt Auto-Delete vor: ", adStrong2);
-  } else {
-    adTextSpan.append("🗑️ ", adStrong1, " möchte Auto-Delete deaktivieren");
-  }
-  const adAcceptBtn = document.createElement("button");
-  adAcceptBtn.id = "ad-accept";
-  adAcceptBtn.style.cssText = "padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;";
-  adAcceptBtn.textContent = "Akzeptieren";
-  const adDeclineBtn = document.createElement("button");
-  adDeclineBtn.id = "ad-decline";
-  adDeclineBtn.style.cssText = "padding:4px 12px;background:transparent;color:var(--text-secondary);border:1px solid var(--border-panel);border-radius:6px;cursor:pointer;";
-  adDeclineBtn.textContent = "Ablehnen";
-  bar.append(adTextSpan, adAcceptBtn, adDeclineBtn);
-  document.getElementById("messages")?.prepend(bar);
-
-  bar.querySelector("#ad-accept").addEventListener("click", async () => {
-    try {
-      await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action: "accept", days }) });
-      bar.remove();
-      const activeDays = days || null; // days=0 → null (deaktiviert)
-      updateAutoDeleteHeaderLabel(activeDays, true);
-      showAutoDeleteBanner(activeDays ? `✅ Auto-Delete aktiv: ${autoDeleteLabel(activeDays)}` : "✅ Auto-Delete deaktiviert", "success");
-    } catch (e) { console.warn("Auto-Delete accept fehlgeschlagen", e); }
-  });
-
-  bar.querySelector("#ad-decline").addEventListener("click", async () => {
-    try {
-      await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action: "decline" }) });
-      bar.remove();
-      showAutoDeleteBanner("❌ Auto-Delete abgelehnt", "info");
-    } catch (e) { console.warn("Auto-Delete decline fehlgeschlagen", e); }
-  });
-}
-
-let _autoDeleteDays = null; // aktuelles Auto-Delete Setting (Tage)
-
-function isAutoDeleted(ts) {
-  if (!_autoDeleteDays || !ts) return false;
-  return (Date.now() - Number(ts)) > (_autoDeleteDays * 86_400_000);
-}
-
-function decryptFailedText(ts) {
-  return isAutoDeleted(ts) ? (lang.messageExpired || "⏱ Nachricht automatisch gelöscht") : lang.decryptFailed;
-}
-
-// active=true  → Sweep starten (beide Seiten haben akzeptiert)
-// active=false → nur Label/days setzen, kein Sweep (z.B. pending-Vorschlag)
-function updateAutoDeleteHeaderLabel(days, active = true) {
-  _autoDeleteDays = days || null;
-  if (active) {
-    if (_autoDeleteDays) { startExpirySwep(); } else { stopExpirySweep(); }
-  }
-  const lbl = document.getElementById("chat-autodelete-label");
-  if (lbl) lbl.textContent = days ? autoDeleteLabel(days) : "Aus";
-
-  // Aktive Option im Submenu mit ✓ markieren
-  document.querySelectorAll(".chat-ad-opt").forEach(el => {
-    const v = el.dataset.days === "" ? null : Number(el.dataset.days);
-    const isActive = v === days;
-    el.style.fontWeight = isActive ? "700" : "400";
-    el.textContent = el.textContent.replace(" ✓", "") + (isActive ? " ✓" : "");
-  });
-}
-
-async function initAutoDeleteUI() {
-  updateAutoDeleteHeaderLabel(null); // Default: Aus
-
-  const isGroup = isGroupConversation(withUser);
-  let amGroupAdmin = false;
-
-  // Aktuelles Setting laden
-  try {
-    if (isGroup) {
-      const s = await apiFetch(`/groups/auto-delete?groupId=${encodeURIComponent(withUser)}`);
-      if (s?.status === "active") { updateAutoDeleteHeaderLabel(s.days); startExpirySwep(); }
-      amGroupAdmin = s?.myRole === "admin";
-    } else {
-      const s = await apiFetch(`/chat/auto-delete?peer=${encodeURIComponent(withUser)}`);
-      if (s?.status === "active") {
-        updateAutoDeleteHeaderLabel(s.days, true); // aktiv → Sweep starten
-      } else if (s?.status === "pending" && s?.proposed_by === getMyUser()) {
-        if (!s.days) {
-          // Vorschlag: Deaktivieren — original_days für Sweep nutzen falls vorhanden
-          if (s.original_days) {
-            updateAutoDeleteHeaderLabel(s.original_days, true); // Sweep mit altem Wert aktiv halten
-          }
-          showAutoDeleteBanner("📤 Vorschlag gesendet: Auto-Delete deaktivieren", "info");
-        } else {
-          updateAutoDeleteHeaderLabel(s.days, false); // eigener Vorschlag → days setzen, kein Sweep
-        }
-      } else if (s?.status === "pending") {
-        showAutoDeleteProposal(s.days); // eingehender Vorschlag → Banner zeigen
-      }
-    }
-  } catch {}
-
-  // ⋮ Menü-Button — für Gäste deaktivieren (kein Dropdown, nur statischer Titel)
-  const menuBtn = document.getElementById("chat-menu-btn");
-  const menuDropdown = document.getElementById("chat-menu-dropdown");
-  if (_isGuestMode && menuBtn) {
-    menuBtn.style.cursor = "default";
-    menuBtn.style.pointerEvents = "none";
-    if (menuDropdown) menuDropdown.style.display = "none";
-  }
-  const adSubmenu = document.getElementById("chat-autodelete-submenu");
-  const adMenuItem = document.getElementById("chat-menu-autodelete");
-
-  // Für Gruppen: Admin-only Optionen sichtbar/versteckt
-  const renameMenuItem = document.getElementById("chat-menu-rename");
-  if (isGroup && renameMenuItem) renameMenuItem.style.display = amGroupAdmin ? "" : "none";
-
-  // Auto-Delete im Dropdown: Admin → änderbar, Mitglied → read-only (sichtbar)
-  if (isGroup && adMenuItem) {
-    if (!amGroupAdmin) {
-      // Nicht-Admin: Item anzeigen aber read-only (kein Submenu, kein Hover-Cursor)
-      adMenuItem.style.cursor = "default";
-      adMenuItem.style.opacity = "0.75";
-      if (adSubmenu) adSubmenu.style.display = "none";
-      adMenuItem.addEventListener("click", (e) => e.stopPropagation(), { capture: true });
-      // Hint "(Admin)" einblenden
-      const hint = document.getElementById("chat-autodelete-readonly-hint");
-      if (hint) hint.style.display = "inline";
-    }
-  }
-
-  // Rename-Handler (nur einmal setzen)
-  if (isGroup && amGroupAdmin && renameMenuItem && !renameMenuItem._listenerSet) {
-    renameMenuItem._listenerSet = true;
-    renameMenuItem.addEventListener("click", async () => {
-      if (menuDropdown) menuDropdown.style.display = "none";
-      const titleEl = document.getElementById("chat-with");
-      const currentName = titleEl?.textContent.trim() || "";
-      const newName = prompt("Gruppenname:", currentName);
-      if (!newName || newName.trim() === currentName) return;
-      try {
-        await apiFetch("/groups/rename", {
-          method: "POST",
-          body: JSON.stringify({ groupId: withUser, name: newName.trim() })
-        });
-        if (titleEl) titleEl.textContent = newName.trim();
-      } catch (e) {
-        alert("Umbenennen fehlgeschlagen: " + (e.message || e));
-      }
-    });
-  }
-
-  // 🔗 Einladungslink-Button (nur für eingeloggte User, nicht für Gäste)
-  const inviteItem = document.getElementById("chat-invite-item");
-  if (inviteItem && !_isGuestMode) {
-    inviteItem.style.display = "flex";
-  }
-
-  if (menuBtn && menuDropdown) {
-    const openMenu  = () => { menuDropdown.style.display = "block"; };
-    const closeMenu = () => { menuDropdown.style.display = "none"; if (adSubmenu) adSubmenu.style.display = "none"; };
-
-    menuBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      menuDropdown.style.display === "block" ? closeMenu() : openMenu();
-    });
-
-    menuDropdown.addEventListener("click", (e) => e.stopPropagation());
-    document.addEventListener("click", closeMenu);
-  }
-
-  // Auto-Delete Submenu toggle
-  adMenuItem?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (!adSubmenu) return;
-    adSubmenu.style.display = adSubmenu.style.display === "block" ? "none" : "block";
-  });
-
-  // 🔔 Notifications Mute Toggle
-  const muteItem   = document.getElementById("chat-menu-mute");
-  const muteStatus = document.getElementById("chat-mute-status");
-  const muteLabel  = document.getElementById("chat-mute-label");
-
-  const convoId = isGroup ? withUser : (() => {
-    const [a, b] = [getMyUser(), withUser].sort();
-    return `${a}:${b}`;
-  })();
-
-  let _isMuted = false;
-
-  function updateMuteUI(muted) {
-    _isMuted = muted;
-    if (muteLabel)  muteLabel.textContent  = muted ? "🔕 Benachrichtigungen" : "🔔 Benachrichtigungen";
-    if (muteStatus) {
-      muteStatus.textContent  = muted ? "Aus" : "An";
-      muteStatus.style.color  = muted ? "var(--text-secondary)" : "var(--accent)";
-    }
-  }
-
-  // Aktuellen Mute-Status laden
-  try {
-    const { muted: mutedList } = await apiFetch("/notifications/muted");
-    updateMuteUI((mutedList || []).includes(convoId));
-  } catch {}
-
-  muteItem?.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    const newMuted = !_isMuted;
-    try {
-      await apiFetch("/notifications/mute", {
-        method: "POST",
-        body: JSON.stringify({ convoId, mute: newMuted })
-      });
-      updateMuteUI(newMuted);
-      // Inbox-Mute-Cache invalidieren → nächster Load holt frischen Stand
-      localStorage.setItem("renex_muted_cache_ts", "0");
-    } catch (err) { console.warn("Mute toggle failed:", err); }
-  });
-
-  // Auto-Delete Optionen
-  document.querySelectorAll(".chat-ad-opt").forEach(el => {
-    el.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const days = el.dataset.days === "" ? null : Number(el.dataset.days);
-      menuDropdown.style.display = "none";
-      if (adSubmenu) adSubmenu.style.display = "none";
-      try {
-        if (isGroup) {
-          // Admin setzt direkt — kein Konsens nötig
-          await apiFetch("/groups/auto-delete", { method: "POST", body: JSON.stringify({ groupId: withUser, days }) });
-          updateAutoDeleteHeaderLabel(days);
-          showAutoDeleteBanner(days ? `✅ Auto-Delete: ${autoDeleteLabel(days)}` : "🗑️ Auto-Delete deaktiviert", "success");
-        } else {
-          // DM: Konsens-Vorschlag senden — auch "Aus" muss vom Peer akzeptiert werden
-          const daysPayload = days === null ? 0 : days;
-          await apiFetch("/chat/auto-delete", { method: "POST", body: JSON.stringify({ peer: withUser, action: "propose", days: daysPayload }) });
-          if (days === null) {
-            // Vorschlag: Auto-Delete deaktivieren — Sweep läuft weiter bis Peer akzeptiert
-            showAutoDeleteBanner("📤 Vorschlag gesendet: Auto-Delete deaktivieren", "info");
-          } else {
-            // _autoDeleteDays setzen (für isAutoDeleted-Checks), aber Sweep NICHT starten
-            // — Sweep startet erst wenn Peer akzeptiert (status: active)
-            updateAutoDeleteHeaderLabel(days, false);
-            showAutoDeleteBanner(`📤 Vorschlag gesendet: ${autoDeleteLabel(days)}`, "info");
-          }
-        }
-      } catch (err) { console.warn("Auto-Delete fehlgeschlagen", err); }
-    });
-  });
-}
+// Auto-Delete UI → chatAutoDelete.js
 
 // ======================================================
 // 📎 ATTACHMENT UI: Foto, Datei, GIF
@@ -3189,12 +2436,12 @@ async function initGroupMembersUI(groupId) {
           if (isGuest) {
             // Gäste können nicht als Kontakt hinzugefügt werden → kein Button
           } else if (isContact) {
-            addBtn.textContent = "✓ Kontakt";
+            addBtn.textContent = lang.contactAdded;
             addBtn.disabled = true;
             addBtn.style.opacity = "0.45";
             li.appendChild(addBtn);
           } else {
-            addBtn.textContent = "+ Anfragen";
+            addBtn.textContent = lang.requestContact;
             addBtn.addEventListener("click", async (e) => {
               e.stopPropagation();
               addBtn.disabled = true;
@@ -3205,18 +2452,18 @@ async function initGroupMembersUI(groupId) {
                   body: JSON.stringify({ contact: m.member_handle })
                 });
                 if (r.status === "already_exists" || r.status === "accepted") {
-                  addBtn.textContent = "✓ Kontakt";
-                  _cachedAcceptedContacts = null; // Cache invalidieren
+                  addBtn.textContent = lang.contactAdded;
+                  invalidateContactsCache(); // Cache invalidieren
                 } else if (r.status === "already_pending") {
-                  addBtn.textContent = "✓ Ausstehend";
+                  addBtn.textContent = lang.requestPending;
                 } else {
-                  addBtn.textContent = "✓ Gesendet";
+                  addBtn.textContent = lang.requestSentConfirm;
                 }
                 addBtn.style.opacity = "0.5";
               } catch {
-                addBtn.textContent = "✗ Fehler";
+                addBtn.textContent = lang.errorLabel;
                 setTimeout(() => {
-                  addBtn.textContent = "+ Anfragen";
+                  addBtn.textContent = lang.requestContact;
                   addBtn.disabled = false;
                   addBtn.style.opacity = "1";
                 }, 2000);
@@ -3224,6 +2471,48 @@ async function initGroupMembersUI(groupId) {
             });
             li.appendChild(addBtn);
           }
+        }
+
+        // ── Kick-Button (nur Admin, nicht eigenes Handle, nicht im Gast-Modus) ──
+        if (amAdmin && !isMe && !_isGuestMode) {
+          const kickBtn = document.createElement("button");
+          kickBtn.textContent = "×";
+          kickBtn.title = lang.confirmRemoveMember(m.member_handle);
+          kickBtn.style.cssText = "font-size:14px;font-weight:700;line-height:1;padding:2px 7px;border-radius:5px;border:1px solid var(--border-subtle);background:transparent;color:var(--status-error,#F87171);cursor:pointer;flex-shrink:0;margin-left:4px;transition:opacity 0.15s;";
+          kickBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (!confirm(lang.confirmRemoveMember(guestDisplayName(m.member_handle)))) return;
+            kickBtn.disabled = true;
+            try {
+              const r = await apiFetch("/groups/remove", {
+                method: "POST",
+                body: JSON.stringify({ groupId, handle: m.member_handle })
+              });
+              if (!r.ok) throw new Error(r.error || "failed");
+
+              // GSK rotieren: neuen Key generieren + an alle verbleibenden Devices verteilen
+              const updatedRes = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
+              const remaining = (updatedRes.members || []).filter(x => x.member_handle !== m.member_handle);
+              const allDevices = (await Promise.all(
+                remaining.map(async rm => {
+                  try {
+                    const d = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(rm.member_handle)}`);
+                    return (d.devices || []).map(dev => ({ ...dev, memberHandle: rm.member_handle }));
+                  } catch { return []; }
+                })
+              )).flat();
+              if (allDevices.length) {
+                await rotateGroupSK(groupId, getMyUser(), allDevices, apiFetch);
+                console.log("🔑 GSK rotiert nach Kick von", m.member_handle);
+              }
+
+              await refreshMembers();
+            } catch (err) {
+              alert(lang.removeMemberFailed + (err.message || err));
+              kickBtn.disabled = false;
+            }
+          });
+          li.appendChild(kickBtn);
         }
 
         memberList.appendChild(li);
@@ -3262,6 +2551,8 @@ async function initGroupMembersUI(groupId) {
         alert(lang.userNotFound(handle));
       } else if (msg.includes("Not in your contacts") || msg.includes("contacts")) {
         alert(lang.notInContacts(handle));
+      } else if (msg.includes("Group full") || msg.includes("full")) {
+        alert(lang.groupFull);
       } else {
         alert(lang.inviteFailed + msg);
       }
@@ -3372,18 +2663,7 @@ cooldownTimer = setTimeout(() => {
   retryPendingIfPossible();
 }, SEND_COOLDOWN_MS);
 }
-function formatTimestamp(ts) {
-  if (!ts) return "";
-
-  const d = new Date(ts);
-  const time = d.toLocaleTimeString(lang.locale, {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-  const date = d.toLocaleDateString(lang.locale);
-
-  return `${time} · ${date}`;
-}
+// formatTimestamp → shared/timeFormat.js
 
 // ======================================================
 // OUTBOX CACHE (für eigene gesendete E2E-Nachrichten)
@@ -3467,20 +2747,21 @@ async function showSenderPopover(handle, anchorEl, plaintext = "") {
   // Presence + Kontaktstatus parallel laden
   const actionEl = popover.querySelector("#sender-popover-action");
   try {
-    const [contacts, presence] = await Promise.all([
-      fetchAcceptedContacts(),
-      fetchPresence([handle])
-    ]);
-    const isContact = contacts.includes(handle);
-
-    // Presence-Label aktualisieren
+    // Gäste: nur Presence laden, keine Kontakt-Aktionen
+    const presence = await fetchPresence([handle]);
     const pStatus = presence?.[handle.toLowerCase()];
     if (presenceSpanPop) {
       presenceSpanPop.textContent = pStatus ? presenceLabel(pStatus) : "";
       presenceSpanPop.style.color = pStatus?.online ? "#4ade80" : "var(--text-secondary)";
     }
 
-    if (isContact) {
+    if (_isGuestMode) {
+      // Gast-Modus: Hinweis statt Action-Buttons
+      const hint = document.createElement("div");
+      hint.style.cssText = "font-size:12px;color:var(--text-secondary);padding:6px 0;text-align:center;";
+      hint.textContent = lang.registerToAddContacts;
+      actionEl.replaceWith(hint);
+    } else if ((await fetchAcceptedContacts()).includes(handle)) {
       // → DM öffnen (mit optionalem Reply-Kontext aus Gruppen-Nachricht)
       const btn = document.createElement("a");
       let dmUrl = `/chat?with=${encodeURIComponent(handle)}`;
@@ -3535,6 +2816,8 @@ async function showSenderPopover(handle, anchorEl, plaintext = "") {
   }, 0);
 }
 
+// linkify, escapeHtml → chatCrypto.js
+
 // ======================================================
 function renderMessage({ id, from, message, ts, tempId = null, status = "sent", msg = null,
                          replyToId = null, replyFrom = null, replyPlaintext = null,
@@ -3580,7 +2863,16 @@ if (!isOwnMessage && isGroupConversation(withUser) && from) {
 
 const textEl = document.createElement("div");
 textEl.className = "msg-text";
-textEl.textContent = attachment ? "" : (message || "");
+if (attachment) {
+  textEl.textContent = "";
+} else {
+  const linked = linkify(message || "");
+  if (linked !== escapeHtml(message || "")) {
+    textEl.innerHTML = linked;
+  } else {
+    textEl.textContent = message || "";
+  }
+}
 
 div.appendChild(textEl);
 
@@ -3622,7 +2914,7 @@ if (attachment) {
     const sizeKb = attachment.payload.fileSize ? Math.ceil(attachment.payload.fileSize / 1024) : "?";
     const dlBtn = document.createElement("button");
     dlBtn.style.cssText = "background:var(--bg-panel-alt);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 14px;cursor:pointer;font-size:13px;color:var(--text-primary);display:flex;align-items:center;gap:8px;max-width:220px;text-align:left;";
-    dlBtn.innerHTML = `<span style="font-size:18px;">📎</span><div><div style="font-weight:600;word-break:break-all;">${attachment.payload.fileName || "Datei"}</div><div style="font-size:11px;color:var(--text-secondary);">${sizeKb} KB</div></div>`;
+    dlBtn.innerHTML = `<span style="font-size:18px;">📎</span><div><div style="font-weight:600;word-break:break-all;">${attachment.payload.fileName || lang.fileLabel}</div><div style="font-size:11px;color:var(--text-secondary);">${sizeKb} KB</div></div>`;
     dlBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       dlBtn.disabled = true; dlBtn.style.opacity = "0.6";
@@ -3836,13 +3128,18 @@ async function editMessage(msgId, newText, div, textEl, ta) {
 
     // Bubble sofort aktualisieren
     ta.remove();
-    textEl.textContent = newText;
+    const linkedNew = linkify(newText);
+    if (linkedNew !== escapeHtml(newText)) {
+      textEl.innerHTML = linkedNew;
+    } else {
+      textEl.textContent = newText;
+    }
     textEl.style.display = "";
     applyEditedBadge(div);
     savePreviewCache(previewConvoId(withUser), { text: newText, ts: Date.now(), from: getMyUser() });
   } catch (err) {
     cancelInlineEdit(div, textEl, ta);
-    alert("Bearbeiten fehlgeschlagen: " + (err.message || err));
+    alert(lang.editFailed + (err.message || err));
   }
 }
 
@@ -3968,8 +3265,15 @@ async function processMessage(m) {
         if (ok) {
           console.log("🔑 GSK via Polling empfangen von:", m.from, "→ flush deferred");
           flushDeferredInboundMessages().catch(() => {});
+        } else {
+          // GSK konnte nicht verarbeitet werden (JWK fehlt, Payload-Mismatch, …)
+          // → ID aus renderedMessageIds entfernen damit nächster Poll erneut versucht
+          renderedMessageIds.delete(m.id);
         }
-      }).catch(e => console.warn("⚠️ receiveGroupSK (polling):", e));
+      }).catch(e => {
+        console.warn("⚠️ receiveGroupSK (polling):", e);
+        renderedMessageIds.delete(m.id); // Retry erlauben
+      });
     }
     return false;
   }
@@ -3980,18 +3284,18 @@ async function processMessage(m) {
   // D1-Polling: m.requestedFrom fehlt → in m.message gespeichert (Fallback)
   const _reqGskGroupId  = m.groupId || (isGroupConversation(withUser) ? withUser : null);
   const _reqGskTarget   = m.requestedFrom || m.message; // m.message = requestedFrom (D1-Fallback)
-  if (m.type === "request_gsk" && _reqGskGroupId && _reqGskTarget === getMyUser() && m.from) {
+  const _myHandleForGsk = _isGuestMode ? _guestData?.guestHandle : getMyUser();
+  if (m.type === "request_gsk" && _reqGskGroupId && _reqGskTarget === _myHandleForGsk && m.from) {
     if (!renderedMessageIds.has(m.id)) {
       renderedMessageIds.add(m.id);
       (async () => {
         try {
-          await getOrCreateGroupSK(_reqGskGroupId, getMyUser());
+          await getOrCreateGroupSK(_reqGskGroupId, _myHandleForGsk);
           const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(m.from)}`);
           const devs = Array.isArray(r.devices) ? r.devices : [];
           if (devs.length) {
-            await distributeGroupSK(_reqGskGroupId, getMyUser(),
+            await distributeGroupSK(_reqGskGroupId, _myHandleForGsk,
               devs.map(d => ({ ...d, memberHandle: m.from })), apiFetch);
-            console.log("✅ GSK nachträglich gesendet an:", m.from);
           }
         } catch (e) { console.warn("⚠️ request_gsk (polling) response fehlgeschlagen:", e); }
       })();
@@ -4022,7 +3326,16 @@ async function processMessage(m) {
     return false;
   }
 
-  if (deferredInboundIds.has(messageId) && !e2eReady) return false;
+  // Bereits in der Deferred-Queue → nicht nochmal hinzufügen (würde MAX_INBOUND_RETRIES schnell erschöpfen)
+  // Gilt für Gruppen (e2eReady=true immer) UND DMs (e2eReady=false bis CMK bereit).
+  // flushDeferredInboundMessages() übernimmt das Retry wenn GSK/CMK eintrifft.
+  if (deferredInboundIds.has(messageId)) {
+    // GSK weiter anfordern (rate-limited via pendingGskRequests, 10s Cooldown)
+    if (isGroupConversation(withUser) && m.from && m.from !== getMyUser() && m.ivB64) {
+      requestGSKFrom(withUser, m.from).catch(() => {});
+    }
+    return false;
+  }
 
   let text;
   try {
@@ -4043,7 +3356,7 @@ async function processMessage(m) {
     renderMessage({
       id: messageId,
       from: m.from,
-      message: "🔒 Nachricht wird entschlüsselt…",
+      message: lang.decryptPending,
       ts: m.ts
     });
     renderedMessageIds.add(messageId);
@@ -4166,9 +3479,9 @@ async function processMessage(m) {
   if (m.edited_at && renderedDiv) applyEditedBadge(renderedDiv);
   // Attachment-Nachrichten: lesbarer Preview statt Raw-JSON
   const previewText = incomingAttachment
-    ? (incomingAttachment.type === "photo" ? "📷 Foto"
+    ? (incomingAttachment.type === "photo" ? lang.photoLabel
      : incomingAttachment.type === "gif"   ? "GIF"
-     : incomingAttachment.type === "file"  ? `📎 ${incomingAttachment.payload?.fileName || "Datei"}`
+     : incomingAttachment.type === "file"  ? `📎 ${incomingAttachment.payload?.fileName || lang.fileLabel}`
      : displayText)
     : displayText;
   savePreviewCache(previewConvoId(withUser), { text: previewText, ts: m.ts || Date.now(), from: m.from });
@@ -4353,6 +3666,13 @@ async function pollLoop() {
     console.log("⏳ Poll Backoff aktiv:", pollDelay, "ms");
   }
 
+  // Gruppen: deferred Nachrichten nach jedem Poll erneut entschlüsseln versuchen.
+  // Gäste haben keinen WebSocket → GSK_READY wird nie via BroadcastChannel getriggert.
+  // Dieser Pfad stellt sicher dass die Deferred-Queue auch ohne WS periodisch geleert wird.
+  if (isGroupConversation(withUser) && deferredInboundMessages.length > 0) {
+    flushDeferredInboundMessages().catch(() => {});
+  }
+
   isLoadingMessages = false;
   scheduleNextPoll();
 }
@@ -4453,27 +3773,31 @@ async function ensureGroupChatReady(groupId, myHandle) {
     return;
   }
 
-  // Pro Mitglied: Devices laden + eigenen GSK senden + fehlende GSKs anfordern
-  // Promise.allSettled → alle Members parallel, kein sequenzielles Warten
-  const results = await Promise.allSettled(members.map(async (member) => {
+  // Schritt 1: Eigenen GSK an alle Members parallel senden (Push) — kein Rate-Limit-Risiko
+  const distributeResults = await Promise.allSettled(members.map(async (member) => {
     const devices = await fetchInboxKeys(member.member_handle);
-    if (!devices?.length) return { handle: member.member_handle, distributed: false, requested: false };
-
-    // 1) Eigenen GSK an Member senden (Push)
+    if (!devices?.length) return { handle: member.member_handle, distributed: false };
     const tagged = devices.map(d => ({ ...d, memberHandle: member.member_handle }));
     await distributeGroupSK(groupId, myHandle, tagged, apiFetch);
-
-    // 2) Falls wir ihren GSK noch nicht haben → anfordern (Pull)
-    const existingGsk = await getGroupSK(groupId, member.member_handle);
-    if (!existingGsk) await requestGSKFrom(groupId, member.member_handle);
-
-    return { handle: member.member_handle, distributed: true, requested: !existingGsk };
+    return { handle: member.member_handle, distributed: true };
   }));
 
-  const distributed = results.filter(r => r.status === "fulfilled" && r.value?.distributed).length;
-  const requested   = results.filter(r => r.status === "fulfilled" && r.value?.requested).length;
-  const failed      = results.filter(r => r.status === "rejected").length;
+  const distributed = distributeResults.filter(r => r.status === "fulfilled" && r.value?.distributed).length;
+  const failed      = distributeResults.filter(r => r.status === "rejected").length;
   if (failed > 0) console.warn("⚠️ GSK distribute fehlgeschlagen für", failed, "Members");
+
+  // Schritt 2: Fehlende GSKs sequenziell anfordern (Pull) — 300ms Stagger verhindert 429
+  let requested = 0;
+  for (const member of members) {
+    const existingGsk = await getGroupSK(groupId, member.member_handle);
+    if (!existingGsk) {
+      await requestGSKFrom(groupId, member.member_handle);
+      requested++;
+      if (requested < members.length) {
+        await new Promise(r => setTimeout(r, 300)); // 300ms zwischen Requests
+      }
+    }
+  }
 
   sessionStorage.setItem(distKey, "1");
   console.log("✅ GSK distribuiert:", { groupId, members: members.length, distributed, requested, failed });
@@ -4493,6 +3817,23 @@ if (window.__chatStartupDone) {
 window.__chatStartupDone = true;
 
   console.log("💬 Chat Startup läuft");
+
+  // ── Module mit Live-Gettern konfigurieren ──
+  setupAutoDelete({
+    getWithUser: () => withUser,
+    getMyUser,
+    isGroupConversation,
+    getMessagesEl: () => messagesEl
+  });
+  setupPresence({
+    getWithUser: () => withUser,
+    isGroupConversation
+  });
+  setupContextMenu({
+    getMyUser,
+    startInlineEdit,
+    deleteMessage
+  });
 
   // ══ GAST-MODUS: Ephemeres E2E (Key aus sessionStorage) ══════════════
   if (_isGuestMode && _guestData) {

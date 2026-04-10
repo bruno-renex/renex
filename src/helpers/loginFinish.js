@@ -5,6 +5,10 @@ import { rateLimit, registerSessionToken } from '../auth.js';
 // AUTH / LOGIN / FINISH handler (extracted for line-count budget)
 // Called from authRoutes.js
 // ======================================================
+const LOGIN_FAIL_LIMIT  = 5;               // Versuche bis Sperre
+const LOGIN_LOCKOUT_MS  = 15 * 60 * 1000; // 15 Minuten Sperre
+const LOGIN_FAIL_TTL_S  = 300;            // Zähler-TTL ohne Lockout: 5 min
+
 export async function handleLoginFinish(request, env) {
   const ip = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
   const ok = await rateLimit(env, `login_finish:${ip}`, 60_000, 20);
@@ -17,6 +21,19 @@ export async function handleLoginFinish(request, env) {
 
   if (!/^[a-z0-9_]+$/.test(handle)) {
     return json(request, { error: "Invalid handle" }, 400);
+  }
+
+  // Handle-Lockout prüfen (verhindert Brute-Force von verschiedenen IPs)
+  const failKey = `login_fail:${handle}`;
+  const failRaw = await env.RENEX_KV.get(failKey);
+  if (failRaw) {
+    try {
+      const failData = JSON.parse(failRaw);
+      if (failData.until && Date.now() < failData.until) {
+        const remainingSec = Math.ceil((failData.until - Date.now()) / 1000);
+        return json(request, { error: "Account temporarily locked", retryAfterSec: remainingSec }, 429);
+      }
+    } catch {}
   }
 
   // Challenge laden
@@ -190,11 +207,24 @@ export async function handleLoginFinish(request, env) {
   }
 
   if (!signatureValid) {
+    // Fehlversuch zählen → bei LOGIN_FAIL_LIMIT Sperre aktivieren
+    try {
+      const raw2 = await env.RENEX_KV.get(failKey);
+      const prev = raw2 ? JSON.parse(raw2) : { count: 0 };
+      const newCount = (prev.count || 0) + 1;
+      const locked   = newCount >= LOGIN_FAIL_LIMIT;
+      await env.RENEX_KV.put(
+        failKey,
+        JSON.stringify({ count: newCount, until: locked ? Date.now() + LOGIN_LOCKOUT_MS : null }),
+        { expirationTtl: locked ? Math.ceil(LOGIN_LOCKOUT_MS / 1000) : LOGIN_FAIL_TTL_S }
+      );
+    } catch {}
     return json(request, { error: "Authentication failed" }, 401);
   }
 
-  // Challenge löschen (JETZT!)
+  // Challenge + Fail-Counter löschen (erfolgreicher Login)
   await env.RENEX_KV.delete(`challenge:login:${handle}`);
+  await env.RENEX_KV.delete(failKey).catch(() => {});
 
   // signCount persistieren
   await env.RENEX_KV.put(

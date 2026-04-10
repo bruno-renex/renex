@@ -1,4 +1,4 @@
-import { json, readJson, param, dmConvoId } from '../utils.js';
+import { json, readJson, param, dmConvoId, isUUID } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit, pushToUserDO, pushToGroupMembers } from '../auth.js';
 import { handleChatSend } from '../helpers/chatSend.js';
 
@@ -57,6 +57,9 @@ export async function handleChatRoutes(request, env, path, params) {
 
         const cursorRaw = param(params, "cursor");
         const cursor = cursorRaw ? Number(cursorRaw) : null;
+        if (cursor !== null && (isNaN(cursor) || cursor < 0 || cursor > Date.now())) {
+          return json(request, { error: "Invalid cursor" }, 400);
+        }
 
         if (!otherRaw) {
           return json(request, { error: "Missing 'with' parameter" }, 400);
@@ -64,12 +67,15 @@ export async function handleChatRoutes(request, env, path, params) {
 
         const other = String(otherRaw).toLowerCase();
         // Gruppe = UUID direkt verwenden; DM = sorted "alice:bob"
-        const isGroupConvo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(other);
+        const isGroupConvo = isUUID(other);
         const cid = isGroupConvo ? other : dmConvoId(me, other);
 
         // Gäste: dürfen NUR ihre zugewiesene Konversation lesen
+        if (isGuest && !session.convoId) {
+          return json(request, { error: "Not authenticated" }, 401);
+        }
         if (isGuest && cid !== session.convoId) {
-          return json(request, { error: "Guests can only read their assigned conversation" }, 403);
+          return json(request, { error: "Not authorized for this conversation" }, 403);
         }
 
         // Gäste: Session-Ablauf sofort prüfen (verhindert unbegrenztes Mitlesen)
@@ -78,7 +84,7 @@ export async function handleChatRoutes(request, env, path, params) {
             "SELECT expires_at, converted_to FROM guest_sessions WHERE token = ?"
           ).bind(session.token).first();
           if (!guestRow || guestRow.converted_to || Date.now() > guestRow.expires_at) {
-            return json(request, { error: "Guest session expired" }, 410);
+            return json(request, { error: "Session expired" }, 410);
           }
         }
 
@@ -143,24 +149,11 @@ export async function handleChatRoutes(request, env, path, params) {
         }
 
         // ======================================================
-        // UNREAD COUNTER RESET
+        // UNREAD COUNTER RESET (atomar via D1)
         // ======================================================
-        await env.RENEX_KV.delete(`unread:${me}:${other}`);
-
-        // UNREAD INDEX FIX
-        const unreadIndexKey = `unread_index:${me}`;
-
-        const rawUnreadIndex = await env.RENEX_KV.get(unreadIndexKey);
-
-        if (rawUnreadIndex) {
-          try {
-            const unreadIndex = JSON.parse(rawUnreadIndex);
-            if (unreadIndex && unreadIndex[other]) {
-              delete unreadIndex[other];
-              await env.RENEX_KV.put(unreadIndexKey, JSON.stringify(unreadIndex));
-            }
-          } catch {}
-        }
+        await env.RENEX_DB.prepare(
+          "DELETE FROM unread_counters WHERE owner = ? AND sender = ?"
+        ).bind(me, other).run();
 
         // Reaktionen für diese Nachrichten laden
         const msgIds = sliced.map(m => m.id).filter(Boolean);
@@ -199,11 +192,13 @@ export async function handleChatRoutes(request, env, path, params) {
 
         const me = String(session.handle || "").toLowerCase();
 
-        const raw = await env.RENEX_KV.get(`unread_index:${me}`);
+        const rows = await env.RENEX_DB.prepare(
+          "SELECT sender, count FROM unread_counters WHERE owner = ?"
+        ).bind(me).all();
 
-        let map = {};
-        if (raw) {
-          try { map = JSON.parse(raw); } catch {}
+        const map = {};
+        for (const row of (rows.results || [])) {
+          map[row.sender] = row.count;
         }
 
         return json(request, { unread: map });
@@ -235,7 +230,7 @@ export async function handleChatRoutes(request, env, path, params) {
         // Gruppen-Konversationen: kein Delivered-Tracking (Option D)
         // Status bleibt 'sent' = Server-Bestätigung ✓
         // UUID-Format erkennt Gruppen (DMs: "alice:bob")
-        const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(other);
+        const isGroup = isUUID(other);
         if (isGroup) {
           return json(request, { ok: true, updated: 0, skipped: "group" });
         }
@@ -307,7 +302,7 @@ export async function handleChatRoutes(request, env, path, params) {
         await env.RENEX_DB.prepare("DELETE FROM messages WHERE id = ?").bind(msgId).run();
 
         // Peer via DO benachrichtigen
-        const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.convo_id);
+        const isGroup = isUUID(row.convo_id);
         const deleteEvent = {
           id: crypto.randomUUID(),
           type: "message_deleted",
@@ -374,7 +369,7 @@ export async function handleChatRoutes(request, env, path, params) {
       ).bind(editedMessageJson, now, msgId).run();
 
       // Peer(s) benachrichtigen
-      const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.convo_id);
+      const isGroup = isUUID(row.convo_id);
       const editEvent = {
         id: crypto.randomUUID(),
         type: "message_edited",
@@ -403,7 +398,12 @@ export async function handleChatRoutes(request, env, path, params) {
       const session = await requireSession(request, env);
       if (!session) return json(request, { error: "Not authenticated" }, 401);
 
+      const url  = new URL(request.url);
       const me   = String(session.handle || "").toLowerCase();
+
+      const rl = await rateLimit(env, `rotation_idx:${me}`, 60_000, 30);
+      if (!rl) return json(request, { error: "Too many requests" }, 429);
+
       const peer = String(url.searchParams.get("peer") || "").toLowerCase();
       if (!peer) return json(request, { error: "Missing peer" }, 400);
 
@@ -453,7 +453,7 @@ export async function handleChatRoutes(request, env, path, params) {
       if (!msg) return json(request, { error: "Message not found" }, 404);
 
       // Mitgliedschaft prüfen (DM oder Gruppe)
-      const isGroup = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(msg.convo_id);
+      const isGroup = isUUID(msg.convo_id);
       let groupName = null;
       if (isGroup) {
         const member = await env.RENEX_DB.prepare(

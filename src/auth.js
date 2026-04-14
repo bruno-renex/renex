@@ -261,19 +261,23 @@ export async function revokeAllSessions(env, handle) {
 }
 
 // ── Event via DO an einzelnen User pushen ────────────
-// Fail-silent: User offline → kein Problem, KV hat's gespeichert
+// Gibt die Anzahl zugestellter WebSocket-Verbindungen zurück (0 = offline).
+// Fail-silent: User offline → return 0.
 export async function pushToUserDO(env, handle, event) {
   try {
     const id = env.USER_SESSION_DO.idFromName(String(handle).toLowerCase());
     const stub = env.USER_SESSION_DO.get(id);
-    await stub.fetch("https://do-internal/push", {
+    const res = await stub.fetch("https://do-internal/push", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(event),
     });
+    const data = await res.json().catch(() => ({}));
+    return data.delivered || 0;
   } catch (e) {
     // User offline oder DO nicht erreichbar → kein Fehler
     console.log("📴 pushToUserDO skipped (user offline):", handle);
+    return 0;
   }
 }
 

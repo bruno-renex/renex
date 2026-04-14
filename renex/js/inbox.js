@@ -5,6 +5,7 @@ import {
 import lang, { getLang, setLang } from "./i18n.js";
 import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
 import { formatTime } from "./shared/timeFormat.js";
+import { initServiceWorker, subscribeToPush, getPushStatus } from "./pushManager.js";
 
 // ================================
 // CONFIG
@@ -56,11 +57,18 @@ function showToast({ icon = "👥", title, sub = "", groupId = null, groupName =
     if (e.target.closest(".inbox-toast-close")) { dismissToast(toast); return; }
     dismissToast(toast);
     if (groupId) {
-      const nameParam = groupName ? `&name=${encodeURIComponent(groupName)}` : "";
-      window.location.href = `/chat?with=${encodeURIComponent(groupId)}${nameParam}`;
+      if (typeof window.openChatPanel === "function") {
+        window.openChatPanel(groupId, groupName || undefined);
+      } else {
+        const url = groupName
+          ? `/chat?with=${encodeURIComponent(groupId)}&name=${encodeURIComponent(groupName)}`
+          : `/chat?with=${encodeURIComponent(groupId)}`;
+        window.location.href = url;
+      }
     } else {
-      // Gruppen-Tab aktivieren
-      document.querySelector('.tab-btn[data-tab="groups"]')?.click();
+      // Gruppen-Section aktivieren
+      const groupsBtn = document.querySelector('.strip-icon[data-section="groups"]');
+      switchSection('groups', groupsBtn);
     }
   });
 
@@ -116,6 +124,7 @@ async function createGroupInviteLink(groupId, groupName, btnEl) {
   btnEl.textContent = "…";
   btnEl.disabled = true;
 
+  const fmt = (url) => (lang.linkCopiedClipboard || ((u) => u))(url);
   const doFetch = () => fetch(`${API}/invite/create`, {
     method:      "POST",
     credentials: "include",
@@ -133,7 +142,7 @@ async function createGroupInviteLink(groupId, groupName, btnEl) {
       try {
         const urlPromise = doFetch();
         await navigator.clipboard.write([
-          new ClipboardItem({ "text/plain": urlPromise.then(u => new Blob([u], { type: "text/plain" })) })
+          new ClipboardItem({ "text/plain": urlPromise.then(u => new Blob([fmt(u)], { type: "text/plain" })) })
         ]);
         await urlPromise;
         copied = true;
@@ -145,7 +154,7 @@ async function createGroupInviteLink(groupId, groupName, btnEl) {
     if (!copied && navigator.clipboard?.writeText) {
       try {
         const url = await doFetch();
-        await navigator.clipboard.writeText(url);
+        await navigator.clipboard.writeText(fmt(url));
         copied = true;
       } catch (e) {
         if (e.message === "no_url") throw e;
@@ -155,7 +164,7 @@ async function createGroupInviteLink(groupId, groupName, btnEl) {
     if (!copied) {
       const url = await doFetch();
       const ta = document.createElement("textarea");
-      ta.value = url;
+      ta.value = fmt(url);
       ta.style.cssText = "position:fixed;top:0;left:0;width:2em;height:2em;opacity:0;";
       document.body.appendChild(ta);
       ta.focus(); ta.select();
@@ -363,14 +372,66 @@ const btnCancelDelete = document.getElementById("btn-cancel-delete");
 const btnConfirmDelete = document.getElementById("btn-confirm-delete");
 
 // ================================
+// PUSH NOTIFICATION BANNER
+// ================================
+async function initPushBanner() {
+  const banner = document.getElementById("push-banner");
+  if (!banner) return;
+
+  // Bereits weggeklickt?
+  if (localStorage.getItem("renex_push_dismissed")) return;
+
+  // Push Status prüfen
+  const status = await getPushStatus();
+
+  // Nicht unterstützt → kein Banner
+  if (!status.supported) return;
+
+  // Bereits granted + subscribed → kein Banner
+  if (status.permission === "granted" && status.subscribed) return;
+
+  // Blocked → kein Banner (User hat bewusst blockiert)
+  if (status.permission === "denied") return;
+
+  // Banner-Texte aus i18n setzen
+  const titleEl = document.getElementById("push-banner-title");
+  const subtitleEl = document.getElementById("push-banner-subtitle");
+  if (titleEl) titleEl.textContent = lang.pushBannerTitle || "Enable notifications";
+  if (subtitleEl) subtitleEl.textContent = lang.pushBannerSubtitle || "Don't miss any messages";
+
+  // Banner anzeigen
+  banner.style.display = "block";
+
+  // Click-Handler: Permission fragen + Subscribe (User-Gesture!)
+  window.__enablePush = async () => {
+    try {
+      if (titleEl) titleEl.textContent = lang.pushBannerActivating || "Activating…";
+      await initServiceWorker();
+      const perm = await Notification.requestPermission();
+      if (perm === "granted") {
+        await subscribeToPush();
+        banner.style.display = "none";
+        localStorage.setItem("renex_push_dismissed", "1");
+        console.log("🔔 Push via Banner aktiviert");
+      } else {
+        if (titleEl) titleEl.textContent = lang.pushBannerBlocked || "Notifications blocked";
+        setTimeout(() => { banner.style.display = "none"; }, 2000);
+      }
+    } catch (err) {
+      console.warn("Push banner error:", err);
+      banner.style.display = "none";
+    }
+  };
+}
+
+// ================================
 // INIT
 // ================================
 document.addEventListener("DOMContentLoaded", async () => {
   initProfileCircle();   // 👈 HIER EINBAUEN
 
   if (!localStorage.getItem("my_user")) {
-    location.href = "/login.html";
-    return;
+    return; // Login-Modal in index.html übernimmt Auth
   }
 
   try {
@@ -379,6 +440,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // 📮 Inbox-Key GLOBAL sicherstellen
     await uploadInboxKeyIfNeeded();
+
+    // 🔔 Push Banner: anzeigen wenn Permission noch nicht granted
+    initPushBanner();
 
     // 👤 Handle im Dropdown anzeigen
 const myUser = localStorage.getItem("my_user");
@@ -466,7 +530,7 @@ if (btnConfirmDelete) {
       const idb = indexedDB.deleteDatabase("renex-keys");
       await new Promise((res) => { idb.onsuccess = idb.onerror = idb.onblocked = res; });
     } catch {}
-    location.href = "/login.html";
+    location.href = "/";
   });
 }
 
@@ -640,9 +704,6 @@ if (langBtn && langSubmenu) {
     tabBtns.forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
     tabPanels.forEach(p => p.classList.toggle("active", p.id === `panel-${tab}`));
     localStorage.setItem("inbox_tab", tab);
-    // FABs je nach Tab anzeigen
-    if (createGroupBtn) createGroupBtn.style.display = tab === "groups" ? "flex" : "none";
-    if (addContactBtn)  addContactBtn.style.display  = tab === "chats"  ? "flex" : "none";
     // Popups beim Tab-Wechsel schliessen
     if (addContactPopup && tab !== "chats")  addContactPopup.style.display  = "none";
     if (createGroupPopup && tab !== "groups") closeGroupPopup();
@@ -655,6 +716,11 @@ if (langBtn && langSubmenu) {
     const isOpen = addContactPopup.style.display === "block";
     addContactPopup.style.display = isOpen ? "none" : "block";
     if (!isOpen) setTimeout(() => addInput?.focus(), 50);
+  });
+
+  // Done-Button schliesst das Popup
+  document.getElementById("add-contact-done")?.addEventListener("click", () => {
+    if (addContactPopup) addContactPopup.style.display = "none";
   });
 
   tabBtns.forEach(btn => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
@@ -816,12 +882,38 @@ async function loadContacts() {
     const acceptedHandles = contacts.filter(c => c.status === "accepted").map(c => c.handle);
     if (acceptedHandles.length > 0) {
       fetchPresence(acceptedHandles).then(presence => {
+        // Status-Dots
         document.querySelectorAll("[data-presence-handle]").forEach(wrap => {
           const handle = wrap.dataset.presenceHandle;
-          const dot = wrap.querySelector("span");
+          const dot = wrap.querySelector(".contact-dot");
           if (!dot) return;
           const p = presence?.[handle];
-          dot.style.display = p?.online ? "block" : "none";
+          dot.className = "contact-dot";
+          if (p?.online) {
+            dot.classList.add("online");
+          } else if (p?.lastSeen && (Date.now() - Number(p.lastSeen)) < 300_000) {
+            dot.classList.add("idle");
+          }
+        });
+
+        // Presence Labels ("online" / "vor X Min.")
+        document.querySelectorAll("[data-presence-label]").forEach(label => {
+          const handle = label.dataset.presenceLabel;
+          const p = presence?.[handle];
+          if (p?.online) {
+            label.textContent = "online";
+            label.className = "contact-presence-label online";
+          } else if (p?.lastSeen) {
+            const diff = Date.now() - Number(p.lastSeen);
+            if (diff < 300_000) {
+              label.textContent = `vor ${Math.floor(diff / 60_000) || 1} Min.`;
+            } else {
+              label.textContent = formatLastSeen(p.lastSeen);
+            }
+            label.className = "contact-presence-label";
+          } else {
+            label.textContent = "";
+          }
         });
       }).catch(() => {});
     }
@@ -837,120 +929,138 @@ async function loadContacts() {
 // RENDER
 // ================================
 function renderPending(contact) {
+  const rawHandle = contact.display_handle || contact.handle;
+  const initial   = rawHandle.charAt(0).toUpperCase();
+  const isOut     = contact.direction === "out";
 
+  // ── Helper: Banner nach Aktion aktualisieren ──────────
+  function updateBannersAfterAction() {
+    const remaining  = pendingEl.querySelectorAll("li").length;
+    const pCount     = document.getElementById("pending-count");
+    const pCountG    = document.getElementById("pending-count-groups");
+    if (pCount)  pCount.textContent  = remaining;
+    if (pCountG) pCountG.textContent = remaining;
+    if (remaining === 0) {
+      if (pendingBannerEl) pendingBannerEl.style.display = "none";
+      const groupsBanner = document.getElementById("pending-banner-groups");
+      if (groupsBanner) groupsBanner.style.display = "none";
+      closeRequestsModal();
+    }
+  }
+
+  // ── Card (wie contact-card) ───────────────────────────
   const li = document.createElement("li");
+  li.className = "contact-card";
+  if (!isOut) li.dataset.pendingIn = "1";
 
-  const name = document.createElement("span");
-  name.textContent = contact.display_handle || contact.handle;
-  li.appendChild(name);
+  // Avatar
+  const avatarWrap = document.createElement("div");
+  avatarWrap.className = "contact-avatar-wrap";
+  const avatar = document.createElement("div");
+  avatar.className = "contact-avatar";
+  avatar.textContent = initial;
+  avatarWrap.appendChild(avatar);
 
-  // 👉 AUSGEHENDE Anfrage
-  if (contact.direction === "out") {
-    const sent = document.createElement("span");
-    sent.textContent = lang.requestSent || "Anfrage gesendet";
-    sent.style.cssText = "opacity:0.6;font-size:12px;margin-left:6px;";
-    li.appendChild(sent);
+  // Info
+  const info = document.createElement("div");
+  info.className = "contact-info";
 
+  const topRow = document.createElement("div");
+  topRow.className = "contact-top-row";
+  const nameEl = document.createElement("span");
+  nameEl.className = "contact-name";
+  nameEl.textContent = rawHandle;
+  topRow.appendChild(nameEl);
+  info.appendChild(topRow);
+
+  // Subtext
+  const sub = document.createElement("span");
+  sub.className = "contact-preview";
+  sub.style.fontStyle = "italic";
+  sub.textContent = isOut
+    ? (lang.requestSent?.trim() || "request sent")
+    : (lang.requestWantsToConnect || "wants to connect");
+  info.appendChild(sub);
+
+  li.appendChild(avatarWrap);
+  li.appendChild(info);
+
+  // ── AUSGEHENDE Anfrage: Zurückziehen-Button ───────────
+  if (isOut) {
     const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "✕ Zurückziehen";
-    cancelBtn.style.cssText = "margin-left:auto;padding:3px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-secondary);font-size:12px;cursor:pointer;flex-shrink:0;transition:color 0.15s,border-color 0.15s;";
-    cancelBtn.onmouseenter = () => { cancelBtn.style.color = "var(--status-error)"; cancelBtn.style.borderColor = "var(--status-error)"; };
-    cancelBtn.onmouseleave = () => { cancelBtn.style.color = "var(--text-secondary)"; cancelBtn.style.borderColor = "var(--border-subtle)"; };
-    cancelBtn.onclick = async () => {
+    cancelBtn.className = "contact-remove-btn";
+    cancelBtn.title = lang.requestWithdraw || "Withdraw";
+    cancelBtn.textContent = "✕";
+    cancelBtn.style.opacity = "1";
+    cancelBtn.style.color = "var(--text-muted)";
+    cancelBtn.onclick = async (e) => {
+      e.stopPropagation();
       cancelBtn.disabled = true;
       try {
         await apiFetch("/contacts/cancel", { method: "POST", body: JSON.stringify({ contact: contact.handle }) });
         li.remove();
-        // Modal schliessen wenn Liste jetzt leer
-        if (!pendingEl.children.length) closeRequestsModal();
-        // Beide Banner optimistisch aktualisieren
-        const remaining = pendingEl.children.length;
-        const pCount  = document.getElementById("pending-count");
-        const pCountG = document.getElementById("pending-count-groups");
-        if (pCount)  pCount.textContent  = remaining;
-        if (pCountG) pCountG.textContent = remaining;
-        if (remaining === 0) {
-          if (pendingBannerEl) pendingBannerEl.style.display = "none";
-          const groupsBanner = document.getElementById("pending-banner-groups");
-          if (groupsBanner) groupsBanner.style.display = "none";
-        }
+        updateBannersAfterAction();
         _lastContactsKey = null;
         loadContacts();
-      } catch (e) {
-        console.warn("Cancel failed:", e);
+      } catch (err) {
+        console.warn("Cancel failed:", err);
         cancelBtn.disabled = false;
       }
     };
-    li.style.cssText += ";display:flex;align-items:center;";
     li.appendChild(cancelBtn);
     return li;
   }
 
-  // 👉 EINGEHENDE Anfrage
-  li.dataset.pendingIn = "1";
-  const acceptBtn = document.createElement("button");
-  acceptBtn.textContent = lang.acceptBtn;
-  acceptBtn.onclick = async () => {
-    li.remove();
-    if (!pendingEl.children.length) closeRequestsModal();
-    // Beide Banner optimistisch aktualisieren
-    const remainingAcc = pendingEl.children.length;
-    const pCountAcc  = document.getElementById("pending-count");
-    const pCountAccG = document.getElementById("pending-count-groups");
-    if (pCountAcc)  pCountAcc.textContent  = remainingAcc;
-    if (pCountAccG) pCountAccG.textContent = remainingAcc;
-    if (remainingAcc === 0) {
-      if (pendingBannerEl) pendingBannerEl.style.display = "none";
-      const groupsBanner = document.getElementById("pending-banner-groups");
-      if (groupsBanner) groupsBanner.style.display = "none";
-    }
-    // API-Call abwarten, dann Cache invalidieren + neu laden
-    try {
-      await apiFetch("/contacts/accept", {
-        method: "POST",
-        body: JSON.stringify({ contact: contact.handle })
-      });
-    } catch (e) { console.warn("Accept failed:", e); }
-    _lastContactsKey = null;
-    loadContacts();
-  };
+  // ── EINGEHENDE Anfrage: Accept + Reject Buttons ───────
+  const actions = document.createElement("div");
+  actions.style.cssText = "display:flex;gap:16px;flex-shrink:0;align-items:center;";
 
   const rejectBtn = document.createElement("button");
-  rejectBtn.textContent = lang.rejectBtn;
-  rejectBtn.onclick = async () => {
+  rejectBtn.className = "contact-remove-btn";
+  rejectBtn.title = lang.rejectBtn || "Reject";
+  rejectBtn.textContent = "✕";
+  rejectBtn.style.cssText = "opacity:1;color:var(--status-error);font-size:17px;padding:10px;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center;";
+  rejectBtn.onclick = async (e) => {
+    e.stopPropagation();
+    rejectBtn.disabled = true;
     li.remove();
-    if (!pendingEl.children.length) closeRequestsModal();
-    // Beide Banner optimistisch aktualisieren
-    const remainingRej = pendingEl.children.length;
-    const pCountRej  = document.getElementById("pending-count");
-    const pCountRejG = document.getElementById("pending-count-groups");
-    if (pCountRej)  pCountRej.textContent  = remainingRej;
-    if (pCountRejG) pCountRejG.textContent = remainingRej;
-    if (remainingRej === 0) {
-      if (pendingBannerEl) pendingBannerEl.style.display = "none";
-      const groupsBanner = document.getElementById("pending-banner-groups");
-      if (groupsBanner) groupsBanner.style.display = "none";
-    }
-    // API-Call abwarten, dann Cache invalidieren + neu laden
+    updateBannersAfterAction();
     try {
-      await apiFetch("/contacts/reject", {
-        method: "POST",
-        body: JSON.stringify({ contact: contact.handle })
-      });
-    } catch (e) { console.warn("Reject failed:", e); }
+      await apiFetch("/contacts/reject", { method: "POST", body: JSON.stringify({ contact: contact.handle }) });
+    } catch (err) { console.warn("Reject failed:", err); }
     _lastContactsKey = null;
     loadContacts();
   };
 
-  li.appendChild(acceptBtn);
-  li.appendChild(rejectBtn);
+  const acceptBtn = document.createElement("button");
+  acceptBtn.title = lang.acceptBtn || "Accept";
+  acceptBtn.textContent = "✓";
+  acceptBtn.style.cssText = "background:none;border:none;color:var(--status-speaking);font-size:20px;font-weight:700;cursor:pointer;padding:10px;min-width:44px;min-height:44px;border-radius:6px;flex-shrink:0;line-height:1;transition:opacity 0.15s;display:flex;align-items:center;justify-content:center;";
+  acceptBtn.onmouseenter = () => { acceptBtn.style.opacity = "0.75"; };
+  acceptBtn.onmouseleave = () => { acceptBtn.style.opacity = "1"; };
+  acceptBtn.onclick = async (e) => {
+    e.stopPropagation();
+    acceptBtn.disabled = true;
+    li.remove();
+    updateBannersAfterAction();
+    try {
+      await apiFetch("/contacts/accept", { method: "POST", body: JSON.stringify({ contact: contact.handle }) });
+    } catch (err) { console.warn("Accept failed:", err); }
+    _lastContactsKey = null;
+    loadContacts();
+  };
+
+  actions.appendChild(rejectBtn);
+  actions.appendChild(acceptBtn);
+  li.appendChild(actions);
 
   return li;
 }
 
 function renderAccepted(contact) {
-  const handle  = contact.display_handle || contact.handle;
-  const myUser  = (localStorage.getItem("my_user") || "").toLowerCase();
+  const rawHandle = contact.display_handle || contact.handle;
+  const handle    = rawHandle.startsWith("guest_") ? guestDisplayName(rawHandle) : rawHandle;
+  const myUser    = (localStorage.getItem("my_user") || "").toLowerCase();
   const convoId = dmConvoId(myUser, contact.handle);
   const isMuted = _mutedConvos.has(convoId);
   const unread  = isMuted ? 0 : (unreadMap[contact.handle] || 0);
@@ -958,77 +1068,89 @@ function renderAccepted(contact) {
   const { text: previewText, muted: previewMuted } = buildPreviewText(cached, contact.last_ts, myUser, contact.handle, false);
 
   const li = document.createElement("li");
-  li.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border-subtle);cursor:pointer;transition:background 0.1s;border-radius:8px;";
+  li.className = "contact-card";
   li.dataset.searchName = (handle + " " + contact.handle).toLowerCase();
-  li.addEventListener("mouseenter", () => li.style.background = "var(--bg-panel-alt)");
-  li.addEventListener("mouseleave", () => li.style.background = "");
   li.addEventListener("click", (e) => {
     if (e.target.closest("button")) return;
-    window.location.href = `/chat?with=${encodeURIComponent(contact.handle)}`;
+    document.querySelectorAll(".contact-card").forEach(c => c.classList.remove("active"));
+    li.classList.add("active");
+    if (typeof window.openChatPanel === "function") {
+      window.openChatPanel(contact.handle);
+    } else {
+      window.location.href = `/chat?with=${encodeURIComponent(contact.handle)}`;
+    }
   });
 
-  // Avatar mit Presence-Dot
+  // ── Avatar + Status-Dot ──
   const avatarWrap = document.createElement("div");
-  avatarWrap.style.cssText = "position:relative;width:40px;height:40px;min-width:40px;flex-shrink:0;";
+  avatarWrap.className = "contact-avatar-wrap";
   avatarWrap.dataset.presenceHandle = contact.handle.toLowerCase();
+
   const avatar = document.createElement("div");
-  avatar.style.cssText = "width:40px;height:40px;border-radius:50%;background:#404249;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;color:#fff;";
+  avatar.className = "contact-avatar";
   avatar.textContent = handle[0].toUpperCase();
+
   const presenceDot = document.createElement("span");
-  presenceDot.style.cssText = "display:none;position:absolute;bottom:1px;right:1px;width:10px;height:10px;border-radius:50%;background:#4ade80;border:2px solid var(--bg-body);";
+  presenceDot.className = "contact-dot";
+
   avatarWrap.appendChild(avatar);
   avatarWrap.appendChild(presenceDot);
 
-  // Content
-  const content = document.createElement("div");
-  content.style.cssText = "flex:1;min-width:0;";
+  // ── Info ──
+  const info = document.createElement("div");
+  info.className = "contact-info";
 
+  // Top row: name + time
   const topRow = document.createElement("div");
-  topRow.style.cssText = "display:flex;align-items:baseline;justify-content:space-between;gap:4px;";
+  topRow.className = "contact-top-row";
 
   const nameEl = document.createElement("span");
-  nameEl.style.cssText = "font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  nameEl.className = "contact-name" + (unread > 0 ? " unread" : "");
   nameEl.textContent = handle;
 
   const timeMeta = document.createElement("span");
-  timeMeta.style.cssText = `font-size:11px;white-space:nowrap;flex-shrink:0;color:${unread > 0 ? "var(--accent-voice)" : "var(--text-secondary)"};${unread > 0 ? "font-weight:600;" : ""}`;
+  timeMeta.className = "contact-time" + (unread > 0 ? " unread" : "");
   timeMeta.textContent = formatTime(contact.last_ts);
 
   topRow.appendChild(nameEl);
   topRow.appendChild(timeMeta);
 
-  const previewRow = document.createElement("div");
-  previewRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-top:2px;gap:4px;";
+  // Presence label: "online" / "vor X Min." / leer
+  const presenceLabel = document.createElement("span");
+  presenceLabel.className = "contact-presence-label";
+  presenceLabel.dataset.presenceLabel = contact.handle.toLowerCase();
+  info.appendChild(topRow);
+  info.appendChild(presenceLabel);
+
+  // Bottom row: preview + badge/presence
+  const bottomRow = document.createElement("div");
+  bottomRow.className = "contact-bottom-row";
 
   const preview = document.createElement("span");
-  preview.style.cssText = "font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  preview.className = "contact-preview" + (previewMuted ? " muted" : "");
   preview.textContent = previewText;
-  if (previewMuted) preview.style.opacity = "0.45";
 
-  previewRow.appendChild(preview);
+  bottomRow.appendChild(preview);
 
   if (isMuted) {
     const muteIcon = document.createElement("span");
     muteIcon.textContent = "🔕";
-    muteIcon.style.cssText = "font-size:12px;flex-shrink:0;opacity:0.5;";
-    previewRow.appendChild(muteIcon);
+    muteIcon.style.cssText = "font-size:11px;opacity:0.4;flex-shrink:0;";
+    bottomRow.appendChild(muteIcon);
   } else if (unread > 0) {
     const badge = document.createElement("span");
-    badge.textContent = unread > 99 ? "99+" : unread;
-    badge.style.cssText = "background:var(--accent-voice);color:#fff;border-radius:10px;font-size:11px;font-weight:700;padding:1px 6px;flex-shrink:0;";
-    previewRow.appendChild(badge);
+    badge.className = "contact-badge";
+    badge.textContent = unread > 99 ? "99+" : String(unread);
+    bottomRow.appendChild(badge);
   }
 
-  content.appendChild(topRow);
-  content.appendChild(previewRow);
+  info.appendChild(bottomRow);
 
-  // Remove button
+  // ── Remove button (hidden until hover) ──
   const removeBtn = document.createElement("button");
+  removeBtn.className = "contact-remove-btn";
   removeBtn.textContent = "✕";
   removeBtn.title = lang.removeFromList;
-  removeBtn.style.cssText = "background:transparent;border:none;color:var(--text-muted);font-size:14px;cursor:pointer;padding:4px 6px;border-radius:4px;flex-shrink:0;transition:color 0.15s;";
-  removeBtn.onmouseenter = () => removeBtn.style.color = "var(--status-error)";
-  removeBtn.onmouseleave = () => removeBtn.style.color = "var(--text-muted)";
   removeBtn.onclick = async (e) => {
     e.stopPropagation();
     if (!confirm(lang.confirmRemoveContact(contact.handle))) return;
@@ -1039,7 +1161,7 @@ function renderAccepted(contact) {
   };
 
   li.appendChild(avatarWrap);
-  li.appendChild(content);
+  li.appendChild(info);
   li.appendChild(removeBtn);
   return li;
 }
@@ -1165,104 +1287,119 @@ function renderGroup(group) {
   const isUnread = isGroupUnread(group);
 
   const li = document.createElement("li");
-  li.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border-subtle);cursor:pointer;transition:background 0.1s;border-radius:8px;";
+  li.className = "contact-card";
   li.dataset.searchName = group.name.toLowerCase();
   li.dataset.groupId = group.id;
-  li.addEventListener("mouseenter", () => li.style.background = "var(--bg-panel-alt)");
-  li.addEventListener("mouseleave", () => li.style.background = "");
   li.addEventListener("click", (e) => {
     if (e.target.closest("button")) return;
     markGroupSeen(group.id, group.last_ts);
     refreshGroupBadge();
-    window.location.href = `/chat?with=${encodeURIComponent(group.id)}&name=${encodeURIComponent(group.name)}`;
+    document.querySelectorAll(".contact-card").forEach(c => c.classList.remove("active"));
+    li.classList.add("active");
+    if (typeof window.openChatPanel === "function") {
+      window.openChatPanel(group.id, group.name);
+    } else {
+      const url = group.name
+        ? `/chat?with=${encodeURIComponent(group.id)}&name=${encodeURIComponent(group.name)}`
+        : `/chat?with=${encodeURIComponent(group.id)}`;
+      window.location.href = url;
+    }
   });
 
-  // Avatar
+  // ── Avatar + Type-Badge ──
+  const isVoiceGroup = group.type === "voice";
+  const avatarWrap = document.createElement("div");
+  avatarWrap.className = "contact-avatar-wrap";
+
   const avatar = document.createElement("div");
-  avatar.style.cssText = "width:40px;height:40px;min-width:40px;border-radius:30%;background:#404249;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;color:#fff;";
+  avatar.className = "contact-avatar";
+  avatar.style.borderRadius = "30%";
   avatar.textContent = group.name[0].toUpperCase();
 
-  // Content
-  const content = document.createElement("div");
-  content.style.cssText = "flex:1;min-width:0;";
+  const typeBadge = document.createElement("span");
+  typeBadge.textContent = isVoiceGroup ? "🎤" : "💬";
+  typeBadge.style.cssText = "position:absolute;bottom:-3px;right:-3px;font-size:10px;line-height:1;background:var(--bg-panel);border-radius:50%;padding:1px;";
+
+  avatarWrap.appendChild(avatar);
+  avatarWrap.appendChild(typeBadge);
+
+  // ── Info ──
+  const info = document.createElement("div");
+  info.className = "contact-info";
 
   const topRow = document.createElement("div");
-  topRow.style.cssText = "display:flex;align-items:baseline;justify-content:space-between;gap:4px;";
+  topRow.className = "contact-top-row";
 
   const nameEl = document.createElement("span");
-  nameEl.style.cssText = "font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  nameEl.className = "contact-name" + (isUnread ? " unread" : "");
   nameEl.textContent = group.name;
-  if (isUnread) nameEl.style.color = "var(--accent-voice)";
 
   const timeMeta = document.createElement("span");
-  timeMeta.style.cssText = `font-size:11px;white-space:nowrap;flex-shrink:0;color:${isUnread ? "var(--accent-voice)" : "var(--text-secondary)"};${isUnread ? "font-weight:600;" : ""}`;
+  timeMeta.className = "contact-time" + (isUnread ? " unread" : "");
   timeMeta.textContent = formatTime(group.last_ts);
 
   topRow.appendChild(nameEl);
   topRow.appendChild(timeMeta);
 
-  const previewRow = document.createElement("div");
-  previewRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-top:2px;gap:4px;";
+  const bottomRow = document.createElement("div");
+  bottomRow.className = "contact-bottom-row";
 
   const preview = document.createElement("span");
-  preview.style.cssText = "font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  preview.className = "contact-preview";
   {
     const myUser  = (localStorage.getItem("my_user") || "").toLowerCase();
     const cached  = getPreviewCache(group.id);
-    // Für System-Nachrichten: Server-Text als Fallback wenn kein Cache
     const fallbackTs   = group.last_type === "system" ? group.last_ts : null;
     const fallbackText = group.last_type === "system" ? replaceGuestHandles(group.last_text || "") : null;
     const effectiveCached = cached || (fallbackText !== null ? { text: fallbackText, ts: fallbackTs, from: "__system__" } : null);
     const { text: previewText, muted: previewMuted } = buildPreviewText(effectiveCached, group.last_ts, myUser, group.last_from, true);
     preview.textContent = previewText;
-    if (previewMuted) preview.style.opacity = "0.45";
+    if (previewMuted) preview.classList.add("muted");
   }
+
+  bottomRow.appendChild(preview);
 
   const isMutedGroup = _mutedConvos.has(group.id);
   if (isMutedGroup) {
     const muteIcon = document.createElement("span");
     muteIcon.textContent = "🔕";
-    muteIcon.style.cssText = "font-size:12px;flex-shrink:0;opacity:0.5;";
-    previewRow.appendChild(preview);
-    previewRow.appendChild(muteIcon);
+    muteIcon.style.cssText = "font-size:11px;opacity:0.4;flex-shrink:0;";
+    bottomRow.appendChild(muteIcon);
   } else if (isUnread) {
     const badge = document.createElement("span");
+    badge.className = "contact-badge";
     const unreadCount = Number(group.unread_count) || 0;
     badge.textContent = unreadCount > 99 ? "99+" : (unreadCount > 0 ? String(unreadCount) : "●");
-    badge.style.cssText = "background:var(--accent-voice);color:#fff;border-radius:10px;font-size:11px;font-weight:700;padding:1px 6px;flex-shrink:0;min-width:18px;text-align:center;";
-    previewRow.appendChild(preview);
-    previewRow.appendChild(badge);
+    bottomRow.appendChild(badge);
   } else {
     const memberCount = document.createElement("span");
     memberCount.dataset.onlineCount = "1";
-    memberCount.style.cssText = "font-size:11px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap;";
+    memberCount.className = "contact-presence-label";
     memberCount.textContent = lang.membersLabel(group.member_count);
-    previewRow.appendChild(preview);
-    previewRow.appendChild(memberCount);
+    bottomRow.appendChild(memberCount);
   }
 
-  content.appendChild(topRow);
-  content.appendChild(previewRow);
+  info.appendChild(topRow);
+  info.appendChild(bottomRow);
 
-  // 🔗 Einladungslink-Button
+  // 🔗 Invite button
   const inviteBtn = document.createElement("button");
   inviteBtn.textContent = "🔗";
   inviteBtn.title = lang.inviteLinkCreate;
-  inviteBtn.style.cssText = "background:transparent;border:none;color:var(--text-muted);font-size:15px;cursor:pointer;padding:4px 6px;border-radius:4px;flex-shrink:0;transition:color 0.15s;";
+  inviteBtn.className = "contact-remove-btn";
+  inviteBtn.style.fontSize = "14px";
   inviteBtn.onmouseenter = () => inviteBtn.style.color = "var(--accent-voice)";
-  inviteBtn.onmouseleave = () => { if (inviteBtn.textContent === "🔗") inviteBtn.style.color = "var(--text-muted)"; };
+  inviteBtn.onmouseleave = () => inviteBtn.style.color = "";
   inviteBtn.onclick = (e) => {
     e.stopPropagation();
     createGroupInviteLink(group.id, group.name, inviteBtn);
   };
 
-  // ✕ Verlassen-Button (identisch zum Kontakt-Remove-Button)
+  // ✕ Leave button
   const leaveBtn = document.createElement("button");
   leaveBtn.textContent = "✕";
   leaveBtn.title = lang.leaveGroupBtn;
-  leaveBtn.style.cssText = "background:transparent;border:none;color:var(--text-muted);font-size:14px;cursor:pointer;padding:4px 6px;border-radius:4px;flex-shrink:0;transition:color 0.15s;";
-  leaveBtn.onmouseenter = () => leaveBtn.style.color = "var(--status-error)";
-  leaveBtn.onmouseleave = () => leaveBtn.style.color = "var(--text-muted)";
+  leaveBtn.className = "contact-remove-btn";
   leaveBtn.onclick = async (e) => {
     e.stopPropagation();
     if (!confirm(lang.confirmLeaveGroup(group.name))) return;
@@ -1277,8 +1414,8 @@ function renderGroup(group) {
     }
   };
 
-  li.appendChild(avatar);
-  li.appendChild(content);
+  li.appendChild(avatarWrap);
+  li.appendChild(info);
   li.appendChild(inviteBtn);
   li.appendChild(leaveBtn);
   return li;
@@ -1533,5 +1670,84 @@ addBtn?.addEventListener("click", async () => {
     contactRequestInFlight = false;
     addBtn.disabled = false;
 
+  }
+});
+
+// ================================
+// DM INVITE LINK (Einmalig verwendbar)
+// ================================
+const dmInviteBtn    = document.getElementById("dm-invite-btn");
+const dmInviteStatus = document.getElementById("dm-invite-status");
+let _dmInvitePending = false;
+
+dmInviteBtn?.addEventListener("click", async () => {
+  if (_dmInvitePending) return;
+  _dmInvitePending = true;
+
+  const orig = dmInviteBtn.innerHTML;
+  dmInviteBtn.textContent = "…";
+  dmInviteBtn.disabled = true;
+  dmInviteStatus.style.display = "none";
+
+  const fmtDm = (url) => (lang.linkCopiedClipboardDm || lang.linkCopiedClipboard || ((u) => u))(url);
+  const doFetch = () => fetch(`${API}/invite/create`, {
+    method:      "POST",
+    credentials: "include",
+    headers:     { "Content-Type": "application/json" },
+    body:        JSON.stringify({}),                       // kein convoId → DM
+  }).then(r => r.json().catch(() => ({}))).then(data => {
+    if (!data.inviteUrl) throw new Error("no_url");
+    return data.inviteUrl;
+  });
+
+  try {
+    let copied = false;
+
+    // Clipboard API mit ClipboardItem (Safari-kompatibel, async)
+    if (navigator.clipboard && window.ClipboardItem) {
+      try {
+        const urlPromise = doFetch();
+        await navigator.clipboard.write([
+          new ClipboardItem({ "text/plain": urlPromise.then(u => new Blob([fmtDm(u)], { type: "text/plain" })) })
+        ]);
+        await urlPromise;
+        copied = true;
+      } catch (e) {
+        if (e.message === "no_url") throw e;
+      }
+    }
+
+    // Fallback: writeText
+    if (!copied && navigator.clipboard?.writeText) {
+      try {
+        const url = await doFetch();
+        await navigator.clipboard.writeText(fmtDm(url));
+        copied = true;
+      } catch (e) {
+        if (e.message === "no_url") throw e;
+      }
+    }
+
+    // Fallback: execCommand
+    if (!copied) {
+      const url = await doFetch();
+      const ta = document.createElement("textarea");
+      ta.value = fmtDm(url);
+      ta.style.cssText = "position:fixed;top:0;left:0;width:2em;height:2em;opacity:0;";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { copied = document.execCommand("copy"); } catch {}
+      document.body.removeChild(ta);
+    }
+
+    dmInviteBtn.textContent = "✓";
+    showToast({ icon: "🔗", title: lang.linkCopiedInfo || lang.linkCopied, sub: lang.dmInviteSubLabel, durationMs: 4000 });
+    setTimeout(() => { dmInviteBtn.innerHTML = orig; dmInviteBtn.disabled = false; _dmInvitePending = false; }, 2500);
+
+  } catch (e) {
+    dmInviteBtn.innerHTML = orig;
+    dmInviteBtn.disabled = false;
+    _dmInvitePending = false;
+    showToast({ icon: "⚠️", title: lang.linkCreateFailed, durationMs: 4000 });
   }
 });

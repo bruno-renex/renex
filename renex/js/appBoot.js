@@ -1,9 +1,22 @@
 import { startGlobalControlPolling } from "./controlSocket.js";
+import { initServiceWorker, subscribeToPush, initInstallPrompt, isStandalone } from "./pushManager.js";
 
 export function bootApp() {
   // nur wenn eingeloggt
   const me = localStorage.getItem("my_user");
   if (!me) return;
+
+  // PWA Install-Prompt immer initialisieren (auch für Gäste sichtbar)
+  initInstallPrompt();
+
+  // Service Worker registrieren (Push + Badge)
+  initServiceWorker().then((reg) => {
+    if (!reg) return;
+    // Auto-Subscribe wenn bereits Permission granted (z.B. nach Reinstall)
+    if (Notification.permission === "granted") {
+      subscribeToPush().catch(() => {});
+    }
+  });
 
   // Gäste nutzen Polling statt WebSocket — kein WS-Ticket für Guest-Sessions
   // (requireSession schlägt fehl → 401 → ungewollter Redirect zur Login-Seite)

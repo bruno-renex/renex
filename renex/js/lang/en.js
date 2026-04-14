@@ -9,6 +9,10 @@ export default {
   // ── inbox.html ──────────────────────────────────────
   inboxPageTitle:           "RENEX – Inbox",
   addContactHeading:        "Add contact",
+  guestInviteLabel:         "Or: invite a guest (no account needed)",
+  createInviteLinkBtn:      "Create invite link",
+  addContactTitle:          "Add contact",
+  sendRequestTitle:         "Send request",
   addContactPlaceholder:    "Username",
   addContactBtn:            "Send request",
   pendingHeading:           "Pending requests",
@@ -66,6 +70,7 @@ export default {
   // ── Chat messages ─────────────────────────────────────
   decryptPending:         "🔒 Decrypting message…",
   decryptFailed:          "🔒 Message could not be decrypted",
+  guestConvertNotice:     "🔒 Messages from your guest session cannot be displayed after registration",
   messageExpired:         "⏱ Message automatically deleted",
   deleteMessageTitle:     "Delete message",
   confirmDeleteMessage:   "Delete message for everyone?",
@@ -87,6 +92,8 @@ export default {
   noPendingRequests:      "No pending requests",
   loadContactsFailed:     "Failed to load contacts",
   requestSent:            " (request sent)",
+  requestWantsToConnect:  "wants to connect",
+  requestWithdraw:        "Withdraw",
   acceptBtn:              "Accept",
   rejectBtn:              "Reject",
   accountDeleted:         " (account deleted)",
@@ -97,7 +104,10 @@ export default {
   confirmRemoveContact:   (handle) => `Really remove contact ${handle}?`,
   closeBtn:               "Close",
   linkCopied:             "Link copied!",
+  dmInviteSubLabel:       "DM invite (one-time)",
   linkCopiedInfo:         "Link copied — valid 48h, max. 20 messages per guest",
+  linkCopiedClipboard:    (url) => `Chat with me on Renex (available 48h):\n${url}`,
+  linkCopiedClipboardDm:  (url) => `Message me on Renex (available 48h, one-time link):\n${url}`,
   linkCreateFailed:       "Could not create link",
   inviteLinkCreate:       "Create invite link",
   doneBtn:                "Done",
@@ -190,6 +200,7 @@ export default {
   noTokenMsg:              "This link is invalid.",
   inviteExpiredReason:     "This invitation link has expired.",
   inviteAlreadyUsed:       "This link has already been used.",
+  inviteAlreadyUsedDm:     "This invitation link has already been used. Each DM link can only be used once.",
   inviteNotFound:          "This link does not exist.",
   joiningText:             "Joining…",
   captchaRequired:         "Please complete the security check first.",
@@ -204,4 +215,10 @@ export default {
 
   // ── Locale ───────────────────────────────────────────
   locale: "en-GB",
+
+  // ── Push Notifications ──────────────────────────────
+  pushBannerTitle:      "Enable notifications",
+  pushBannerSubtitle:   "Don't miss any messages",
+  pushBannerActivating: "Activating…",
+  pushBannerBlocked:    "Notifications blocked",
 };

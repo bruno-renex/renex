@@ -16,7 +16,8 @@ import {
   signMessage,
   verifyMessageSig,
   getSigPubForDevice,
-  setRotationIndex
+  setRotationIndex,
+  uploadInboxKeyIfNeeded
 } from "./e2e.js";
 
 import {
@@ -129,10 +130,13 @@ function showGuestBanner() {
   const banner = document.getElementById("guest-banner");
   if (!banner || !_guestData) return;
 
-  // Gastname im Banner anzeigen
+  // Gastname im Banner anzeigen (Tiername statt "Guest")
   const displayName = _guestData.guestHandle ? guestDisplayName(_guestData.guestHandle) : lang.guestLabel;
   const nameEl = document.getElementById("guest-name-display");
-  if (nameEl) nameEl.textContent = displayName;
+  if (nameEl) {
+    nameEl.textContent = displayName;
+    nameEl.removeAttribute("data-i18n"); // verhindert Überschreibung durch applyI18n()
+  }
 
   banner.style.display = "flex";
   updateGuestBannerCount();
@@ -270,8 +274,8 @@ function convertGuest() {
     convoType:     _guestData.convoType,
     inviterHandle: _guestData.inviterHandle || withUser,
   }));
-  // Zur Login/Register-Seite (registerGuest=1 als Signal für mögliche UI-Anpassung)
-  window.location.href = "/?registerGuest=1";
+  // Zur Login/Register-Seite — top-Level navigieren (auch wenn wir im iframe/Panel sind)
+  window.top.location.href = "/?registerGuest=1";
 }
 
 // Einladungslink erstellen (für registrierte User)
@@ -285,6 +289,7 @@ async function createInviteLink() {
 
   const isGroup = isGroupConversation(withUser);
   const bodyObj = isGroup ? { convoId: withUser } : {};
+  const fmt = (url) => (lang.linkCopiedClipboard || ((u) => u))(url);
 
   // Fetch-Promise — wird ggf. direkt an ClipboardItem übergeben
   const doFetch = () => fetch(`${API}/invite/create`, {
@@ -307,7 +312,7 @@ async function createInviteLink() {
         const urlPromise = doFetch();
         await navigator.clipboard.write([
           new ClipboardItem({
-            "text/plain": urlPromise.then(u => new Blob([u], { type: "text/plain" }))
+            "text/plain": urlPromise.then(u => new Blob([fmt(u)], { type: "text/plain" }))
           })
         ]);
         await urlPromise; // Fehler propagieren falls fetch fehlschlug
@@ -322,7 +327,7 @@ async function createInviteLink() {
     if (!copied && navigator.clipboard?.writeText) {
       try {
         const url = await doFetch();
-        await navigator.clipboard.writeText(url);
+        await navigator.clipboard.writeText(fmt(url));
         copied = true;
       } catch (e) {
         if (e.message === "no_url") throw e;
@@ -333,7 +338,7 @@ async function createInviteLink() {
     if (!copied) {
       const url = await doFetch();
       const ta = document.createElement("textarea");
-      ta.value = url;
+      ta.value = fmt(url);
       ta.style.cssText = "position:fixed;top:0;left:0;width:2em;height:2em;opacity:0;";
       document.body.appendChild(ta);
       ta.focus();
@@ -1730,7 +1735,7 @@ console.log("🔄 Chat UI State reset");
   if (sendBtn.dataset.bound === "1") return;
 sendBtn.dataset.bound = "1";
 
-  titleEl.textContent = _initialGroupName || withUser;
+  titleEl.textContent = _initialGroupName || (withUser?.startsWith("guest_") ? guestDisplayName(withUser) : withUser);
 if (firstLoad) {
   messagesEl.innerHTML = "";
 }
@@ -1842,6 +1847,11 @@ if (isGroupConversation(withUser)) {
 
   const encrypted = await encryptGroupMessage(withUser, getMyUser(), text);
 
+  // @mention Extraction — Metadata (unverschlüsselt) für Push-Notifications
+  const mentionMatches = text.match(/@([a-z0-9_]+)/gi) || [];
+  const mentions = mentionMatches.map(m => m.slice(1).toLowerCase()).filter(h => h !== getMyUser());
+  const mentionsEveryone = /@everyone\b/i.test(text);
+
   res = await apiFetch("/chat/send", {
     method: "POST",
     body: JSON.stringify({
@@ -1855,6 +1865,8 @@ if (isGroupConversation(withUser)) {
       ivB64:        encrypted.ivB64,
       ctB64:        encrypted.ctB64,
       rotationIndex: encrypted.chainIndex,
+      mentions:     mentions.length > 0 ? mentions : undefined,
+      mentionsEveryone: mentionsEveryone || undefined,
       ...replyFields
     })
   });
@@ -3308,9 +3320,57 @@ async function processMessage(m) {
   if (m.type === "system") {
     if (renderedMessageIds.has(m.id)) return false;
     renderedMessageIds.add(m.id);
-    const sysText = replaceGuestHandles(m.message || m.text || "");
-    showSystemMessage(sysText);
-    savePreviewCache(previewConvoId(withUser), { text: sysText, ts: m.ts || Date.now(), from: "__system__" });
+    const rawSys = m.message || m.text || "";
+    if (rawSys === "__guest_convert_notice__") {
+      const noticeText = lang.guestConvertNotice || "🔒 Messages from your guest session cannot be displayed after registration";
+      // Auffälligerer Hinweis als normale System-Messages
+      if (messagesEl) {
+        const div = document.createElement("div");
+        div.style.cssText = "text-align:center;padding:10px 16px;margin:8px 0;font-size:12px;color:var(--text-secondary);background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;";
+        div.textContent = noticeText;
+        messagesEl.appendChild(div);
+        scrollToBottom();
+      }
+      savePreviewCache(previewConvoId(withUser), { text: noticeText, ts: m.ts || Date.now(), from: "__system__" });
+    } else {
+      const sysText = replaceGuestHandles(rawSys);
+      showSystemMessage(sysText);
+      savePreviewCache(previewConvoId(withUser), { text: sysText, ts: m.ts || Date.now(), from: "__system__" });
+    }
+
+    // Polling-Fallback für GUEST_JOINED: GSK proaktiv an neuen Gast senden
+    // (Gäste ohne WebSocket empfangen das DO-Push-Event nicht)
+    if (isGroupConversation(withUser) && (m.message || "").includes("joined")) {
+      const joinedHandle = m.from_user || m.from;
+      const myHandle = _isGuestMode ? _guestData?.guestHandle : getMyUser();
+      if (joinedHandle && myHandle && joinedHandle !== myHandle) {
+        (async () => {
+          try {
+            await getOrCreateGroupSK(withUser, myHandle);
+            const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(joinedHandle)}`);
+            const devs = Array.isArray(r.devices) ? r.devices : [];
+            if (devs.length) {
+              await distributeGroupSK(withUser, myHandle,
+                devs.map(d => ({ ...d, memberHandle: joinedHandle })), apiFetch);
+              console.log("✅ GSK proaktiv via Polling an neuen Gast gesendet:", joinedHandle);
+            } else {
+              // Key-Upload Race → Retry nach 3s
+              setTimeout(async () => {
+                try {
+                  const r2 = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(joinedHandle)}`);
+                  const devs2 = Array.isArray(r2.devices) ? r2.devices : [];
+                  if (devs2.length) {
+                    await distributeGroupSK(withUser, myHandle,
+                      devs2.map(d => ({ ...d, memberHandle: joinedHandle })), apiFetch);
+                  }
+                } catch {}
+              }, 3000);
+            }
+          } catch (e) { console.warn("⚠️ GSK Polling-Push fehlgeschlagen:", e); }
+        })();
+      }
+    }
+
     return true;
   }
 
@@ -3336,6 +3396,11 @@ async function processMessage(m) {
     }
     return false;
   }
+
+  // 🔒 SOFORT markieren BEVOR async decrypt startet — verhindert Race-Condition
+  // zwischen WebSocket (NEW_MESSAGE) und Polling (loadMessages) die sonst
+  // beide gleichzeitig processMessage() für dieselbe ID aufrufen können.
+  renderedMessageIds.add(messageId);
 
   let text;
   try {
@@ -3881,15 +3946,86 @@ window.__chatStartupDone = true;
       console.warn("⚠️ Kein Gast-E2E-Key in sessionStorage — Nachrichten evtl. nicht entschlüsselbar");
     }
 
-    // Normaler Gruppen-E2E-Startup (ab hier identisch mit regulären Mitgliedern)
-    e2eReady = true;
+    // ── Gruppen-Gast: GSK-Flow (wie bisher) ─────────────────────────
+    if (isGroupConversation(withUser)) {
+      e2eReady = true;
+      updateSendButton();
+      await initAutoDeleteUI().catch(() => {});
+      try { await loadMessages(); } catch (e) { console.warn("Guest loadMessages failed:", e); }
+      ensureGroupChatReady(withUser, _guestData.guestHandle)
+        .catch(e => console.warn("⚠️ ensureGroupChatReady (guest) failed", e));
+      startPolling();
+      console.log("👤 Gruppen-Gast gestartet (E2E):", withUser, "als", _guestData.guestHandle);
+      return;
+    }
+
+    // ── DM-Gast: CMK → SessionKey Bootstrap (wie reguläre User) ───
+    const me = _guestData.guestHandle;
+    const peerOk = await fetchAndStorePeerPublicKey(withUser);
+    if (!peerOk) {
+      console.warn("⚠️ DM-Gast: Peer-Key nicht gefunden für", withUser);
+    }
+
+    const ok = await ensureConversationReady(me, withUser, fetchInboxKeys, apiFetch);
+    console.log("🧪 DM-Gast ensureConversationReady:", ok);
+
+    const entry = await bootConversation(me, withUser);
+    if (entry?.ready && entry?.skBytes) {
+      sessionKeyBytes = entry.skBytes;
+      sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+      sessionRotationIndex = entry.rotationIndex ?? 0;
+      e2eReady = true;
+    }
+
     updateSendButton();
     await initAutoDeleteUI().catch(() => {});
-    try { await loadMessages(); } catch (e) { console.warn("Guest loadMessages failed:", e); }
-    ensureGroupChatReady(withUser, _guestData.guestHandle)
-      .catch(e => console.warn("⚠️ ensureGroupChatReady (guest) failed", e));
+
+    if (e2eReady) {
+      try { await loadMessages(); } catch (e) { console.warn("Guest DM loadMessages failed:", e); }
+      await flushDeferredInboundMessages();
+      startTimeBasedRotation();
+      console.log("👤 DM-Gast gestartet (E2E bereit):", withUser, "als", me);
+    } else {
+      // CMK noch nicht da → KV-Fetch + Fallback wie regulärer User
+      const kvFetched = await fetchAndStoreCMK(me, withUser, apiFetch, fetchInboxKeys);
+      if (kvFetched) {
+        const e = await bootConversation(me, withUser);
+        if (e?.skBytes) {
+          sessionKeyBytes = e.skBytes;
+          sessionCmkBytes = e.cmkBytes ?? sessionCmkBytes;
+          sessionRotationIndex = e.rotationIndex ?? 0;
+          e2eReady = true;
+          updateSendButton();
+          console.log("✅ DM-Gast: CMK aus KV geladen – E2E bereit");
+          await loadMessages();
+          await flushDeferredInboundMessages();
+          startTimeBasedRotation();
+        }
+      }
+      if (!e2eReady) {
+        const fallbacked = await fallbackBootstrap(me, withUser, fetchInboxKeys, apiFetch);
+        if (fallbacked) {
+          const e = await bootConversation(me, withUser);
+          if (e?.skBytes) {
+            sessionKeyBytes = e.skBytes;
+            sessionCmkBytes = e.cmkBytes ?? sessionCmkBytes;
+            sessionRotationIndex = e.rotationIndex ?? 0;
+            e2eReady = true;
+            updateSendButton();
+            console.log("✅ DM-Gast: Fallback Bootstrap – E2E bereit");
+            await loadMessages();
+            await flushDeferredInboundMessages();
+            startTimeBasedRotation();
+          }
+        }
+      }
+      if (!e2eReady) {
+        try { await loadMessages(); } catch (e) { console.warn("Guest DM loadMessages failed:", e); }
+        console.log("🟡 DM-Gast: warte auf CMK von", withUser);
+      }
+    }
+
     startPolling();
-    console.log("👤 Gast-Chat gestartet (E2E):", withUser, "als", _guestData.guestHandle);
     return;
   }
   // ═════════════════════════════════════════════════════════════════════
@@ -3904,6 +4040,9 @@ window.__chatStartupDone = true;
   await initE2EKeys();
   await debugPrintMyPublicKey();
   await uploadMyPublicKeyIfNeeded();
+  // Inbox-Key immer frisch hochladen — stellt sicher dass andere User
+  // nach Re-Login den aktuellen Public Key für GSK-Wrapping haben
+  uploadInboxKeyIfNeeded().catch(e => console.warn("⚠️ Inbox-Key upload failed:", e));
 
   // ──────────────────────────────────────────────────────────────
   // 🏘️ GRUPPEN-STARTUP (kein CMK / keine Authority)

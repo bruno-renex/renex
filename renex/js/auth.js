@@ -3,6 +3,7 @@ import {
   uploadInboxKeyIfNeeded,
   getDeviceId          // ⬅️ HIER
 } from "./e2e.js";
+import { initServiceWorker, subscribeToPush } from "./pushManager.js";
 
 // ================================
 // API BASE URL
@@ -217,8 +218,8 @@ try {
 console.log("✅ Registrierung abgeschlossen");
 
 // optional kleine Info
-alert("Passkey erstellt – bitte erneut einloggen");
-location.reload();
+// Kein alert, kein reload — direkt zur Login-Seite (kein Flash)
+window.location.replace("/?registered=1");
 return;
 }
 
@@ -318,12 +319,34 @@ if (data.authenticated) {
     return;
   }
 
+  // 🔔 Push Notifications: SW registrieren + Permission fragen + Subscribe
+  try {
+    const reg = await initServiceWorker();
+    if (reg) {
+      // Permission fragen wenn noch nicht entschieden
+      if (Notification.permission === "default") {
+        const perm = await Notification.requestPermission();
+        if (perm === "granted") {
+          await subscribeToPush();
+          console.log("🔔 Push nach Login aktiviert");
+        }
+      } else if (Notification.permission === "granted") {
+        // Bereits erlaubt → nur Subscribe sicherstellen
+        await subscribeToPush();
+        console.log("🔔 Push-Subscription nach Login bestätigt");
+      }
+    }
+  } catch (pushErr) {
+    // Push-Fehler dürfen Login nicht blockieren
+    console.warn("🔔 Push-Setup nach Login fehlgeschlagen (non-blocking):", pushErr.message);
+  }
+
   // ── Invite-Link-Redirect (eingeloggter User kam über /join/?token=...) ─
   const _redirectUrl = sessionStorage.getItem("pendingInviteRedirect");
   if (_redirectUrl) {
     sessionStorage.removeItem("pendingInviteRedirect");
     window.location.replace(_redirectUrl);
-    return;
+    throw new Error("__redirect__"); // verhindert location.reload() im Caller
   }
 
   // ── Gast-Konvertierung (falls Gast vorher registriert hat) ────────────
@@ -343,7 +366,7 @@ if (data.authenticated) {
       });
 
       // Nach Gast-Konvertierung → Inbox (nicht direkt in Chat)
-      window.location.replace("/inbox.html");
+      window.location.replace("/");
       return;
     } catch (e) {
       console.warn("⚠️ Gast-Konvertierung fehlgeschlagen:", e);
@@ -351,7 +374,7 @@ if (data.authenticated) {
     }
   }
   // ➡️ Weiter zur Inbox
-  window.location.replace("/inbox.html");
+  window.location.replace("/");
 }
 }
 
@@ -370,5 +393,5 @@ export async function logout() {
   sessionStorage.clear();
 
   console.log("🚪 Logout abgeschlossen (Keys behalten)");
-  window.location.replace("/login.html");
+  window.location.replace("/");
 }

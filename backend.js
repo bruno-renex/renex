@@ -11,6 +11,8 @@ import { handlePresenceRoutes } from './src/routes/presenceRoutes.js';
 import { handleUploadRoutes } from './src/routes/uploadRoutes.js';
 import { handleGifRoutes } from './src/routes/gifRoutes.js';
 import { handleInviteRoutes } from './src/routes/inviteRoutes.js';
+import { handlePushRoutes } from './src/routes/pushRoutes.js';
+import { handleFeedbackRoutes } from './src/routes/feedbackRoutes.js';
 import { scheduled } from './src/cron.js';
 
 // Cloudflare Durable Object binding requirement — must be re-exported from entry point
@@ -65,6 +67,12 @@ async function fetch(request, env) {
     }
     if (path.startsWith('/presence')) {
       return await handlePresenceRoutes(request, env, path);
+    }
+    if (path.startsWith('/push/')) {
+      return await handlePushRoutes(request, env, path);
+    }
+    if (path.startsWith('/feedback/')) {
+      return await handleFeedbackRoutes(request, env, path, params);
     }
     return json(request, { error: 'Not found' }, 404);
 

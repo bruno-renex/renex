@@ -4,10 +4,46 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#38bdf8" />
+  <link rel="manifest" href="/manifest.json" />
+  <script>if("serviceWorker"in navigator)navigator.serviceWorker.register("/sw.js").catch(()=>{})</script>
   <title>Chat</title>
   <link rel="stylesheet" href="/colors.css" />
   <style>
-    body { font-family: sans-serif; }
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      overflow: hidden;
+      background: var(--bg-body);
+      color: var(--text-primary);
+    }
+
+    /* ── iOS-Fix: Header fixiert damit er beim Keyboard-Scroll nicht verschwindet ── */
+    #chat-header {
+      position: fixed !important;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 20;
+      padding-top: calc(env(safe-area-inset-top, 0px) + 10px) !important;
+    }
+
+    /* Platzhalter damit Messages nicht unter dem Header anfangen */
+    #chat-header-spacer {
+      flex-shrink: 0;
+      height: calc(env(safe-area-inset-top, 0px) + 54px);
+    }
 
 #chat-menu-btn:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
 #chat-menu-btn:active { background: var(--bg-active, rgba(255,255,255,0.1)); }
@@ -37,14 +73,16 @@
 }
 
     #messages {
-  border: 1px solid var(--border-subtle);
-  padding: 10px;
-  height: 300px;
+  flex: 1;
+  min-height: 0;
+  padding: 10px 12px;
   overflow-y: auto;
+  overflow-x: hidden;
   background: var(--bg-body);
   position: relative;
   display: flex;
   flex-direction: column;
+  -webkit-overflow-scrolling: touch;
   }
 
   /* Basis für jede Nachricht */
@@ -369,7 +407,7 @@
   border: 1px solid var(--accent-voice);
   border-radius: 6px;
   padding: 4px 8px;
-  font-size: 14px;
+  font-size: 16px; /* ≥16px verhindert iOS Auto-Zoom */
   font-family: inherit;
   resize: none;
   outline: none;
@@ -382,15 +420,53 @@
    ========================= */
 
 textarea {
+  width: 100%;
   background: var(--input-bg);
   color: var(--input-text);
-  border-color: var(--border-input);
+  border: 1px solid var(--border-input);
   caret-color: var(--input-caret);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 16px; /* ≥16px verhindert iOS Auto-Zoom */
+  font-family: inherit;
+  resize: none;
+  outline: none;
+  display: block;
 }
 
 textarea::placeholder {
   color: var(--input-placeholder);
 }
+
+/* ── Input-Footer (sticky am Bottom) ── */
+#chat-input-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ── Send-Button ── */
+#send-btn {
+  margin: 6px 12px 8px;
+  padding: 10px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent-voice, #38BDF8);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  width: calc(100% - 24px);
+  min-height: 44px;
+  transition: opacity 0.15s;
+}
+#send-btn:active { opacity: 0.75; }
+
+/* ── reply-quote-text max-width responsive ── */
+.reply-quote-text { max-width: min(220px, 60vw); }
 
 /* ── Presence ─────────────────────────────────────── */
 #dm-presence-status {
@@ -430,8 +506,8 @@ textarea::placeholder {
 </head>
 <body>
 
-<div id="chat-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border-panel);background:var(--bg-panel);position:sticky;top:0;z-index:20;gap:8px;">
-  <button onclick="history.back()" style="background:none;border:none;color:var(--accent);font-size:15px;cursor:pointer;padding:4px 8px;border-radius:6px;">←</button>
+<div id="chat-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border-panel);background:var(--bg-panel);gap:8px;">
+  <button onclick="(window.parent !== window && typeof window.parent.closeChatPanel === 'function') ? window.parent.closeChatPanel() : window.location.href='/inbox/'" style="background:none;border:none;color:var(--accent);font-size:15px;cursor:pointer;padding:4px 8px;border-radius:6px;">←</button>
   <div style="position:relative;flex:1;display:flex;justify-content:center;">
     <button id="chat-menu-btn" style="background:none;border:none;color:inherit;font-size:16px;font-weight:600;cursor:pointer;padding:4px 12px;border-radius:8px;display:flex;flex-direction:column;align-items:center;transition:background 0.15s;">
       <span id="chat-with"></span>
@@ -461,13 +537,13 @@ textarea::placeholder {
       <!-- Gruppen: Mitglieder anzeigen (nur für Gruppen sichtbar) -->
       <div id="group-members-item" style="display:none;padding:8px 16px 4px;border-top:1px solid var(--border-subtle);margin-top:4px;">
         <div data-i18n="membersHeading" style="font-size:11px;font-weight:600;opacity:0.5;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">Members</div>
-        <ul id="group-member-list" style="list-style:none;padding:0;margin:0;max-height:180px;overflow-y:auto;"></ul>
+        <ul id="group-member-list" style="list-style:none;padding:0;margin:0;max-height:180px;overflow-y:auto;scrollbar-gutter:stable;"></ul>
       </div>
       <!-- Gruppen: Mitglied einladen -->
       <div id="group-invite-item" style="display:none;padding:4px 16px 10px;">
         <div style="display:flex;gap:6px;margin-top:6px;">
           <input id="group-invite-input" type="search" data-i18n-placeholder="invitePlaceholder" placeholder="Invite handle…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-            style="flex:1;font-size:12px;padding:5px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);-webkit-appearance:none;" />
+            style="flex:1;font-size:16px;padding:5px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);-webkit-appearance:none;" />
           <button id="group-invite-btn" data-i18n-title="inviteBtn" title="Invite"
             style="width:32px;height:32px;min-width:32px;border-radius:50%;background:var(--accent);color:#fff;font-size:18px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:transform 0.15s,opacity 0.15s;padding:0;">＋</button>
         </div>
@@ -485,27 +561,15 @@ textarea::placeholder {
   </div>
 </div>
 
-<!-- ── GAST-BANNER (wird per JS eingeblendet) ──────────────────────── -->
-<div id="guest-banner" style="display:none;background:linear-gradient(135deg,rgba(56,189,248,0.12),rgba(99,102,241,0.12));border-bottom:1px solid rgba(56,189,248,0.2);padding:8px 16px;display:none;align-items:center;justify-content:space-between;gap:8px;font-size:12px;flex-shrink:0;">
-  <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-    <span style="font-size:16px;flex-shrink:0;">👤</span>
-    <div style="min-width:0;">
-      <div id="guest-name-display" style="font-weight:600;color:var(--text-primary);">Guest</div>
-      <div style="color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-        <span id="guest-timer-display">--h --m</span> <span data-i18n="timeRemaining">remaining</span> &nbsp;·&nbsp; <span id="guest-msgs-display">20</span> <span data-i18n="msgsRemaining">messages left</span>
-      </div>
-    </div>
-  </div>
-  <button id="guest-convert-btn" data-i18n="convertToPasskey" onclick="convertGuest()" style="flex-shrink:0;padding:6px 12px;border-radius:8px;border:none;background:var(--accent-voice);color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">
-    Sign in with Passkey
-  </button>
-</div>
-
+<div id="chat-header-spacer"></div>
 <div id="messages"></div>
 
 <div id="new-indicator">
   <span id="unread-count">0</span><span id="new-messages-suffix" data-i18n="newMessagesSuffix"> neue Nachrichten ↓</span>
 </div>
+
+<!-- ── INPUT-FOOTER (sticky) ───────────────────────────── -->
+<div id="chat-input-footer">
 
 <!-- Reply-Bar: erscheint wenn Nutzer auf ↩️ klickt -->
 <div id="reply-bar">
@@ -514,6 +578,22 @@ textarea::placeholder {
     <span class="reply-bar-from" id="reply-bar-from"></span><span id="reply-bar-text"></span>
   </span>
   <button id="reply-bar-cancel" data-i18n-title="cancelTitle" title="Cancel">✕</button>
+</div>
+
+<!-- ── GAST-BANNER (wird per JS eingeblendet) ──────────────────────── -->
+<div id="guest-banner" style="display:none;background:linear-gradient(135deg,rgba(56,189,248,0.12),rgba(99,102,241,0.12));border-top:1px solid rgba(56,189,248,0.2);padding:8px 16px;align-items:center;justify-content:space-between;gap:8px;font-size:12px;flex-shrink:0;">
+  <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+    <span style="font-size:16px;flex-shrink:0;">👤</span>
+    <div style="min-width:0;">
+      <div id="guest-name-display" data-i18n="guestLabel" style="font-weight:600;color:var(--text-primary);">Guest</div>
+      <div style="color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        <span id="guest-timer-display">--h --m</span> <span data-i18n="timeRemaining">remaining</span> &nbsp;·&nbsp; <span id="guest-msgs-display">20</span> <span data-i18n="msgsRemaining">messages left</span>
+      </div>
+    </div>
+  </div>
+  <button id="guest-convert-btn" data-i18n="convertToPasskey" onclick="convertGuest()" style="flex-shrink:0;padding:6px 12px;border-radius:8px;border:none;background:var(--accent-voice);color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">
+    Sign in with Passkey
+  </button>
 </div>
 
 <!-- Attach-Bar -->
@@ -530,7 +610,6 @@ textarea::placeholder {
   placeholder="Nachricht…"
   data-i18n-placeholder="messagePlaceholder"
   rows="2"
-  style="width:100%; resize:none;"
   autofocus
 ></textarea>
 
@@ -539,12 +618,14 @@ textarea::placeholder {
 
 <button id="send-btn" data-i18n="sendBtn">Senden</button>
 
+</div><!-- /#chat-input-footer -->
+
 <!-- GIF-Suchmodal -->
 <div id="gif-modal" style="display:none;position:fixed;inset:0;z-index:800;background:rgba(0,0,0,0.6);">
   <div style="position:absolute;bottom:0;left:0;right:0;background:var(--bg-panel);border-radius:16px 16px 0 0;padding:12px;max-height:80vh;display:flex;flex-direction:column;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
       <input id="gif-search-input" type="search" data-i18n-placeholder="gifSearchPlaceholder" placeholder="Search GIF…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-             style="flex:1;font-size:14px;padding:8px 12px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);outline:none;" />
+             style="flex:1;font-size:16px;padding:8px 12px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);outline:none;" />
       <button id="gif-modal-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-secondary);padding:4px 8px;">✕</button>
     </div>
     <div id="gif-results" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;overflow-y:auto;flex:1;"></div>

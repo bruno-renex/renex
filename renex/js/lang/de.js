@@ -9,6 +9,10 @@ export default {
   // ── inbox.html ──────────────────────────────────────
   inboxPageTitle:           "RENEX – Inbox",
   addContactHeading:        "Kontakt hinzufügen",
+  guestInviteLabel:         "Oder: Gast einladen (ohne Account)",
+  createInviteLinkBtn:      "Einladungslink erstellen",
+  addContactTitle:          "Kontakt hinzufügen",
+  sendRequestTitle:         "Anfrage senden",
   addContactPlaceholder:    "Username",
   addContactBtn:            "Anfrage senden",
   pendingHeading:           "Offene Anfragen",
@@ -66,6 +70,7 @@ export default {
   // ── Chat-Nachrichten ──────────────────────────────────
   decryptPending:         "🔒 Nachricht wird entschlüsselt…",
   decryptFailed:          "🔒 Nachricht konnte nicht entschlüsselt werden",
+  guestConvertNotice:     "🔒 Nachrichten aus deiner Gast-Session können nach der Registrierung nicht mehr angezeigt werden",
   messageExpired:         "⏱ Nachricht automatisch gelöscht",
   deleteMessageTitle:     "Nachricht löschen",
   confirmDeleteMessage:   "Nachricht für alle löschen?",
@@ -87,6 +92,8 @@ export default {
   noPendingRequests:      "Keine offenen Anfragen",
   loadContactsFailed:     "Fehler beim Laden der Kontakte",
   requestSent:            " (Anfrage gesendet)",
+  requestWantsToConnect:  "möchte sich verbinden",
+  requestWithdraw:        "Zurückziehen",
   acceptBtn:              "Annehmen",
   rejectBtn:              "Ablehnen",
   accountDeleted:         " (Konto gelöscht)",
@@ -97,7 +104,10 @@ export default {
   confirmRemoveContact:   (handle) => `Kontakt ${handle} wirklich entfernen?`,
   closeBtn:               "Schliessen",
   linkCopied:             "Link kopiert!",
+  dmInviteSubLabel:       "DM-Einladung (einmalig)",
   linkCopiedInfo:         "Link kopiert — gültig 48h, max. 20 Nachrichten pro Gast",
+  linkCopiedClipboard:    (url) => `Chatte mit mir auf Renex (48h gültig):\n${url}`,
+  linkCopiedClipboardDm:  (url) => `Schreib mir auf Renex (48h gültig, einmalig):\n${url}`,
   linkCreateFailed:       "Link konnte nicht erstellt werden",
   inviteLinkCreate:       "Einladungslink erstellen",
   doneBtn:                "Fertig",
@@ -190,6 +200,7 @@ export default {
   noTokenMsg:              "Dieser Link ist ungültig.",
   inviteExpiredReason:     "Dieser Einladungslink ist abgelaufen.",
   inviteAlreadyUsed:       "Dieser Link wurde bereits verwendet.",
+  inviteAlreadyUsedDm:     "Dieser Einladungslink wurde bereits verwendet. Jeder DM-Link kann nur einmal genutzt werden.",
   inviteNotFound:          "Dieser Link existiert nicht.",
   joiningText:             "Beitreten…",
   captchaRequired:         "Bitte zuerst die Sicherheitsprüfung abschliessen.",
@@ -204,4 +215,10 @@ export default {
 
   // ── Locale ───────────────────────────────────────────
   locale: "de-DE",
+
+  // ── Push Notifications ──────────────────────────────
+  pushBannerTitle:      "Benachrichtigungen aktivieren",
+  pushBannerSubtitle:   "Verpasse keine Nachrichten",
+  pushBannerActivating: "Wird aktiviert…",
+  pushBannerBlocked:    "Benachrichtigungen blockiert",
 };

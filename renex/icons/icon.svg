@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f0f12"/>
+      <stop offset="100%" stop-color="#1a1a24"/>
+    </linearGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="8"/></filter>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Subtle glow behind X only -->
+  <ellipse cx="385" cy="260" rx="55" ry="55" fill="#38bdf8" opacity="0.06"/>
+  <!-- RENE in white, X in cyan — single baseline, tight tracking -->
+  <text x="256" y="310" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="120" font-weight="800" letter-spacing="-1" text-anchor="middle">
+    <tspan fill="#e6e6eb">RENE</tspan><tspan fill="#38bdf8">X</tspan>
+  </text>
+  <!-- Glow effect on X -->
+  <text x="356" y="310" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="120" font-weight="800" fill="#38bdf8" opacity="0.35" filter="url(#blur)">X</text>
+</svg>

@@ -1,5 +1,6 @@
 import { json, readJson, dmConvoId } from '../utils.js';
 import { requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, pushToGroupMembers, GUEST_HANDLE_RE } from '../auth.js';
+import { pushToUser, detectMentions } from './pushSend.js';
 
 // ======================================================
 // CHAT / SEND handler (extracted for line-count budget)
@@ -40,6 +41,8 @@ export async function handleChatSend(request, env) {
     replyRotationIndex,  // chainIndex der Reply-Preview (Gruppen)
     attachmentKey,       // R2-Key des verschlüsselten Files (null für GIFs)
     attachmentType,      // 'photo' | 'file' | 'gif'
+    mentions,            // Array von @mentioned Handles (Client-extracted, unverschlüsselt)
+    mentionsEveryone,    // Boolean: @everyone wurde erwähnt
   } = body;
 
   // Recipient Validation (early guard)
@@ -63,14 +66,15 @@ export async function handleChatSend(request, env) {
     }
 
     const isGskControl = type === "gsk" || type === "request_gsk";
+    const isCmkControl = type === "cmk_req" || type === "cmk";
 
-    // Alle anderen Control-Messages verboten
-    if (type && !isGskControl) {
+    // Alle anderen Control-Messages verboten (GSK + CMK für E2E erlaubt)
+    if (type && !isGskControl && !isCmkControl) {
       return json(request, { error: "Control messages not allowed for guests" }, 403);
     }
 
-    // Chat-Nachrichten: Limit-Check (GSK-Control-Messages überspringen)
-    if (!isGskControl) {
+    // Chat-Nachrichten: Limit-Check (GSK/CMK-Control-Messages überspringen)
+    if (!isGskControl && !isCmkControl) {
       const guestRow = await env.RENEX_DB.prepare(
         "SELECT msg_count, msg_limit, expires_at, converted_to FROM guest_sessions WHERE token = ?"
       ).bind(guestToken).first();
@@ -420,6 +424,7 @@ export async function handleChatSend(request, env) {
   // DM:    → pushToUserDO(to)         — einzelner Empfänger
   // Gruppe:→ pushToGroupMembers(cid)  — alle Mitglieder ausser Sender
   // ======================================================
+  let wsDeliveredCount = 0;
   if (bodyConvoId) {
     // Gruppen-Nachricht: an alle Mitglieder der Konversation senden
     await pushToGroupMembers(env, env.RENEX_DB, bodyConvoId, me, msg);
@@ -429,7 +434,7 @@ export async function handleChatSend(request, env) {
       console.error("❌ PUSH: invalid 'to'", to);
       return json(request, { error: "Invalid recipient" }, 400);
     }
-    await pushToUserDO(env, String(to).toLowerCase(), msg);
+    wsDeliveredCount = await pushToUserDO(env, String(to).toLowerCase(), msg);
   }
 
   // ======================================================
@@ -441,6 +446,125 @@ export async function handleChatSend(request, env) {
       `INSERT INTO unread_counters (owner, sender, count) VALUES (?, ?, 1)
        ON CONFLICT(owner, sender) DO UPDATE SET count = count + 1`
     ).bind(other, me).run();
+  }
+
+  // ======================================================
+  // WEB PUSH NOTIFICATIONS (wenn User offline / kein WS)
+  // Nur für echte Chat-Messages (keine Control-Messages)
+  // ======================================================
+  const isControlMsg = msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "epoch_rotate" || msg.type === "cmk_rotate" || msg.type === "auto_delete_set" || msg.type === "gsk" || msg.type === "request_gsk";
+  if (!isControlMsg) {
+    try {
+      if (isGroupMessage) {
+        // Gruppe: Push an alle offline Members
+        const memberRows = await env.RENEX_DB.prepare(
+          "SELECT member_handle FROM conversation_members WHERE convo_id = ?"
+        ).bind(cid).all();
+        const members = (memberRows.results || []).map(r => r.member_handle);
+        const groupName = (await env.RENEX_DB.prepare(
+          "SELECT name FROM conversations WHERE id = ?"
+        ).bind(cid).first())?.name || "Gruppe";
+
+        // @mention Detection — Client sendet mentions[] Metadata (E2E-kompatibel)
+        // Fallback auf Server-Side Detection für Plaintext-Nachrichten
+        const clientMentions = Array.isArray(mentions) ? mentions.map(h => String(h).toLowerCase()) : [];
+        const clientMentionsAll = mentionsEveryone === true;
+        const { mentionsAll: serverMentionsAll, mentionedHandles: serverMentions } = detectMentions(msg.message, members);
+        const mentionedHandles = clientMentions.length > 0 ? clientMentions : serverMentions;
+        const mentionsAll = clientMentionsAll || serverMentionsAll;
+
+        const recipients = members.filter(h => h !== me);
+        await Promise.allSettled(recipients.map(async (handle) => {
+          // Mute-Check
+          const mute = await env.RENEX_DB.prepare(
+            "SELECT level, expires_at FROM notification_mutes WHERE user_handle = ? AND convo_id = ?"
+          ).bind(handle, cid).first();
+
+          if (mute) {
+            // Temporäres Mute abgelaufen?
+            if (mute.expires_at && Date.now() > mute.expires_at) {
+              await env.RENEX_DB.prepare(
+                "DELETE FROM notification_mutes WHERE user_handle = ? AND convo_id = ?"
+              ).bind(handle, cid).run();
+            } else {
+              const level = mute.level || "all";
+              if (level === "all") return; // komplett stumm
+              if (level === "mentions_only") {
+                // Nur bei direktem @handle — @everyone wird UNTERDRÜCKT
+                if (!mentionedHandles.includes(handle)) return;
+              }
+              if (level === "mentions_and_everyone") {
+                // @handle ODER @everyone
+                if (!mentionsAll && !mentionedHandles.includes(handle)) return;
+              }
+            }
+          }
+
+          // Online-Check: wenn WS aktiv, kein Push nötig
+          const presence = await env.RENEX_KV.get(`presence:${handle}`);
+          if (presence) {
+            try {
+              const p = JSON.parse(presence);
+              if (p.online) return; // User ist online via WebSocket
+            } catch {}
+          }
+
+          await pushToUser(env, handle, {
+            title: `${groupName}`,
+            body: `${me}: ${msg.e2e ? "Verschlüsselte Nachricht" : (msg.message || "").slice(0, 100)}`,
+            tag: `renex-${cid}`,
+            data: {
+              type: "message",
+              convoId: cid,
+              from: me,
+              url: `/inbox.html?open=${cid}`,
+              e2e: !!msg.e2e,
+            },
+          });
+        }));
+      } else {
+        // DM: Push an einzelnen Empfänger
+        const mute = await env.RENEX_DB.prepare(
+          "SELECT level, expires_at FROM notification_mutes WHERE user_handle = ? AND convo_id = ?"
+        ).bind(other, cid).first();
+
+        let shouldPush = true;
+        if (mute) {
+          if (mute.expires_at && Date.now() > mute.expires_at) {
+            await env.RENEX_DB.prepare(
+              "DELETE FROM notification_mutes WHERE user_handle = ? AND convo_id = ?"
+            ).bind(other, cid).run();
+          } else if ((mute.level || "all") === "all") {
+            shouldPush = false;
+          }
+        }
+
+        if (shouldPush) {
+          // Online-Check: WebSocket-Zustellung hat Vorrang über KV-Presence
+          // wsDeliveredCount > 0 = User hat aktive WS-Verbindung → kein Push nötig
+          // wsDeliveredCount === 0 = kein offener Tab → Push senden
+          const isOnline = wsDeliveredCount > 0;
+
+          if (!isOnline) {
+            await pushToUser(env, other, {
+              title: me,
+              body: msg.e2e ? "Verschlüsselte Nachricht" : (msg.message || "").slice(0, 100),
+              tag: `renex-${cid}`,
+              data: {
+                type: "message",
+                convoId: cid,
+                from: me,
+                url: `/inbox.html?open=${me}`,
+                e2e: !!msg.e2e,
+              },
+            });
+          }
+        }
+      }
+    } catch (pushErr) {
+      // Push-Fehler dürfen Chat-Send nicht blockieren
+      console.error("Push notification error (non-blocking):", pushErr.message);
+    }
   }
 
   // Antwort an Client

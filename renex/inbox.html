@@ -2,126 +2,629 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <title>RENEX – Inbox</title>
-  <!-- i18n: Seitentitel wird per JS gesetzt -->
-
+  <title>RENEX</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#38bdf8" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <script>if("serviceWorker"in navigator)navigator.serviceWorker.register("/sw.js").catch(()=>{})</script>
   <link rel="stylesheet" href="/colors.css" />
-
 <style>
+
+  /* ═══════════════════════════════════════════
+     RESET
+  ═══════════════════════════════════════════ */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
   body {
     font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-    margin: 24px;
-  }
-
-  /* ============================= */
-  /* HEADER */
-  /* ============================= */
-
-  .header {
+    background: var(--bg-body);
+    color: var(--text-primary);
+    height: 100dvh;
+    overflow: hidden;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 32px;
   }
 
-  .brand {
-    font-size: 22px;
+  /* ═══════════════════════════════════════════
+     APP SHELL
+  ═══════════════════════════════════════════ */
+  .app {
+    display: flex;
+    width: 100%;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  /* ═══════════════════════════════════════════
+     ICON STRIP — left on desktop
+  ═══════════════════════════════════════════ */
+  .icon-strip {
+    width: 64px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 14px 0 12px;
+    border-right: 1px solid var(--border-panel);
+    background: var(--bg-panel);
+    gap: 2px;
+    z-index: 10;
+  }
+
+  .strip-brand {
+    font-size: 13px;
     font-weight: 800;
-    letter-spacing: 0.25em;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--text-primary);
     user-select: none;
+    margin-bottom: 18px;
   }
 
-  .brand .x {
+  .strip-brand .x {
     color: var(--accent-voice);
-    text-shadow:
-      0 0 10px rgba(56, 189, 248, 0.7),
-      0 0 22px rgba(56, 189, 248, 0.35);
+    text-shadow: 0 0 8px rgba(56,189,248,0.7);
   }
 
-  /* ============================= */
-  /* CHAT LINK */
-  /* ============================= */
+  .strip-icons-top {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    flex: 1;
+  }
 
+  .strip-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .strip-icon:hover {
+    background: rgba(255,255,255,0.05);
+    color: var(--text-secondary);
+  }
+
+  .strip-icon.active {
+    background: rgba(56,189,248,0.12);
+    color: var(--accent-voice);
+  }
+
+  /* Active indicator bar */
+  .strip-icon.active::before {
+    content: '';
+    position: absolute;
+    left: -1px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 24px;
+    background: var(--accent-voice);
+    border-radius: 0 3px 3px 0;
+  }
+
+  .strip-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-voice);
+    border: 2px solid var(--bg-panel);
+    display: none;
+  }
+
+  .strip-badge.visible { display: block; }
+
+  .strip-icons-bottom {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding-top: 8px;
+  }
+
+  /* Profile avatar in strip */
+  #profile-circle {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+  }
+
+  #profile-circle:hover { opacity: 0.8; }
+
+  /* ═══════════════════════════════════════════
+     PANEL LIST — middle column
+  ═══════════════════════════════════════════ */
+  .panel-list {
+    width: 300px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border-panel);
+    background: rgba(13,13,17,0.9);
+    overflow: hidden;
+  }
+
+  .panel-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 14px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+
+  .panel-list-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 0.01em;
+  }
+
+  .panel-action-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: none;
+    background: rgba(56,189,248,0.12);
+    color: var(--accent-voice);
+    font-size: 20px;
+    font-weight: 400;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: background 0.15s;
+  }
+
+  .panel-action-btn:hover { background: rgba(56,189,248,0.2); }
+
+  .panel-search {
+    padding: 10px 12px 6px;
+    flex-shrink: 0;
+  }
+
+  .panel-search input {
+    width: 100%;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 16px; /* ≥16px prevents iOS zoom */
+    color: var(--text-primary);
+    outline: none;
+    font-family: inherit;
+    transition: border-color 0.15s;
+  }
+
+  @media (min-width: 701px) {
+    .panel-search input { font-size: 13px; }
+  }
+
+  .panel-search input:focus { border-color: rgba(56,189,248,0.3); }
+  .panel-search input::placeholder { color: var(--text-muted); }
+
+  .list-section {
+    display: none;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .list-section.active {
+    display: flex;
+  }
+
+  .contact-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+  }
+
+  /* Scrollbar */
+  .contact-scroll::-webkit-scrollbar { width: 3px; }
+  .contact-scroll::-webkit-scrollbar-track { background: transparent; }
+  .contact-scroll::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 4px; }
+
+  /* ═══════════════════════════════════════════
+     CONTACT CARDS
+  ═══════════════════════════════════════════ */
+
+  #accepted, #groups {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .contact-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 10px;
+    border-radius: 13px;
+    cursor: pointer;
+    transition: background 0.12s;
+    position: relative;
+    margin: 1px 0;
+    border: none;
+    background: transparent;
+  }
+
+  .contact-card:hover {
+    background: rgba(255,255,255,0.045);
+  }
+
+  .contact-card:hover .contact-remove-btn {
+    opacity: 1;
+  }
+
+  /* Avatar */
+  .contact-avatar-wrap {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+  }
+
+  .contact-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--text-primary);
+  }
+
+  /* Status dot */
+  .contact-dot {
+    position: absolute;
+    bottom: 1px;
+    right: 1px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid var(--bg-panel);
+    display: none;
+  }
+
+  .contact-dot.online  { display: block; background: var(--status-speaking); }
+  .contact-dot.idle    { display: block; background: var(--status-warn); }
+  .contact-dot.offline { display: none; }
+
+  /* Info */
+  .contact-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .contact-top-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px;
+  }
+
+  .contact-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+
+  .contact-name.unread { color: var(--accent-voice); }
+
+  .contact-time {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .contact-time.unread {
+    color: var(--accent-voice);
+    font-weight: 600;
+  }
+
+  .contact-bottom-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+
+  .contact-preview {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+
+  .contact-preview.muted { opacity: 0.4; }
+
+  .contact-presence-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .contact-presence-label.online { color: var(--status-speaking); }
+
+  /* Unread badge */
+  .contact-badge {
+    background: var(--accent-voice);
+    color: #07070A;
+    font-size: 10px;
+    font-weight: 800;
+    border-radius: 999px;
+    min-width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    flex-shrink: 0;
+    animation: badgePop 0.2s cubic-bezier(0.34,1.56,0.64,1);
+  }
+
+  @keyframes badgePop {
+    from { transform: scale(0.5); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+  }
+
+  /* Remove / Leave button — hidden until hover */
+  .contact-remove-btn {
+    opacity: 0;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    transition: opacity 0.15s, color 0.15s;
+    line-height: 1;
+  }
+
+  .contact-remove-btn:hover { color: var(--status-error); }
+
+  /* Mobile: always show remove btn (no hover on touch) */
+  @media (hover: none) {
+    .contact-remove-btn { opacity: 0.4; }
+  }
+
+  /* ═══════════════════════════════════════════
+     CHAT LINK (inside li rows)
+  ═══════════════════════════════════════════ */
   a.chat-link {
     color: var(--accent-voice);
     text-decoration: none;
     font-size: 13px;
     font-weight: 500;
-    letter-spacing: 0.02em;
-    transition: opacity 0.15s ease;
+    transition: opacity 0.15s;
   }
 
-  a.chat-link:hover {
-    opacity: 0.75;
+  a.chat-link:hover { opacity: 0.75; }
+
+  /* ═══════════════════════════════════════════
+     PENDING BANNER
+  ═══════════════════════════════════════════ */
+  #pending-banner, #pending-banner-groups {
+    display: none;
+    margin: 8px 10px 4px;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
   }
 
+  /* ═══════════════════════════════════════════
+     VOICE PLACEHOLDER
+  ═══════════════════════════════════════════ */
+  .voice-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--text-muted);
+    user-select: none;
+    padding: 40px 20px;
+    text-align: center;
+  }
+
+  .voice-empty-icon {
+    font-size: 40px;
+    opacity: 0.2;
+  }
+
+  .voice-empty-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    opacity: 0.6;
+  }
+
+  .voice-empty-hint {
+    font-size: 12px;
+    line-height: 1.6;
+    opacity: 0.45;
+  }
+
+  .voice-empty-hint strong {
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  /* Active voice session card (future) */
+  .voice-session-card {
+    background: var(--bg-panel-alt);
+    border: 1px solid rgba(56,189,248,0.2);
+    border-radius: 14px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .voice-session-card:hover { background: rgba(56,189,248,0.08); }
+
+  .voice-session-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .voice-live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--status-speaking);
+    box-shadow: 0 0 6px rgba(60,228,122,0.6);
+    animation: pulseLive 1.5s ease infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes pulseLive {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.6; transform: scale(0.85); }
+  }
+
+  .voice-session-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+    flex: 1;
+  }
+
+  .voice-session-members {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .voice-member {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .voice-member-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--status-speaking);
+    flex-shrink: 0;
+  }
+
+  .voice-member-dot.muted { background: var(--text-muted); }
+
+  /* ═══════════════════════════════════════════
+     PANEL RIGHT — empty state (desktop only)
+  ═══════════════════════════════════════════ */
+  .panel-right {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-body);
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-muted);
+    user-select: none;
+    opacity: 0.4;
+  }
+
+  .empty-state-icon { font-size: 48px; }
+  .empty-state-text { font-size: 13px; letter-spacing: 0.02em; }
+
+  /* ═══════════════════════════════════════════
+     DROPDOWN (Profile)
+  ═══════════════════════════════════════════ */
   .profile-wrapper {
     position: relative;
   }
 
-  #profile-circle {
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
-    background: var(--bg-panel);
-    color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
-    font-size: 14px;
-    cursor: pointer;
-    user-select: none;
-    transition: transform 0.15s ease, opacity 0.15s ease;
-  }
-
-  #profile-circle:hover {
-    transform: scale(1.05);
-    opacity: 0.9;
-  }
-
   .dropdown {
-    position: absolute;
-    top: 48px;
-    right: 0;
+    position: fixed;
+    left: 70px;
+    bottom: 60px;
     background: var(--bg-panel);
     border: 1px solid var(--border-panel);
-    border-radius: 10px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-    min-width: 160px;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    min-width: 180px;
     padding: 8px 0;
     display: none;
-    z-index: 100;
+    z-index: 200;
   }
 
-  .dropdown.show {
-    display: block;
-  }
+  .dropdown.show { display: block; }
 
   .dropdown-item {
     padding: 10px 16px;
     font-size: 14px;
     cursor: pointer;
+    transition: background 0.1s;
+    color: var(--text-primary);
   }
 
-  .dropdown-item:hover {
-    background: var(--bg-panel-alt);
-  }
+  .dropdown-item:hover { background: var(--bg-panel-alt); }
 
-  .dropdown-divider {
-    height: 1px;
-    background: var(--border-subtle);
-    margin: 6px 0;
-  }
-
-  .logout {
-    color: var(--status-error);
-  }
-
-  /* Sub-Dropdown (zweite Ebene) */
   .dropdown-item.has-sub {
     display: flex;
     justify-content: space-between;
@@ -132,59 +635,100 @@
     content: "›";
     font-size: 16px;
     opacity: 0.5;
-    margin-left: 8px;
   }
+
+  .dropdown-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 4px 0;
+  }
+
+  .logout { color: var(--status-error); }
 
   #account-submenu {
     position: absolute;
     top: 0;
-    right: calc(100% + 6px);
+    left: calc(100% + 6px);
     background: var(--bg-panel);
     border: 1px solid var(--border-panel);
-    border-radius: 10px;
+    border-radius: 12px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     min-width: 160px;
     padding: 8px 0;
     display: none;
-    z-index: 101;
+    z-index: 201;
   }
 
-  #account-submenu.show {
-    display: block;
+  #account-submenu.show { display: block; }
+
+  /* ═══════════════════════════════════════════
+     ADD CONTACT POPUP
+  ═══════════════════════════════════════════ */
+  #add-contact-popup {
+    display: none;
+    position: fixed;
+    bottom: 0;
+    left: 64px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 0 16px 0 0;
+    box-shadow: 0 -4px 24px rgba(0,0,0,0.4);
+    padding: 16px;
+    z-index: 201;
+    width: 300px;
   }
 
-  /* Bestätigungsdialog */
+  /* ═══════════════════════════════════════════
+     CREATE GROUP POPUP
+  ═══════════════════════════════════════════ */
+  #create-group-popup {
+    display: none;
+    position: fixed;
+    bottom: 0;
+    left: 64px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 0 16px 0 0;
+    box-shadow: 0 -4px 24px rgba(0,0,0,0.4);
+    padding: 16px;
+    z-index: 201;
+    width: 300px;
+    max-height: calc(100dvh - 80px);
+    overflow-y: auto;
+  }
+
+  /* ═══════════════════════════════════════════
+     DELETE DIALOG
+  ═══════════════════════════════════════════ */
   #delete-overlay {
     display: none;
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,0.65);
-    z-index: 200;
+    z-index: 500;
     align-items: center;
     justify-content: center;
   }
 
-  #delete-overlay.show {
-    display: flex;
-  }
+  #delete-overlay.show { display: flex; }
 
   #delete-dialog {
     background: var(--bg-panel);
     border: 1px solid var(--border-panel);
-    border-radius: 14px;
+    border-radius: 16px;
     padding: 28px 24px;
     width: 320px;
     box-shadow: 0 16px 48px rgba(0,0,0,0.6);
   }
 
   #delete-dialog h3 {
-    margin: 0 0 10px 0;
+    margin: 0 0 10px;
     font-size: 17px;
     color: var(--text-primary);
   }
 
   #delete-dialog p {
-    margin: 0 0 20px 0;
+    margin: 0 0 20px;
     font-size: 13px;
     color: var(--text-secondary);
     line-height: 1.5;
@@ -192,14 +736,15 @@
 
   #delete-dialog input {
     width: 100%;
-    box-sizing: border-box;
     padding: 10px 12px;
     font-size: 14px;
-    background: var(--bg-input, var(--bg-panel-alt));
+    background: var(--bg-panel-alt);
     border: 1px solid var(--border-subtle);
     border-radius: 8px;
     color: var(--text-primary);
     margin-bottom: 6px;
+    outline: none;
+    font-family: inherit;
   }
 
   #delete-handle-error {
@@ -221,7 +766,6 @@
     border: none;
     font-size: 14px;
     cursor: pointer;
-    margin: 0;
   }
 
   #btn-cancel-delete {
@@ -242,141 +786,27 @@
     pointer-events: auto;
   }
 
-  /* ============================= */
-  /* TABS */
-  /* ============================= */
-
-  .tab-bar {
-    display: flex;
-    gap: 0;
-    background: transparent;
-    border-bottom: 2px solid var(--border-subtle);
-    padding: 0;
-    margin-bottom: 20px;
-  }
-
-  .tab-btn {
-    flex: 1;
-    padding: 10px 0 9px;
-    border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -2px;
-    border-radius: 0;
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
-    display: flex;
+  /* ═══════════════════════════════════════════
+     REQUESTS MODAL
+  ═══════════════════════════════════════════ */
+  #requests-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 500;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    position: relative;
   }
 
-  .tab-btn:hover {
-    color: var(--text-primary);
-    background: transparent;
-  }
+  #requests-modal.show { display: flex; }
 
-  .tab-btn.active {
-    color: var(--accent-voice);
-    font-weight: 700;
-    border-bottom-color: var(--accent-voice);
-    background: transparent;
-  }
-
-  .tab-badge {
-    background: var(--accent-voice);
-    color: #fff;
-    font-size: 10px;
-    font-weight: 700;
-    border-radius: 999px;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-  }
-
-  .tab-badge.visible {
-    display: flex;
-  }
-
-  .tab-panel {
-    display: none;
-  }
-
-  .tab-panel.active {
-    display: block;
-  }
-
-  /* FAB-Überlappung verhindern — inkl. iPhone Safe Area */
-  #accepted, #groups {
-    padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
-  }
-
-  /* ============================= */
-  /* CONTENT */
-  /* ============================= */
-
-  h2 {
-    margin-top: 24px;
-    margin-bottom: 12px;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-
-  ul {
-    list-style: none;
-    padding: 0;
-  }
-
-  li {
-    margin: 6px 0;
-  }
-
-  button {
-    margin-left: 8px;
-  }
-
-  /* Buttons innerhalb von Kontakt/Gruppen-Rows kein extra margin */
-  #accepted li button,
-  #groups li button {
-    margin-left: 0;
-  }
-
-  #add-btn, #create-group-btn {
-    margin-left: 0;
-  }
-
-  #add-btn:hover {
-    opacity: 0.85;
-    transform: scale(1.08);
-  }
-
-  #create-group-btn:hover {
-    transform: scale(1.1);
-    box-shadow: 0 6px 24px rgba(0,0,0,0.45);
-  }
-  #create-group-btn:active {
-    transform: scale(0.96);
-  }
-
-  #add-handle {
-    margin-right: 8px;
-  }
-
-  /* ── Toast-Notification ─────────────────────────── */
+  /* ═══════════════════════════════════════════
+     TOAST
+  ═══════════════════════════════════════════ */
   #inbox-toast-container {
     position: fixed;
-    top: 68px; /* unter dem Header */
+    top: 14px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 900;
@@ -384,15 +814,8 @@
     flex-direction: column;
     gap: 8px;
     pointer-events: none;
-    width: calc(100% - 32px);
+    width: calc(100% - 128px - 32px);
     max-width: 420px;
-  }
-  /* Presence dot auf Avatar */
-  [data-presence-handle] {
-    position: relative;
-  }
-  [data-presence-handle] span {
-    pointer-events: none;
   }
 
   .inbox-toast {
@@ -411,155 +834,594 @@
     animation: toastIn 0.25s ease;
     transition: opacity 0.3s, transform 0.3s;
   }
-  .inbox-toast.hiding {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
+
+  .inbox-toast.hiding { opacity: 0; transform: translateY(-10px); }
+
   @keyframes toastIn {
     from { opacity: 0; transform: translateY(-14px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-  .inbox-toast-icon { font-size: 20px; flex-shrink: 0; }
-  .inbox-toast-body { flex: 1; }
+
+  .inbox-toast-icon  { font-size: 20px; flex-shrink: 0; }
+  .inbox-toast-body  { flex: 1; }
   .inbox-toast-title { font-weight: 700; margin-bottom: 1px; }
   .inbox-toast-sub   { font-size: 12px; opacity: 0.65; }
-  .inbox-toast-close { background: none; border: none; color: var(--text-secondary); font-size: 16px; cursor: pointer; padding: 0; line-height: 1; flex-shrink: 0; }
+  .inbox-toast-close { background: none; border: none; color: var(--text-secondary); font-size: 16px; cursor: pointer; padding: 0; line-height: 1; flex-shrink: 0; margin: 0; }
+
+  /* Presence dot */
+  [data-presence-handle] { position: relative; }
+  [data-presence-handle] span { pointer-events: none; }
+
+  /* ═══════════════════════════════════════════
+     h2 section labels inside lists
+  ═══════════════════════════════════════════ */
+  h2 {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 10px 12px 4px;
+  }
+
+  ul { list-style: none; padding: 0; }
+  li { margin: 1px 0; }
+
+  button { font-family: inherit; }
+
+  /* ═══════════════════════════════════════════
+     PHASE 4 — GAMER DETAILS
+  ═══════════════════════════════════════════ */
+
+  /* Strip icon — active glow */
+  .strip-icon.active {
+    background: rgba(56,189,248,0.12);
+    color: var(--accent-voice);
+    box-shadow: 0 0 12px rgba(56,189,248,0.15);
+  }
+
+  /* Strip icon — hover glow */
+  .strip-icon:hover {
+    background: rgba(255,255,255,0.05);
+    color: var(--text-secondary);
+    box-shadow: 0 0 8px rgba(56,189,248,0.08);
+  }
+
+  /* Contact card — hover glow */
+  .contact-card:hover {
+    background: rgba(255,255,255,0.045);
+    box-shadow: inset 2px 0 0 rgba(56,189,248,0.3);
+  }
+
+  /* Contact card — active (when chat is open) */
+  .contact-card.active {
+    background: rgba(56,189,248,0.07);
+    box-shadow: inset 2px 0 0 var(--accent-voice);
+  }
+
+  .contact-card.active .contact-name {
+    color: var(--accent-voice);
+  }
+
+  /* Unread badge — pop animation (already in CSS, ensure it runs) */
+  .contact-badge {
+    animation: badgePop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+
+  /* Status dot — online pulse */
+  .contact-dot.online {
+    animation: dotPulse 2.5s ease infinite;
+  }
+
+  @keyframes dotPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(60,228,122,0.5); }
+    50%       { box-shadow: 0 0 0 3px rgba(60,228,122,0); }
+  }
+
+  /* Avatar — subtle glow when online */
+  .contact-avatar-wrap[data-presence-handle] .contact-dot.online ~ .contact-avatar,
+  .contact-avatar-wrap .contact-dot.online {
+    /* dot itself pulses — avatar stays clean */
+  }
+
+  /* Send button glow (chat) */
+  .send-btn:hover {
+    box-shadow: 0 0 16px rgba(56,189,248,0.4);
+  }
+
+  /* Panel list header — subtle top border accent */
+  .panel-list-header {
+    border-top: 2px solid transparent;
+    transition: border-color 0.2s;
+  }
+
+  #section-dms.active .panel-list-header    { border-top-color: var(--accent-voice); }
+  #section-groups.active .panel-list-header { border-top-color: var(--accent-voice); }
+  #section-voice.active .panel-list-header  { border-top-color: var(--status-speaking); }
+
+  /* ═══════════════════════════════════════════
+     LOGIN MODAL
+  ═══════════════════════════════════════════ */
+
+  #login-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: var(--bg-body);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+  }
+
+  #login-modal.hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .login-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 32px;
+    width: 100%;
+    max-width: 340px;
+  }
+
+  .login-logo-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+  }
+
+  .login-logo {
+    font-size: 42px;
+    font-weight: 800;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+  }
+
+  .login-logo .x {
+    color: var(--accent-voice);
+    text-shadow:
+      0 0 14px rgba(56,189,248,0.75),
+      0 0 32px rgba(56,189,248,0.35);
+  }
+
+  .login-slogan {
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0;
+  }
+
+  .login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .login-form input {
+    width: 100%;
+    padding: 14px 16px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-input);
+    border-radius: 13px;
+    font-size: 16px;
+    color: var(--text-primary);
+    outline: none;
+    font-family: inherit;
+    caret-color: var(--accent-voice);
+    transition: border-color 0.15s;
+    text-align: center;
+    letter-spacing: 0.02em;
+  }
+
+  .login-form input:focus { border-color: rgba(56,189,248,0.4); }
+  .login-form input::placeholder { color: var(--text-muted); }
+
+  .login-form button {
+    width: 100%;
+    padding: 14px;
+    background: var(--accent-voice);
+    border: none;
+    border-radius: 13px;
+    font-size: 15px;
+    font-weight: 700;
+    color: #07070A;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.15s, transform 0.1s;
+  }
+
+  .login-form button:hover  { opacity: 0.88; }
+  .login-form button:active { transform: scale(0.98); }
+  .login-form button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  #login-status {
+    font-size: 13px;
+    color: var(--status-error);
+    text-align: center;
+    min-height: 18px;
+  }
+
+  .login-lang {
+    display: flex;
+    gap: 8px;
+  }
+
+  .login-lang .lang-btn {
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }
+
+  .login-lang .lang-btn:hover { background: var(--bg-panel); color: var(--text-primary); }
+  .login-lang .lang-btn.active { border-color: var(--accent-voice); color: var(--text-primary); background: var(--bg-panel); }
+
+  /* ═══════════════════════════════════════════
+     LANG SUBMENU (inside dropdown)
+  ═══════════════════════════════════════════ */
+  #lang-submenu {
+    position: absolute;
+    top: 0;
+    left: calc(100% + 6px);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-panel);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 140px;
+    padding: 8px 0;
+    display: none;
+    z-index: 202;
+  }
+
+  /* ═══════════════════════════════════════════
+     MOBILE — Strip moves to bottom
+  ═══════════════════════════════════════════ */
+  @media (max-width: 700px) {
+    .app { flex-direction: column; }
+
+    .icon-strip {
+      order: 3;
+      width: 100%;
+      height: calc(58px + env(safe-area-inset-bottom, 0px));
+      flex-direction: row;
+      justify-content: space-around;
+      align-items: center;
+      padding: 0 8px;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      border-right: none;
+      border-top: 1px solid var(--border-panel);
+    }
+
+    .strip-brand { display: none; }
+
+    .strip-icons-top {
+      flex-direction: row;
+      flex: 1;
+      justify-content: space-around;
+      gap: 0;
+    }
+
+    .strip-icons-bottom { flex-direction: row; padding: 0; }
+
+    .strip-icon.active::before { display: none; }
+
+    .strip-icon.active::after {
+      content: '';
+      position: absolute;
+      bottom: 2px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--accent-voice);
+    }
+
+    .panel-list {
+      order: 1;
+      width: 100%;
+      flex: 1;
+      border-right: none;
+    }
+
+    .panel-right { display: none; }
+
+    .dropdown {
+      bottom: calc(58px + env(safe-area-inset-bottom, 0px) + 4px);
+      left: 8px;
+    }
+
+    #add-contact-popup,
+    #create-group-popup {
+      left: 0;
+      border-radius: 16px 16px 0 0;
+      width: 100%;
+      bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+    }
+
+    #inbox-toast-container {
+      width: calc(100% - 32px);
+      left: 16px;
+      transform: none;
+    }
+  }
+
 </style>
 </head>
-
 <body>
 
-<!-- Toast-Benachrichtigungen -->
 <div id="inbox-toast-container"></div>
 
-<div class="header">
-  <div class="brand">RENE<span class="x">X</span></div>
+<div class="app">
 
-  <div class="profile-wrapper">
-    <div id="profile-circle"></div>
+  <!-- ═══════════════════════════════════════
+       ICON STRIP
+  ═══════════════════════════════════════ -->
+  <nav class="icon-strip">
 
-    <div id="profile-dropdown" class="dropdown">
-      <div id="dropdown-handle" class="dropdown-item has-sub">
-        <span id="dropdown-handle-label"></span>
-        <div id="account-submenu" class="dropdown">
-          <div id="dropdown-delete" class="dropdown-item logout" data-i18n="deleteAccount">Account löschen</div>
+    <div class="strip-brand">RX</div>
+
+    <div class="strip-icons-top">
+
+      <button class="strip-icon active" data-section="dms" title="Messages" onclick="switchSection('dms', this)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+        <span class="strip-badge" id="strip-badge-dms"></span>
+      </button>
+
+      <button class="strip-icon" data-section="groups" title="Groups" onclick="switchSection('groups', this)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span class="strip-badge" id="strip-badge-groups"></span>
+      </button>
+
+      <button class="strip-icon" data-section="voice" title="Voice" onclick="switchSection('voice', this)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
+
+    </div>
+
+    <div class="strip-icons-bottom">
+      <div class="profile-wrapper">
+        <div id="profile-circle"></div>
+        <div id="profile-dropdown" class="dropdown">
+          <div id="dropdown-handle" class="dropdown-item has-sub">
+            <span id="dropdown-handle-label"></span>
+            <div id="account-submenu" class="dropdown" style="position:absolute;bottom:0;left:calc(100% + 6px);top:auto;">
+              <div id="dropdown-delete" class="dropdown-item logout" data-i18n="deleteAccount">Account löschen</div>
+            </div>
+          </div>
+          <div class="dropdown-divider"></div>
+          <div id="dropdown-lang" class="dropdown-item has-sub">
+            <span data-i18n="langToggleLabel">Sprache</span>
+            <div id="lang-submenu">
+              <div id="lang-opt-de" class="dropdown-item">🇩🇪 DE – Deutsch</div>
+              <div id="lang-opt-en" class="dropdown-item">🇬🇧 EN – English</div>
+              <div id="lang-opt-es" class="dropdown-item">🇪🇸 ES – Español</div>
+            </div>
+          </div>
+          <div class="dropdown-divider"></div>
+          <div id="dropdown-logout" class="dropdown-item logout" data-i18n="logout">Logout</div>
         </div>
-      </div>
-      <div class="dropdown-divider"></div>
-      <div id="dropdown-lang" class="dropdown-item has-sub">
-        <span data-i18n="langToggleLabel">Sprache</span>
-        <div id="lang-submenu" class="dropdown" style="top:0;right:calc(100% + 6px);position:absolute;background:var(--bg-panel);border:1px solid var(--border-panel);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:100px;padding:8px 0;display:none;z-index:102;">
-          <div id="lang-opt-de" class="dropdown-item">🇩🇪 DE – Deutsch</div>
-          <div id="lang-opt-en" class="dropdown-item">🇬🇧 EN – English</div>
-          <div id="lang-opt-es" class="dropdown-item">🇪🇸 ES – Español</div>
-        </div>
-      </div>
-      <div class="dropdown-divider"></div>
-      <div id="dropdown-logout" class="dropdown-item logout" data-i18n="logout">
-        Logout
       </div>
     </div>
+
+  </nav>
+
+  <!-- ═══════════════════════════════════════
+       PANEL LIST
+  ═══════════════════════════════════════ -->
+  <div class="panel-list">
+
+    <!-- ── Push Notification Banner ── -->
+    <div id="push-banner" style="display:none;padding:10px 12px;margin:6px 8px;background:linear-gradient(135deg,rgba(56,189,248,0.12),rgba(34,211,238,0.08));border:1px solid rgba(56,189,248,0.25);border-radius:10px;cursor:pointer;" onclick="window.__enablePush?.()">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:18px;">🔔</span>
+        <div>
+          <div id="push-banner-title" style="font-size:13px;font-weight:600;color:var(--text-primary);"></div>
+          <div id="push-banner-subtitle" style="font-size:11px;color:var(--text-secondary);margin-top:1px;"></div>
+        </div>
+        <span style="margin-left:auto;font-size:11px;color:var(--text-secondary);cursor:pointer;" onclick="event.stopPropagation();document.getElementById('push-banner').style.display='none';localStorage.setItem('renex_push_dismissed','1')">✕</span>
+      </div>
+    </div>
+
+    <!-- ── DMs ── -->
+    <div class="list-section active" id="section-dms">
+      <div class="panel-list-header">
+        <span class="panel-list-title" data-i18n="tabChats">Messages</span>
+        <button class="panel-action-btn" id="add-contact-btn" data-i18n-title="addContactTitle" title="Add contact">＋</button>
+      </div>
+      <div class="panel-search">
+        <input id="search-chats" type="search" placeholder="🔍 Suchen…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="display:none;" />
+      </div>
+      <div id="pending-banner">
+        <span style="font-size:13px;color:var(--text-primary);">📩 <strong id="pending-count">0</strong> ausstehende Anfragen</span>
+        <span style="font-size:12px;font-weight:600;color:var(--accent-voice);">Anzeigen →</span>
+      </div>
+      <div class="contact-scroll">
+        <ul id="accepted"></ul>
+      </div>
+    </div>
+
+    <!-- ── Groups ── -->
+    <div class="list-section" id="section-groups">
+      <div class="panel-list-header">
+        <span class="panel-list-title" data-i18n="tabGroups">Groups</span>
+        <button class="panel-action-btn" id="create-group-btn" data-i18n-title="createGroupBtn" title="Create group">＋</button>
+      </div>
+      <div class="panel-search">
+        <input id="search-groups" type="search" placeholder="🔍 Suchen…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="display:none;" />
+      </div>
+      <div id="pending-banner-groups">
+        <span style="font-size:13px;color:var(--text-primary);">📩 <strong id="pending-count-groups">0</strong> ausstehende Anfragen</span>
+        <span style="font-size:12px;font-weight:600;color:var(--accent-voice);">Anzeigen →</span>
+      </div>
+      <div class="contact-scroll">
+        <ul id="groups"></ul>
+      </div>
+    </div>
+
+    <!-- ── Voice ── -->
+    <div class="list-section" id="section-voice">
+      <div class="panel-list-header">
+        <span class="panel-list-title">Voice</span>
+      </div>
+
+      <!-- Active sessions (populated by JS in future) -->
+      <div id="voice-active-list" style="display:none; flex-direction:column; gap:6px; padding:10px 8px; flex-shrink:0;"></div>
+
+      <!-- No active calls state -->
+      <div class="voice-empty" id="voice-empty">
+        <div class="voice-empty-icon">🎤</div>
+        <div class="voice-empty-title">Kein aktiver Call</div>
+        <div class="voice-empty-hint">Voice-Gruppen findest du unter<br><strong>👥 Gruppen</strong></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       PANEL RIGHT — desktop empty state
+  ═══════════════════════════════════════ -->
+  <div class="panel-right">
+    <div class="empty-state">
+      <div class="empty-state-icon">💬</div>
+      <div class="empty-state-text">Wähle einen Chat</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════
+     ADD CONTACT POPUP
+═══════════════════════════════════════ -->
+<div id="add-contact-popup">
+  <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em;" data-i18n="addContactHeading">Kontakt hinzufügen</div>
+  <div style="display:flex;gap:6px;margin-bottom:10px;">
+    <input id="add-handle" type="search" placeholder="Handle (z. B. bob)"
+      data-i18n-placeholder="addContactPlaceholder" autocomplete="off"
+      autocorrect="off" autocapitalize="off" spellcheck="false" name="renex-contact"
+      style="flex:1;min-width:0;padding:9px 12px;border-radius:10px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;font-family:inherit;" />
+    <button id="add-btn" data-i18n-title="sendRequestTitle" title="Send request"
+      style="padding:9px 14px;border-radius:10px;border:none;background:var(--accent-voice);color:#07070A;font-size:16px;font-weight:700;cursor:pointer;line-height:1;margin:0;">＋</button>
+  </div>
+  <div style="padding-top:10px;border-top:1px solid var(--border-subtle);">
+    <div data-i18n="guestInviteLabel" style="font-size:11px;color:var(--text-secondary);margin-bottom:8px;">Or: invite a guest (no account needed)</div>
+    <button id="dm-invite-btn"
+      style="width:100%;padding:8px 10px;border-radius:10px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-primary);font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;font-family:inherit;">
+      <span>🔗</span> <span data-i18n="createInviteLinkBtn">Create invite link</span>
+    </button>
+    <div id="dm-invite-status" style="display:none;margin-top:6px;font-size:11px;color:var(--accent-voice);text-align:center;"></div>
+  </div>
+  <button id="add-contact-done" style="width:100%;margin-top:10px;padding:9px;border-radius:10px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-primary);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;" data-i18n="doneBtn">Done</button>
+</div>
+
+<!-- ═══════════════════════════════════════
+     CREATE GROUP POPUP
+═══════════════════════════════════════ -->
+<div id="create-group-popup">
+  <div id="group-step-1">
+    <div data-i18n="createGroupLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Create group</div>
+    <input id="group-name-input" type="text" data-i18n-placeholder="groupNamePlaceholder" placeholder="Group name" autocomplete="off" autocorrect="off" autocapitalize="off"
+      style="width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;margin-bottom:8px;font-family:inherit;" />
+    <button id="group-create-confirm-btn" data-i18n="nextBtn" style="width:100%;padding:9px;border-radius:10px;border:none;background:var(--accent-voice);color:#07070A;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">Next →</button>
+  </div>
+  <div id="group-step-2" style="display:none;">
+    <div data-i18n="invitePeopleLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Invite people</div>
+    <div style="display:flex;gap:6px;margin-bottom:8px;">
+      <input id="group-invite-search" type="text" placeholder="Username…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+        style="flex:1;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:13px;outline:none;font-family:inherit;" />
+      <button id="group-invite-add-btn" style="padding:8px 12px;border-radius:8px;border:none;background:var(--accent-voice);color:#07070A;font-size:16px;font-weight:700;cursor:pointer;line-height:1;font-family:inherit;">+</button>
+    </div>
+    <div id="group-invite-error" data-i18n="onlyContactsWarning" style="display:none;font-size:11px;color:var(--status-error);margin-bottom:6px;padding:4px 6px;background:rgba(248,113,113,0.1);border-radius:6px;">Only your own contacts can be invited</div>
+    <div id="group-invited-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:0;max-height:100px;overflow-y:auto;margin-bottom:8px;"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;">
+      <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
+      <span data-i18n="orSeparator" style="font-size:11px;color:var(--text-muted);">or</span>
+      <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
+    </div>
+    <button id="group-guest-link-btn" data-i18n="guestInviteLinkBtn" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;margin-bottom:8px;font-family:inherit;">🔗 Create guest invite link</button>
+    <button id="group-invite-done-btn" data-i18n="doneBtn" style="width:100%;padding:8px;border-radius:8px;border:none;background:var(--bg-panel-alt);color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Done</button>
   </div>
 </div>
 
-  <!-- TAB BAR -->
-  <nav class="tab-bar">
-    <button class="tab-btn active" data-tab="chats">
-      💬 <span data-i18n="tabChats">Kontakte & Chats</span>
-      <span id="tab-badge-chats" class="tab-badge"></span>
-    </button>
-    <button class="tab-btn" data-tab="groups">
-      👥 <span data-i18n="tabGroups">Groups</span>
-      <span id="tab-badge-groups" class="tab-badge"></span>
-    </button>
-  </nav>
-
-  <!-- TAB 1: CHATS (DMs) -->
-  <div class="tab-panel active" id="panel-chats">
-    <!-- Anfragen-Banner (kompakt, klickbar) -->
-    <div id="pending-banner" style="display:none;margin-bottom:16px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:10px;padding:10px 14px;cursor:pointer;display:none;align-items:center;justify-content:space-between;gap:10px;" id="pending-banner">
-      <span style="font-size:13px;color:var(--text-primary);">📩 <strong id="pending-count">0</strong> ausstehende Anfragen</span>
-      <span style="font-size:12px;font-weight:600;color:var(--accent-voice);">Anzeigen →</span>
-    </div>
-    <input id="search-chats" type="search" placeholder="🔍 Suchen…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-      style="display:none;width:100%;box-sizing:border-box;padding:8px 12px;border-radius:10px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;margin-bottom:12px;" />
-    <ul id="accepted"></ul>
-
-    <!-- FAB: Kontakt hinzufügen -->
-    <button id="add-contact-btn" title="Kontakt hinzufügen"
-      style="position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;font-size:26px;border:none;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;transition:transform 0.15s,box-shadow 0.15s;z-index:200;line-height:1;">＋</button>
-    <!-- FAB Popup: Kontakt hinzufügen -->
-    <div id="add-contact-popup" style="display:none;position:fixed;bottom:90px;right:28px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,0.4);padding:14px;z-index:201;width:260px;">
-      <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;" data-i18n="addContactHeading">Kontakt hinzufügen</div>
-      <div style="display:flex;gap:6px;">
-        <input id="add-handle" type="search" placeholder="Handle (z. B. bob)"
-          data-i18n-placeholder="addContactPlaceholder" autocomplete="off"
-          autocorrect="off" autocapitalize="off" spellcheck="false" name="renex-contact"
-          style="flex:1;min-width:0;padding:7px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:13px;outline:none;-webkit-appearance:none;" />
-        <button id="add-btn" title="Anfrage senden"
-          style="padding:7px 11px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:16px;font-weight:700;cursor:pointer;line-height:1;margin:0;">＋</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- TAB 2: GRUPPEN -->
-  <div class="tab-panel" id="panel-groups">
-    <!-- Anfragen-Banner (identisch mit Chats-Tab) -->
-    <div id="pending-banner-groups" style="display:none;margin-bottom:16px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:10px;padding:10px 14px;cursor:pointer;align-items:center;justify-content:space-between;gap:10px;">
-      <span style="font-size:13px;color:var(--text-primary);">📩 <strong id="pending-count-groups">0</strong> ausstehende Anfragen</span>
-      <span style="font-size:12px;font-weight:600;color:var(--accent-voice);">Anzeigen →</span>
-    </div>
-    <input id="search-groups" type="search" placeholder="🔍 Suchen…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-      style="display:none;width:100%;box-sizing:border-box;padding:8px 12px;border-radius:10px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;margin-bottom:12px;" />
-    <ul id="groups"></ul>
-    <!-- FAB: Gruppe erstellen -->
-    <button id="create-group-btn" data-i18n-title="createGroupBtn" title="Gruppe erstellen"
-      style="position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;font-size:26px;border:none;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,0.35);display:none;align-items:center;justify-content:center;transition:transform 0.15s,box-shadow 0.15s;z-index:200;line-height:1;">＋</button>
-    <!-- FAB Popup: Gruppe erstellen -->
-    <div id="create-group-popup" style="display:none;position:fixed;bottom:90px;right:28px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,0.4);padding:14px;z-index:201;width:260px;max-height:calc(100vh - 120px);overflow-y:auto;">
-      <!-- Schritt 1: Gruppenname -->
-      <div id="group-step-1">
-        <div data-i18n="createGroupLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Create group</div>
-        <input id="group-name-input" type="text" data-i18n-placeholder="groupNamePlaceholder" placeholder="Group name" autocomplete="off" autocorrect="off" autocapitalize="off"
-          style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:14px;outline:none;margin-bottom:8px;" />
-        <button id="group-create-confirm-btn" data-i18n="nextBtn" style="width:100%;padding:8px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer;">Next →</button>
-      </div>
-      <!-- Schritt 2: Mitglieder einladen -->
-      <div id="group-step-2" style="display:none;">
-        <div data-i18n="invitePeopleLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Invite people</div>
-        <div style="display:flex;gap:6px;margin-bottom:8px;">
-          <input id="group-invite-search" type="text" placeholder="Username…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-            style="flex:1;min-width:0;padding:7px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:13px;outline:none;" />
-          <button id="group-invite-add-btn" style="padding:7px 11px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:16px;font-weight:700;cursor:pointer;line-height:1;">+</button>
-        </div>
-        <div id="group-invite-error" data-i18n="onlyContactsWarning" style="display:none;font-size:11px;color:var(--status-error);margin-bottom:6px;padding:4px 6px;background:rgba(255,59,48,0.1);border-radius:6px;">Only your own contacts can be invited</div>
-        <div id="group-invited-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:0;max-height:100px;overflow-y:auto;margin-bottom:8px;"></div>
-        <!-- Separator -->
-        <div style="display:flex;align-items:center;gap:8px;margin:2px 0 8px;">
-          <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
-          <span data-i18n="orSeparator" style="font-size:11px;color:var(--text-muted,#6F6F78);">or</span>
-          <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
-        </div>
-        <button id="group-guest-link-btn" data-i18n="guestInviteLinkBtn" style="width:100%;padding:7px;border-radius:8px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;margin-bottom:8px;">🔗 Create guest invite link</button>
-        <button id="group-invite-done-btn" data-i18n="doneBtn" style="width:100%;padding:7px;border-radius:8px;border:none;background:var(--bg-panel-alt);color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;">Done</button>
-      </div>
-    </div>
-  </div>
-
-<!-- Modal: Ausstehende Anfragen -->
-<div id="requests-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:500;align-items:center;justify-content:center;">
-  <div style="background:var(--bg-panel);border-radius:14px;width:calc(100% - 40px);max-width:440px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.5);position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);">
-    <!-- Header -->
+<!-- ═══════════════════════════════════════
+     REQUESTS MODAL
+═══════════════════════════════════════ -->
+<div id="requests-modal">
+  <div style="background:var(--bg-panel);border-radius:16px;width:calc(100% - 40px);max-width:440px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.5);">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px 12px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;">
       <span style="font-size:15px;font-weight:700;color:var(--text-primary);">📩 Ausstehende Anfragen</span>
       <button id="requests-modal-close" style="background:none;border:none;color:var(--text-secondary);font-size:20px;cursor:pointer;line-height:1;padding:0;">✕</button>
     </div>
-    <!-- Liste -->
     <ul id="pending" style="margin:0;padding:8px 0;list-style:none;overflow-y:auto;flex:1;"></ul>
   </div>
 </div>
 
-<!-- Bestätigungsdialog Account löschen -->
+<!-- ═══════════════════════════════════════
+     LOGIN MODAL
+═══════════════════════════════════════ -->
+<div id="login-modal">
+  <div class="login-card">
+
+    <div class="login-logo-wrap">
+      <div class="login-logo">RENE<span class="x">X</span></div>
+      <p class="login-slogan">Connect. Alive. Private.</p>
+    </div>
+
+    <div class="login-form">
+      <input
+        id="login-handle"
+        type="text"
+        placeholder="Name"
+        data-i18n-placeholder="loginPlaceholder"
+        autocomplete="username"
+        spellcheck="false"
+      />
+      <button id="login-btn" data-i18n="loginBtn">Login mit Passkey</button>
+      <span id="login-status"></span>
+    </div>
+
+    <div class="login-lang">
+      <button class="lang-btn" id="login-lang-de">🇩🇪 DE</button>
+      <button class="lang-btn" id="login-lang-en">🇬🇧 EN</button>
+      <button class="lang-btn" id="login-lang-es">🇪🇸 ES</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════
+     DELETE DIALOG
+═══════════════════════════════════════ -->
 <div id="delete-overlay">
   <div id="delete-dialog">
     <h3 data-i18n="deleteAccountDialogTitle">Account löschen</h3>
@@ -573,13 +1435,96 @@
   </div>
 </div>
 
-  <!-- 🔥 WICHTIG: Script GANZ UNTEN + type="module" -->
+<script>
+  // Section switcher (icon strip)
+  function switchSection(name, btn) {
+    document.querySelectorAll('.list-section').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.strip-icon').forEach(i => i.classList.remove('active'));
+    const section = document.getElementById('section-' + name);
+    if (section) section.classList.add('active');
+    if (btn) btn.classList.add('active');
+  }
+</script>
+
 <script type="module" src="/js/inbox.js"></script>
 <script type="module">
-  import { bootApp } from "./js/appBoot.js";
-  import { applyI18n } from "./js/i18n.js";
-  applyI18n();
-  bootApp();
+import { loginWithPasskey } from "./js/auth.js";
+import { apiFetch }         from "./js/api.js";
+import { bootApp }          from "./js/appBoot.js";
+import lang, { applyI18n, getLang, setLang } from "./js/i18n.js";
+
+applyI18n();
+
+const modal      = document.getElementById("login-modal");
+const handleInput = document.getElementById("login-handle");
+const loginBtn   = document.getElementById("login-btn");
+const loginStatus = document.getElementById("login-status");
+
+// ── Modal helpers ──────────────────────────────────────
+function showModal() { modal.classList.remove("hidden"); handleInput?.focus(); }
+function hideModal() { modal.classList.add("hidden"); }
+
+// ── Auth check on load ─────────────────────────────────
+(async () => {
+  try {
+    const res = await apiFetch("/auth/session");
+    if (res?.valid) {
+      hideModal();
+      bootApp();
+    } else {
+      localStorage.removeItem("my_user");
+      showModal();
+    }
+  } catch {
+    showModal();
+  }
+})();
+
+// ── Login button ───────────────────────────────────────
+let loginInProgress = false;
+
+loginBtn.onclick = async () => {
+  if (loginInProgress) return;
+  loginInProgress = true;
+  loginBtn.disabled = true;
+  loginBtn.textContent = lang.loginAuthenticating || "Authentifiziere…";
+  loginStatus.textContent = "";
+
+  const handle = handleInput.value.trim();
+  if (!handle) {
+    loginStatus.textContent = lang.loginEnterName || "Bitte Namen eingeben";
+    loginBtn.disabled = false;
+    loginBtn.textContent = lang.loginBtn || "Login mit Passkey";
+    loginInProgress = false;
+    return;
+  }
+
+  try {
+    await loginWithPasskey(handle);
+    location.reload(); // Seite neu laden → inbox.js initialisiert korrekt
+  } catch {
+    loginStatus.textContent = lang.loginFailed || "Login fehlgeschlagen";
+    loginBtn.disabled = false;
+    loginBtn.textContent = lang.loginBtn || "Login mit Passkey";
+    loginInProgress = false;
+  }
+};
+
+handleInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") loginBtn.click();
+});
+
+// ── Language switcher ──────────────────────────────────
+["de","en","es"].forEach(code => {
+  const btn = document.getElementById("login-lang-" + code);
+  if (!btn) return;
+  if (getLang() === code) btn.classList.add("active");
+  btn.onclick = () => {
+    document.querySelectorAll(".login-lang .lang-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    setLang(code);
+  };
+});
 </script>
 
 </body>

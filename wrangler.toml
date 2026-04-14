@@ -29,3 +29,19 @@ bucket_name = "renex-files"
 
 [triggers]
 crons = ["0 3 * * *"]
+
+# ======================================================
+# VAPID Keys für Web Push Notifications
+# Public Key = im Frontend (VAPID applicationServerKey)
+# Private Key = nur Backend (JWT-Signierung)
+#
+# GENERIEREN:
+#   npx web-push generate-vapid-keys
+#
+# Dann hier eintragen oder als Secrets:
+#   npx wrangler secret put VAPID_PRIVATE_KEY
+# ======================================================
+[vars]
+VAPID_PUBLIC_KEY = "BLGeZcfZpaaGx0XNAeyVyz-ascSLrH12gfFg8OgkR29AWQcMlze6xBQpnq4SV8b48U9xWCfb6g8c_ilQ-4YwQZA"
+VAPID_SUBJECT = "mailto:push@renex.id"
+# VAPID_PRIVATE_KEY → als Secret setzen: npx wrangler secret put VAPID_PRIVATE_KEY

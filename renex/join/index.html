@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#38bdf8" />
+  <link rel="manifest" href="/manifest.json" />
   <title>RENEX – Invitation</title>
   <link rel="stylesheet" href="/colors.css" />
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -239,15 +241,17 @@
 
     try {
       const res  = await fetch(`${API}/invite/info?token=${encodeURIComponent(token)}`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (!data.valid) {
+      if (!res.ok || !data.valid) {
         const msgs = {
-          expired:   lang.inviteExpiredReason,
-          converted: lang.inviteAlreadyUsed,
-          not_found: lang.inviteNotFound,
+          expired:      lang.inviteExpiredReason,
+          converted:    lang.inviteAlreadyUsed,
+          already_used: lang.inviteAlreadyUsedDm,
+          not_found:    lang.inviteNotFound,
         };
-        return showError(lang.invalidInviteTitle, msgs[data.reason] || lang.unknownError);
+        const reason = data.reason || (res.status === 404 ? "not_found" : res.status === 410 ? "already_used" : null);
+        return showError(lang.invalidInviteTitle, msgs[reason] || lang.unknownError);
       }
 
       document.getElementById("chatName").textContent = data.displayName || "Chat";
@@ -407,7 +411,7 @@
     show("errorCard");
   }
 
-  function show(id) { document.getElementById(id).style.display = ""; }
+  function show(id) { document.getElementById(id).style.display = "block"; }
   function hide(id) { document.getElementById(id).style.display = "none"; }
 </script>
 </body>

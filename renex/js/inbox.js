@@ -5,7 +5,7 @@ import {
 import lang, { getLang, setLang } from "./i18n.js";
 import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
 import { formatTime } from "./shared/timeFormat.js";
-import { initServiceWorker, subscribeToPush, getPushStatus } from "./pushManager.js";
+import { initServiceWorker, subscribeToPush, getPushStatus, updateBadge } from "./pushManager.js";
 
 // ================================
 // CONFIG
@@ -300,6 +300,10 @@ function refreshGroupBadge() {
     lastRead: localStorage.getItem(`renex_group_read_${g.id}`)
   })));
   updateTabBadge("groups", count);
+
+  // App-Icon Badge aktualisieren (DM + Gruppen total)
+  const dmUnread = Object.values(unreadMap).filter(v => v > 0).length;
+  updateBadge(dmUnread + count);
 }
 
 // ================================
@@ -889,6 +893,11 @@ async function loadContacts() {
       .filter(c => !_mutedConvos.has(dmConvoId(myUserBadge, c.handle)))
       .length;
     updateTabBadge("dms", unreadContacts); // strip-badge-dms im Icon-Strip
+
+    // App-Icon Badge (PWA Home-Bildschirm Zähler)
+    const groupUnread = _currentGroups ? _currentGroups.filter(g => isGroupUnread(g)).length : 0;
+    const totalUnread = unreadContacts + groupUnread;
+    updateBadge(totalUnread);
 
     // Presence-Dots für akzeptierte Kontakte (fire-and-forget)
     const acceptedHandles = contacts.filter(c => c.status === "accepted").map(c => c.handle);

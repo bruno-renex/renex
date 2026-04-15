@@ -106,6 +106,7 @@
     width: 44px;
     height: 44px;
     border-radius: 12px;
+    overflow: visible;
     border: none;
     background: transparent;
     color: var(--text-muted);
@@ -144,17 +145,33 @@
 
   .strip-badge {
     position: absolute;
-    top: 6px;
-    right: 6px;
-    width: 8px;
-    height: 8px;
+    top: 0px;
+    right: -4px;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
     background: var(--accent-voice);
     border: 2px solid var(--bg-panel);
     display: none;
+    font-size: 11px;
+    font-weight: 800;
+    color: #07070A;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    z-index: 10;
+    pointer-events: none;
   }
 
-  .strip-badge.visible { display: block; }
+  /* Grösserer Kreis für 2+ Ziffern (10+, 99+) */
+  .strip-badge.wide {
+    width: auto;
+    min-width: 20px;
+    border-radius: 10px;
+    padding: 0 5px;
+  }
+
+  .strip-badge.visible { display: flex; }
 
   .strip-icons-bottom {
     display: flex;

@@ -744,13 +744,16 @@ if (langBtn && langSubmenu) {
 // ================================
 // Tab-Badge Helper
 function updateTabBadge(tab, count) {
-  const el = document.getElementById(`tab-badge-${tab}`);
+  const el = document.getElementById(`strip-badge-${tab}`) || document.getElementById(`tab-badge-${tab}`);
   if (!el) return;
   if (count > 0) {
-    el.textContent = count > 99 ? "99+" : count;
+    const text = count > 99 ? "99+" : String(count);
+    el.textContent = text;
     el.classList.add("visible");
+    el.classList.toggle("wide", text.length > 1);
   } else {
-    el.classList.remove("visible");
+    el.textContent = "";
+    el.classList.remove("visible", "wide");
   }
 }
 
@@ -885,7 +888,7 @@ async function loadContacts() {
       .filter(c => (unreadMap[c.handle] || 0) > 0)
       .filter(c => !_mutedConvos.has(dmConvoId(myUserBadge, c.handle)))
       .length;
-    updateTabBadge("chats", unreadContacts); // pendingCount bewusst ausgeschlossen — Banner im Tab ist ausreichend
+    updateTabBadge("dms", unreadContacts); // strip-badge-dms im Icon-Strip
 
     // Presence-Dots für akzeptierte Kontakte (fire-and-forget)
     const acceptedHandles = contacts.filter(c => c.status === "accepted").map(c => c.handle);

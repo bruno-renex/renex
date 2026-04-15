@@ -546,10 +546,37 @@ textarea::placeholder {
           <div class="chat-ad-opt" data-days="30" data-i18n="autoDeleteThirtyDays" style="padding:8px 16px;cursor:pointer;font-size:13px;">30 Tage</div>
         </div>
       </div>
-      <!-- Notifications Mute Toggle -->
-      <div id="chat-menu-mute" style="padding:10px 16px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-subtle);margin-top:4px;">
-        <span id="chat-mute-label">🔔 Notifications</span>
-        <span id="chat-mute-status" data-i18n="notificationsOn" style="font-size:12px;font-weight:600;color:var(--accent);">On</span>
+      <!-- Notifications Mute (Inline Accordion) -->
+      <div id="chat-menu-mute" style="border-top:1px solid var(--border-subtle);margin-top:4px;">
+        <div id="chat-mute-toggle" style="padding:10px 16px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;">
+          <span id="chat-mute-label">🔔 Notifications</span>
+          <span style="display:flex;align-items:center;gap:4px;">
+            <span id="chat-mute-status" data-i18n="notificationsOn" style="font-size:12px;font-weight:600;color:var(--accent);">On</span>
+            <span id="chat-mute-arrow" style="font-size:10px;color:var(--text-secondary);transition:transform 0.2s;">▼</span>
+          </span>
+        </div>
+        <div id="chat-mute-submenu" style="display:none;padding:0 0 6px 0;">
+          <div class="chat-mute-opt" data-level="nothing" style="padding:7px 16px 7px 28px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px;">
+            <span class="mute-check" style="width:16px;text-align:center;font-size:11px;flex-shrink:0;"></span>
+            <span class="mute-opt-label" data-i18n="notifAll">🔔 Alle Benachrichtigungen</span>
+          </div>
+          <div class="chat-mute-opt mute-group-only" data-level="mentions_and_everyone" style="padding:7px 16px 7px 28px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px;">
+            <span class="mute-check" style="width:16px;text-align:center;font-size:11px;flex-shrink:0;"></span>
+            <span class="mute-opt-label" data-i18n="notifMentionsEveryone">@Mentions + @everyone</span>
+          </div>
+          <div class="chat-mute-opt mute-group-only" data-level="mentions_only" style="padding:7px 16px 7px 28px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px;">
+            <span class="mute-check" style="width:16px;text-align:center;font-size:11px;flex-shrink:0;"></span>
+            <span class="mute-opt-label" data-i18n="notifMentionsOnly">@Mentions</span>
+          </div>
+          <div class="chat-mute-opt" data-level="all" style="padding:7px 16px 7px 28px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px;">
+            <span class="mute-check" style="width:16px;text-align:center;font-size:11px;flex-shrink:0;"></span>
+            <span class="mute-opt-label" data-i18n="notifMuted">🔕 Stumm</span>
+          </div>
+          <div style="height:1px;background:var(--border-subtle);margin:4px 20px;"></div>
+          <div class="chat-mute-opt" data-level="all" data-duration="60" data-i18n="notifMuteFor1h" style="padding:7px 16px 7px 28px;cursor:pointer;font-size:12px;color:var(--text-secondary);">⏱ Stumm für 1h</div>
+          <div class="chat-mute-opt" data-level="all" data-duration="480" data-i18n="notifMuteFor8h" style="padding:7px 16px 7px 28px;cursor:pointer;font-size:12px;color:var(--text-secondary);">⏱ Stumm für 8h</div>
+          <div class="chat-mute-opt" data-level="all" data-duration="1440" data-i18n="notifMuteFor24h" style="padding:7px 16px 7px 28px;cursor:pointer;font-size:12px;color:var(--text-secondary);">⏱ Stumm für 24h</div>
+        </div>
       </div>
       <!-- Gruppen: Umbenennen (nur Admin, nur Gruppen) -->
       <div id="chat-menu-rename" style="display:none;padding:10px 16px;cursor:pointer;font-size:13px;border-top:1px solid var(--border-subtle);margin-top:4px;">

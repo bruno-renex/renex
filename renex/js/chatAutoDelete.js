@@ -217,7 +217,7 @@ export async function initAutoDeleteUI() {
   }
 
   const inviteItem = document.getElementById("chat-invite-item");
-  if (inviteItem && !_isGuestMode) inviteItem.style.display = "flex";
+  if (inviteItem && !_isGuestMode && isGroup) inviteItem.style.display = "flex";
 
   if (menuBtn && menuDropdown) {
     const openMenu  = () => { menuDropdown.style.display = "block"; };
@@ -229,19 +229,104 @@ export async function initAutoDeleteUI() {
 
   adMenuItem?.addEventListener("click", (e) => { e.stopPropagation(); if (adSubmenu) adSubmenu.style.display = adSubmenu.style.display === "block" ? "none" : "block"; });
 
-  // Mute toggle
-  const muteItem = document.getElementById("chat-menu-mute"), muteStatus = document.getElementById("chat-mute-status"), muteLabel = document.getElementById("chat-mute-label");
+  // ── Granulare Mute-Settings (Discord-Style Submenu) ──────
+  const muteItem = document.getElementById("chat-menu-mute");
+  const muteStatus = document.getElementById("chat-mute-status");
+  const muteLabel = document.getElementById("chat-mute-label");
+  const muteSubmenu = document.getElementById("chat-mute-submenu");
   const convoId = isGroup ? withUser : (() => { const [a, b] = [getMyUser(), withUser].sort(); return `${a}:${b}`; })();
-  let _isMuted = false;
-  function updateMuteUI(muted) {
-    _isMuted = muted;
-    if (muteLabel) muteLabel.textContent = (muted ? "🔕 " : "🔔 ") + lang.notificationsLabel;
-    if (muteStatus) { muteStatus.textContent = muted ? lang.notificationsOff : lang.notificationsOn; muteStatus.style.color = muted ? "var(--text-secondary)" : "var(--accent)"; }
+  let _muteLevel = "nothing"; // nothing = alles an
+  let _muteExpiresAt = null;
+
+  function updateMuteUI(level, expiresAt) {
+    _muteLevel = level || "nothing";
+    _muteExpiresAt = expiresAt || null;
+    const isMuted = _muteLevel !== "nothing";
+    if (muteLabel) muteLabel.textContent = (isMuted ? "🔕 " : "🔔 ") + lang.notificationsLabel;
+    if (muteStatus) {
+      if (_muteLevel === "nothing") {
+        muteStatus.textContent = lang.notificationsOn;
+        muteStatus.style.color = "var(--accent)";
+      } else if (_muteLevel === "mentions_only") {
+        muteStatus.textContent = lang.notifLevelMentions || "@ Mentions";
+        muteStatus.style.color = "var(--text-secondary)";
+      } else if (_muteLevel === "mentions_and_everyone") {
+        muteStatus.textContent = lang.notifLevelMentionsAll || "@ + everyone";
+        muteStatus.style.color = "var(--text-secondary)";
+      } else if (_muteLevel === "all" && _muteExpiresAt) {
+        const remaining = Math.max(0, Math.ceil((_muteExpiresAt - Date.now()) / 60000));
+        const timeStr = remaining >= 60 ? `${Math.floor(remaining/60)}h` : `${remaining}m`;
+        muteStatus.textContent = lang.notifTimedSuffix ? lang.notifTimedSuffix(timeStr) : `Muted (${timeStr})`;
+        muteStatus.style.color = "var(--text-secondary)";
+      } else {
+        muteStatus.textContent = lang.notificationsOff;
+        muteStatus.style.color = "var(--text-secondary)";
+      }
+    }
+    // Checkmarks in Submenu aktualisieren
+    document.querySelectorAll(".chat-mute-opt").forEach(opt => {
+      const check = opt.querySelector(".mute-check");
+      if (!check) return;
+      const optLevel = opt.dataset.level;
+      const optDuration = opt.dataset.duration;
+      // Permanente Levels: Match auf Level ohne Duration
+      // Timed Mute: kein Checkmark (einmalige Aktion)
+      if (!optDuration && optLevel === _muteLevel) {
+        check.textContent = "✓";
+        check.style.color = "var(--accent)";
+      } else {
+        check.textContent = "";
+      }
+    });
   }
-  try { const { muted: mutedList } = await apiFetch("/notifications/muted"); updateMuteUI((mutedList || []).includes(convoId)); } catch {}
-  muteItem?.addEventListener("click", async (e) => {
+
+  // DM: @mention-Optionen ausblenden (nur für Gruppen relevant)
+  if (!isGroup) {
+    document.querySelectorAll(".mute-group-only").forEach(el => el.style.display = "none");
+  }
+
+  // Initial: Mute-Status laden
+  try {
+    const { muted: mutedList } = await apiFetch("/notifications/muted");
+    const entry = (mutedList || []).find(m => m.convoId === convoId);
+    if (entry) {
+      updateMuteUI(entry.level, entry.expiresAt);
+    } else {
+      updateMuteUI("nothing", null);
+    }
+  } catch { updateMuteUI("nothing", null); }
+
+  // Accordion Toggle
+  const muteToggle = document.getElementById("chat-mute-toggle");
+  const muteArrow = document.getElementById("chat-mute-arrow");
+  muteToggle?.addEventListener("click", (e) => {
     e.stopPropagation();
-    try { await apiFetch("/notifications/mute", { method: "POST", body: JSON.stringify({ convoId, mute: !_isMuted }) }); updateMuteUI(!_isMuted); localStorage.setItem("renex_muted_cache_ts", "0"); } catch (err) { console.warn("Mute toggle failed:", err); }
+    if (!muteSubmenu) return;
+    const isOpen = muteSubmenu.style.display === "block";
+    muteSubmenu.style.display = isOpen ? "none" : "block";
+    if (muteArrow) muteArrow.style.transform = isOpen ? "" : "rotate(180deg)";
+  });
+
+  // Mute-Option Clicks
+  document.querySelectorAll(".chat-mute-opt").forEach(opt => {
+    opt.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const level = opt.dataset.level;
+      const duration = opt.dataset.duration ? Number(opt.dataset.duration) : undefined;
+      if (muteSubmenu) muteSubmenu.style.display = "none";
+      if (muteArrow) muteArrow.style.transform = "";
+      if (menuDropdown) menuDropdown.style.display = "none";
+      try {
+        const body = { convoId, level };
+        if (duration) body.duration = duration;
+        const res = await apiFetch("/notifications/mute", { method: "POST", body: JSON.stringify(body) });
+        updateMuteUI(res.level || level, res.expiresAt || null);
+        localStorage.setItem("renex_muted_cache_ts", "0");
+      } catch (err) { console.warn("Mute failed:", err); }
+    });
+    // Hover-Effekt
+    opt.addEventListener("mouseover", () => opt.style.background = "var(--bg-panel-alt)");
+    opt.addEventListener("mouseout", () => opt.style.background = "");
   });
 
   // Auto-Delete option clicks

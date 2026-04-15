@@ -46,6 +46,34 @@ export async function scheduled(event, env) {
     console.error("❌ Auto-Delete Cron fehlgeschlagen:", e);
   }
 
+  // ── Feedback älter als 30 Tage löschen (DSGVO) ──────────────────────
+  try {
+    const feedbackCutoff = Date.now() - 30 * 86400_000;
+    const fbResult = await env.RENEX_DB.prepare(
+      "DELETE FROM feedback WHERE created_at < ?"
+    ).bind(feedbackCutoff).run();
+    const fbDeleted = fbResult.meta?.changes ?? 0;
+    if (fbDeleted > 0) {
+      console.log(`🗑️ Feedback-Cleanup: ${fbDeleted} Einträge älter als 30 Tage gelöscht`);
+    }
+  } catch (e) {
+    console.error("❌ Feedback-Cleanup fehlgeschlagen:", e);
+  }
+
+  // ── Push-Subscriptions aufräumen (>30 Tage nicht aktualisiert) ───────
+  try {
+    const pushCutoff = Date.now() - 30 * 86400_000;
+    const pushResult = await env.RENEX_DB.prepare(
+      "DELETE FROM push_subscriptions WHERE updated_at < ?"
+    ).bind(pushCutoff).run();
+    const pushDeleted = pushResult.meta?.changes ?? 0;
+    if (pushDeleted > 0) {
+      console.log(`🔔 Push-Cleanup: ${pushDeleted} verwaiste Subscriptions gelöscht (>30 Tage)`);
+    }
+  } catch (e) {
+    console.error("❌ Push-Cleanup fehlgeschlagen:", e);
+  }
+
   // ── Abgelaufene Gast-Mitgliedschaften aufräumen ──────────────────────
   try {
     const now = Date.now();
@@ -65,8 +93,22 @@ export async function scheduled(event, env) {
       removedMembers += result.meta?.changes ?? 0;
     }
 
-    if (removedMembers > 0) {
-      console.log(`🧹 Guest-Cleanup: ${removedMembers} abgelaufene Gast-Mitgliedschaften entfernt`);
+    // Kontakt-Einträge abgelaufener Gäste auf 'removed' setzen
+    let removedContacts = 0;
+    for (const g of (expiredGuests.results ?? [])) {
+      if (!g.guest_handle) continue;
+      // Beide Richtungen: Gast→Einlader und Einlader→Gast
+      const r1 = await env.RENEX_DB.prepare(
+        "UPDATE contacts SET status = 'removed', updated_at = ? WHERE contact_handle = ? AND status = 'accepted'"
+      ).bind(now, g.guest_handle).run();
+      const r2 = await env.RENEX_DB.prepare(
+        "UPDATE contacts SET status = 'removed', updated_at = ? WHERE user_handle = ? AND status = 'accepted'"
+      ).bind(now, g.guest_handle).run();
+      removedContacts += (r1.meta?.changes ?? 0) + (r2.meta?.changes ?? 0);
+    }
+
+    if (removedMembers > 0 || removedContacts > 0) {
+      console.log(`🧹 Guest-Cleanup: ${removedMembers} Mitgliedschaften, ${removedContacts} Kontakte entfernt`);
     }
   } catch (e) {
     console.error("❌ Guest-Cleanup Cron fehlgeschlagen:", e);

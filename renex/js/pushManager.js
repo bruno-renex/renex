@@ -66,10 +66,10 @@ export async function subscribeToPush() {
     return existing;
   }
 
-  // Permission abfragen
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") {
-    console.warn("Push: Permission denied");
+  // Permission prüfen (NICHT requestPermission — das muss aus User-Gesture kommen!)
+  // Wenn Permission noch nicht granted → null zurückgeben (Banner kümmert sich)
+  if (Notification.permission !== "granted") {
+    console.warn("Push: Permission not granted yet, skipping subscribe");
     return null;
   }
 

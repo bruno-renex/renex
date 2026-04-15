@@ -390,8 +390,17 @@ async function initPushBanner() {
   // Bereits granted + subscribed → kein Banner
   if (status.permission === "granted" && status.subscribed) return;
 
-  // Blocked → kein Banner (User hat bewusst blockiert)
-  if (status.permission === "denied") return;
+  // Permission granted aber nicht subscribed → auto-subscribe (ohne Banner)
+  if (status.permission === "granted" && !status.subscribed) {
+    try {
+      const { subscribeToPush: sub } = await import("./pushManager.js");
+      await sub();
+      console.log("🔔 Auto-subscribed (permission was granted)");
+    } catch (e) {
+      console.warn("🔔 Auto-subscribe failed:", e.message);
+    }
+    return; // kein Banner nötig
+  }
 
   // Banner-Texte aus i18n setzen
   const titleEl = document.getElementById("push-banner-title");

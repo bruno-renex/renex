@@ -9,7 +9,28 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-  <script>if("serviceWorker"in navigator)navigator.serviceWorker.register("/sw.js").catch(()=>{})</script>
+  <script>
+  if("serviceWorker"in navigator){
+    navigator.serviceWorker.register("/sw.js").then(function(){
+      if(Notification.permission==="granted"){
+        navigator.serviceWorker.ready.then(function(reg){
+          reg.pushManager.getSubscription().then(function(sub){
+            if(sub)return;
+            fetch("/push/vapid-key").then(function(r){return r.json()}).then(function(d){
+              var k=d.publicKey,p="=".repeat((4-k.length%4)%4);
+              var b=atob((k+p).replace(/-/g,"+").replace(/_/g,"/"));
+              var a=Uint8Array.from(Array.prototype.map.call(b,function(c){return c.charCodeAt(0)}));
+              return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:a});
+            }).then(function(s){
+              var j=s.toJSON();
+              return fetch("https://api.renex.id/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({endpoint:j.endpoint,keys:j.keys,transport_type:"web_push"})});
+            }).catch(function(){});
+          });
+        });
+      }
+    }).catch(function(){});
+  }
+  </script>
   <link rel="stylesheet" href="/colors.css" />
 <style>
 

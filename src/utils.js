@@ -8,6 +8,8 @@ export function corsHeaders(request) {
     "https://app.renex.id",
     "https://renex-static.pages.dev",
   ];
+  // Lokale Entwicklung: localhost auf beliebigem Port erlauben
+  if (origin?.startsWith("http://localhost:")) allowedOrigins.push(origin);
 
   const headers = {
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
@@ -40,6 +42,8 @@ export function checkCsrf(request) {
     "https://app.renex.id",
     "https://renex-static.pages.dev",
   ];
+  // Lokale Entwicklung: localhost auf beliebigem Port erlauben
+  if (origin?.startsWith("http://localhost:")) allowedOrigins.push(origin);
 
   if (!origin || !allowedOrigins.includes(origin)) {
     return new Response(JSON.stringify({ error: "CSRF check failed" }), {

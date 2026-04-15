@@ -56,7 +56,7 @@ export async function handleE2eRoutes(request, env, path, params) {
     // ======================================================
     case "/chat/keys/get": {
       if (request.method === "GET") {
-        const session = await requireSession(request, env);
+        const session = await requireAnySession(request, env);
         if (!session) return json(request, { error: "Not authenticated" }, 401);
 
         const { handle: me } = session;
@@ -340,7 +340,7 @@ export async function handleE2eRoutes(request, env, path, params) {
     // ======================================================
     case "/e2e/cmk/store": {
       if (request.method === "POST") {
-        const session = await requireSession(request, env);
+        const session = await requireAnySession(request, env);
         if (!session) return json(request, { error: "Not authenticated" }, 401);
 
         const me = String(session.handle || "").toLowerCase();
@@ -407,7 +407,7 @@ export async function handleE2eRoutes(request, env, path, params) {
     // ======================================================
     case "/e2e/cmk/fetch": {
       if (request.method === "GET") {
-        const session = await requireSession(request, env);
+        const session = await requireAnySession(request, env);
         if (!session) return json(request, { error: "Not authenticated" }, 401);
 
         const me = String(session.handle || "").toLowerCase();

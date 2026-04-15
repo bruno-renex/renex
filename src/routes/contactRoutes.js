@@ -34,6 +34,7 @@ export async function handleContactRoutes(request, env, path, params) {
           return new Response(null, { status: 304 });
         }
 
+        const now = Date.now();
         const { results } = await env.RENEX_DB.prepare(`
           SELECT c.contact_handle, c.display_handle, c.status, c.direction,
             (SELECT MAX(ts) FROM messages
@@ -43,8 +44,17 @@ export async function handleContactRoutes(request, env, path, params) {
             ) as last_ts
           FROM contacts c
           WHERE c.user_handle = ? AND c.status NOT IN ('removed', 'rejected')
+            AND (
+              c.contact_handle NOT LIKE 'guest_%'
+              OR EXISTS (
+                SELECT 1 FROM guest_sessions gs
+                WHERE gs.guest_handle = c.contact_handle
+                  AND gs.expires_at > ?
+                  AND gs.converted_to IS NULL
+              )
+            )
           ORDER BY COALESCE(last_ts, 0) DESC
-        `).bind(handle, handle, handle, handle).all();
+        `).bind(handle, handle, handle, handle, now).all();
 
         const body = JSON.stringify({
           contacts: results.map(r => ({

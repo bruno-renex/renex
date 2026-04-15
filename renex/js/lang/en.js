@@ -115,6 +115,8 @@ export default {
 
   // ── chat/index.html ──────────────────────────────────
   chatPageTitle:        "Chat",
+  chatStartupError:    "Chat could not be loaded. Please reload the page.",
+  reloadBtn:           "Reload",
   messagePlaceholder:   "Message…",
   sendBtn:              "Send",
   newMessagesSuffix:    " new messages ↓",

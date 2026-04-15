@@ -99,12 +99,13 @@ export async function handleInviteRoutes(request, env, path, params) {
     const rlToken = await rateLimit(env, `invite_info_tok:${token}`, 60_000, 10);
     if (!rlToken) return json(request, { error: "Rate limit exceeded" }, 429);
 
-    // Nur Invite-Template-Rows (guest_handle leer) → keine Session-Rows
+    // Invite-Template-Row laden (unbenutzt ODER als benutzt markiert)
     const row = await env.RENEX_DB.prepare(
-      "SELECT convo_id, convo_type, created_by, expires_at FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '')"
+      "SELECT convo_id, convo_type, created_by, expires_at, guest_handle FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
     ).bind(token).first();
 
     if (!row)                         return json(request, { valid: false, reason: "not_found" }, 404);
+    if (row.guest_handle === "__used__") return json(request, { valid: false, reason: "already_used" }, 410);
     if (Date.now() > row.expires_at)  return json(request, { valid: false, reason: "expired" }, 410);
 
     // Anzeigenamen der Konversation ermitteln
@@ -215,6 +216,22 @@ export async function handleInviteRoutes(request, env, path, params) {
        VALUES (?, ?, 'guest', ?)`
     ).bind(convoId, guestHandle, joinTs).run();
 
+    // ── DM-Gast: Kontakt-Einträge erstellen (bidirektional) ─────────
+    // Damit der Gast in der Inbox des Einladers erscheint und umgekehrt.
+    if (inviteRow.convo_type === "dm") {
+      const createdBy = inviteRow.created_by;
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO contacts (user_handle, contact_handle, display_handle, status, direction, created_at, updated_at)
+         VALUES (?, ?, ?, 'accepted', 'out', ?, ?)`
+      ).bind(createdBy, guestHandle, guestHandle, joinTs, joinTs).run();
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO contacts (user_handle, contact_handle, display_handle, status, direction, created_at, updated_at)
+         VALUES (?, ?, ?, 'accepted', 'in', ?, ?)`
+      ).bind(guestHandle, createdBy, createdBy, joinTs, joinTs).run();
+      // ETag bumpen damit Inbox des Einladers neu lädt
+      await env.RENEX_KV.put(`contacts_v:${createdBy}`, String(Date.now()));
+    }
+
     // ── Ephemeren E2E-Key speichern ───────────────────────────────────────
     if (
       publicKeyJwk && typeof publicKeyJwk === "object" &&
@@ -235,7 +252,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     await env.RENEX_DB.prepare(
       `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
        VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
-    ).bind(crypto.randomUUID(), convoId, guestHandle, joinTs, `👤 ${guestHandle} ist dem Chat beigetreten`).run();
+    ).bind(crypto.randomUUID(), convoId, guestHandle, joinTs, `👤 ${guestHandle} joined the chat`).run();
     if (isGroupConvo) {
       await pushToGroupMembers(env, env.RENEX_DB, convoId, guestHandle, guestJoinEvent);
     } else {
@@ -248,6 +265,13 @@ export async function handleInviteRoutes(request, env, path, params) {
          (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL)`
     ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle).run();
+
+    // ── DM-Invite: Template-Row invalidieren (einmalig verwendbar) ─────
+    if (inviteRow.convo_type === "dm") {
+      await env.RENEX_DB.prepare(
+        "UPDATE guest_sessions SET guest_handle = '__used__' WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '')"
+      ).bind(token).run();
+    }
 
     // ── KV-Session-Cache (schneller Auth-Lookup) ──────────────────────────
     const ttlSec = Math.max(60, Math.floor((sessionExpires - now) / 1000));
@@ -315,41 +339,130 @@ export async function handleInviteRoutes(request, env, path, params) {
       return json(request, { error: "Invalid session" }, 400);
     }
 
-    // Alle Nachrichten des Gastes in dieser Konversation übertragen
-    await env.RENEX_DB.prepare(
-      "UPDATE messages SET from_user = ? WHERE from_user = ? AND convo_id = ?"
-    ).bind(realHandle, guestHandle, row.convo_id).run();
+    const convertTs = Date.now();
+    const isDM = row.convo_type === "dm";
+    let finalConvoId = row.convo_id;
 
-    // Echten User als Mitglied der Konversation eintragen
-    await env.RENEX_DB.prepare(
-      `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
-       VALUES (?, ?, 'member', ?)`
-    ).bind(row.convo_id, realHandle, Date.now()).run();
+    if (isDM) {
+      // ── DM-KONVERTIERUNG ──────────────────────────────────────────
+      // Alte convo_id: "demo27:guest_xxx" → Neue: "demo27:realHandle"
+      // Alle Messages, Members, Contacts migrieren
+      const oldConvoId = row.convo_id;
+      // Finde den DM-Partner (der Einlader)
+      const peerHandle = row.created_by;
+      const newConvoId = dmConvoId(peerHandle, realHandle);
+      finalConvoId = newConvoId;
 
-    // Gast-Mitgliedschaft entfernen
-    await env.RENEX_DB.prepare(
-      "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-    ).bind(row.convo_id, guestHandle).run();
+      // 1. Neue Konversation erstellen
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversations (id, type, name, created_at, created_by)
+         VALUES (?, 'dm', NULL, ?, ?)`
+      ).bind(newConvoId, convertTs, peerHandle).run();
 
-    // Guest-Session als konvertiert markieren
-    await env.RENEX_DB.prepare(
-      "UPDATE guest_sessions SET converted_to = ? WHERE token = ?"
-    ).bind(realHandle, guestToken).run();
+      // 2. Messages auf neue convo_id + neuen Absender migrieren
+      await env.RENEX_DB.prepare(
+        "UPDATE messages SET convo_id = ?, from_user = ? WHERE convo_id = ? AND from_user = ?"
+      ).bind(newConvoId, realHandle, oldConvoId, guestHandle).run();
+      // Messages VOM Partner auch auf neue convo_id umschreiben
+      await env.RENEX_DB.prepare(
+        "UPDATE messages SET convo_id = ? WHERE convo_id = ?"
+      ).bind(newConvoId, oldConvoId).run();
 
-    // KV-Cache löschen
-    await env.RENEX_KV.delete(`guest_session:${guestToken}`);
-    env.RENEX_KV.delete(`grp_members:${row.convo_id}`).catch(() => {});
+      // 3. Conversation Members: alten Gast entfernen, echten User + Partner eintragen
+      await env.RENEX_DB.prepare(
+        "DELETE FROM conversation_members WHERE convo_id = ?"
+      ).bind(oldConvoId).run();
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+         VALUES (?, ?, 'member', ?)`
+      ).bind(newConvoId, realHandle, convertTs).run();
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+         VALUES (?, ?, 'member', ?)`
+      ).bind(newConvoId, peerHandle, convertTs).run();
 
-    // System-Message: "Guest Blue Eagle ist jetzt reto_frei"
-    if (isUUID(row.convo_id)) {
-      const convertTs = Date.now();
+      // 4. Kontakt-Einträge migrieren: guest_xxx → realHandle
+      await env.RENEX_DB.prepare(
+        `UPDATE contacts SET contact_handle = ?, display_handle = ?, updated_at = ?
+         WHERE user_handle = ? AND contact_handle = ?`
+      ).bind(realHandle, realHandle, convertTs, peerHandle, guestHandle).run();
+      // Kontakt-Eintrag des Gastes: user_handle = guest_xxx → realHandle
+      await env.RENEX_DB.prepare(
+        `UPDATE contacts SET user_handle = ?, updated_at = ?
+         WHERE user_handle = ? AND contact_handle = ?`
+      ).bind(realHandle, convertTs, guestHandle, peerHandle).run();
+
+      // 5. Unread-Counter migrieren
+      await env.RENEX_DB.prepare(
+        "UPDATE OR IGNORE unread_counters SET sender = ? WHERE sender = ? AND owner = ?"
+      ).bind(realHandle, guestHandle, peerHandle).run();
+      await env.RENEX_DB.prepare(
+        "DELETE FROM unread_counters WHERE sender = ? AND owner = ?"
+      ).bind(guestHandle, peerHandle).run();
+
+      // 6. Alte Konversation löschen
+      await env.RENEX_DB.prepare(
+        "DELETE FROM conversations WHERE id = ?"
+      ).bind(oldConvoId).run();
+
+      // 7. System-Messages in neuer Konversation
+      // Hinweis: Alte Nachrichten sind nicht mehr entschlüsselbar
+      await env.RENEX_DB.prepare(
+        `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+         VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+      ).bind(crypto.randomUUID(), newConvoId, realHandle, convertTs - 1,
+        `__guest_convert_notice__`).run();
+      // Namens-Wechsel
+      await env.RENEX_DB.prepare(
+        `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+         VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+      ).bind(crypto.randomUUID(), newConvoId, realHandle, convertTs,
+        `${guestHandle} is now ${realHandle}`).run();
+
+      // 8. ETag bumpen damit Inbox des Partners refresht
+      await env.RENEX_KV.put(`contacts_v:${peerHandle}`, String(convertTs));
+
+      // 9. Live-Event an Partner
+      pushToUserDO(env, peerHandle, {
+        id:        crypto.randomUUID(),
+        type:      "GUEST_CONVERTED",
+        oldHandle: guestHandle,
+        newHandle: realHandle,
+        convoId:   newConvoId,
+        ts:        convertTs
+      }).catch(() => {});
+
+    } else {
+      // ── GRUPPEN-KONVERTIERUNG (bestehender Code) ──────────────────
+      // Messages übertragen
+      await env.RENEX_DB.prepare(
+        "UPDATE messages SET from_user = ? WHERE from_user = ? AND convo_id = ?"
+      ).bind(realHandle, guestHandle, row.convo_id).run();
+
+      // Echten User als Mitglied eintragen
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+         VALUES (?, ?, 'member', ?)`
+      ).bind(row.convo_id, realHandle, convertTs).run();
+
+      // Gast-Mitgliedschaft entfernen
+      await env.RENEX_DB.prepare(
+        "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+      ).bind(row.convo_id, guestHandle).run();
+
+      // System-Messages: Hinweis + Namens-Wechsel
+      await env.RENEX_DB.prepare(
+        `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+         VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+      ).bind(crypto.randomUUID(), row.convo_id, realHandle, convertTs - 1,
+        `__guest_convert_notice__`).run();
       await env.RENEX_DB.prepare(
         `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
          VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
       ).bind(crypto.randomUUID(), row.convo_id, realHandle, convertTs,
-        `${guestHandle} ist jetzt ${realHandle}`).run();
+        `${guestHandle} is now ${realHandle}`).run();
 
-      // Live-Event an alle Mitglieder → Mitgliederliste + Chat refreshen
+      // Live-Event an alle Mitglieder
       pushToGroupMembers(env, env.RENEX_DB, row.convo_id, null, {
         id:         crypto.randomUUID(),
         type:       "GUEST_CONVERTED",
@@ -360,10 +473,19 @@ export async function handleInviteRoutes(request, env, path, params) {
       }).catch(() => {});
     }
 
+    // Guest-Session als konvertiert markieren (DM + Gruppe)
+    await env.RENEX_DB.prepare(
+      "UPDATE guest_sessions SET converted_to = ? WHERE token = ?"
+    ).bind(realHandle, guestToken).run();
+
+    // KV-Cache löschen
+    await env.RENEX_KV.delete(`guest_session:${guestToken}`);
+    env.RENEX_KV.delete(`grp_members:${row.convo_id}`).catch(() => {});
+
     return json(request, {
       ok:        true,
       realHandle,
-      convoId:   row.convo_id,
+      convoId:   finalConvoId,
       convoType: row.convo_type,
     });
   }
@@ -426,41 +548,89 @@ export async function handleInviteRoutes(request, env, path, params) {
     if (!row)               return json(request, { error: "Invite not found" }, 404);
     if (Date.now() > row.expires_at) return json(request, { error: "Invite expired" }, 410);
 
-    const convoId   = row.convo_id;
+    let convoId     = row.convo_id;
     const convoType = row.convo_type;
+    const joinTs    = Date.now();
+    const createdBy = row.created_by;
 
-    if (!convoId) return json(request, { error: "No conversation linked to this invite" }, 400);
+    // ── DM-Invite: Konversation + Kontakte erstellen ──────────────────
+    if (convoType === "dm" && (!convoId || convoId === "")) {
+      convoId = dmConvoId(createdBy, me);
 
-    // Prüfen ob User bereits Mitglied ist
-    const existing = await env.RENEX_DB.prepare(
-      "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-    ).bind(convoId, me).first();
+      // Konversation erstellen
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversations (id, type, name, created_at, created_by)
+         VALUES (?, 'dm', NULL, ?, ?)`
+      ).bind(convoId, joinTs, createdBy).run();
 
-    if (!existing) {
+      // Beide als Member eintragen
       await env.RENEX_DB.prepare(
         `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
          VALUES (?, ?, 'member', ?)`
-      ).bind(convoId, me, Date.now()).run();
+      ).bind(convoId, createdBy, joinTs).run();
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+         VALUES (?, ?, 'member', ?)`
+      ).bind(convoId, me, joinTs).run();
 
-      // Andere Mitglieder benachrichtigen
-      const isGroupConvo = isUUID(convoId);
-      if (isGroupConvo) {
-        const members = await env.RENEX_DB.prepare(
-          "SELECT member_handle FROM conversation_members WHERE convo_id = ? AND member_handle != ?"
-        ).bind(convoId, me).all();
-        for (const m of members.results || []) {
-          await pushToUserDO(env, m.member_handle, {
-            type: "member_joined", groupId: convoId, handle: me
-          }).catch(() => {});
+      // Kontakt-Einträge (bidirektional)
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO contacts (user_handle, contact_handle, display_handle, status, direction, created_at, updated_at)
+         VALUES (?, ?, ?, 'accepted', 'out', ?, ?)`
+      ).bind(createdBy, me, me, joinTs, joinTs).run();
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO contacts (user_handle, contact_handle, display_handle, status, direction, created_at, updated_at)
+         VALUES (?, ?, ?, 'accepted', 'in', ?, ?)`
+      ).bind(me, createdBy, createdBy, joinTs, joinTs).run();
+
+      // ETag bumpen
+      await env.RENEX_KV.put(`contacts_v:${createdBy}`, String(joinTs));
+      await env.RENEX_KV.put(`contacts_v:${me}`, String(joinTs));
+
+      // Einlader benachrichtigen
+      pushToUserDO(env, createdBy, {
+        type: "CONTACT_UPDATE", handle: me, ts: joinTs
+      }).catch(() => {});
+
+      // DM-Invite-Template invalidieren (einmalig)
+      await env.RENEX_DB.prepare(
+        "UPDATE guest_sessions SET guest_handle = '__used__' WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '')"
+      ).bind(token).run();
+
+    } else if (convoId) {
+      // ── Gruppen-Invite: Member eintragen ──────────────────────────────
+      const existing = await env.RENEX_DB.prepare(
+        "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+      ).bind(convoId, me).first();
+
+      if (!existing) {
+        await env.RENEX_DB.prepare(
+          `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+           VALUES (?, ?, 'member', ?)`
+        ).bind(convoId, me, joinTs).run();
+
+        // Andere Mitglieder benachrichtigen
+        const isGroupConvo = isUUID(convoId);
+        if (isGroupConvo) {
+          const members = await env.RENEX_DB.prepare(
+            "SELECT member_handle FROM conversation_members WHERE convo_id = ? AND member_handle != ?"
+          ).bind(convoId, me).all();
+          for (const m of members.results || []) {
+            await pushToUserDO(env, m.member_handle, {
+              type: "member_joined", groupId: convoId, handle: me
+            }).catch(() => {});
+          }
         }
       }
+    } else {
+      return json(request, { error: "No conversation linked to this invite" }, 400);
     }
 
     return json(request, {
       ok: true,
       convoId,
       convoType,
-      inviterHandle: row.created_by,
+      inviterHandle: createdBy,
     });
   }
 

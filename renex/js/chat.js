@@ -3873,6 +3873,7 @@ async function ensureGroupChatReady(groupId, myHandle) {
 // ======================================================
 
 (async () => {
+try {
 
   // 🔒 Startup Guard – verhindert Doppel-Init
 if (window.__chatStartupDone) {
@@ -4216,6 +4217,27 @@ if (e2eReady) {
 }
 
 // WebSocket liefert neue Messages via NEW_MESSAGE Event
+
+} catch (startupError) {
+  console.error("💥 Chat Startup fehlgeschlagen:", startupError);
+  // Recovery-UI: sichtbare Fehlermeldung statt schwarzer Bildschirm
+  const el = document.getElementById("messages") || document.body;
+  const errDiv = document.createElement("div");
+  errDiv.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:32px 20px;text-align:center;height:100%;";
+  const errIcon = document.createElement("div");
+  errIcon.style.cssText = "font-size:40px;";
+  errIcon.textContent = "⚠️";
+  const errText = document.createElement("div");
+  errText.style.cssText = "font-size:14px;color:var(--text-secondary);max-width:280px;line-height:1.5;";
+  errText.textContent = lang?.chatStartupError || "Chat could not be loaded. Please reload the page.";
+  const errBtn = document.createElement("button");
+  errBtn.style.cssText = "padding:10px 24px;border-radius:8px;border:none;background:var(--accent,#38BDF8);color:#fff;font-size:14px;font-weight:600;cursor:pointer;";
+  errBtn.textContent = lang?.reloadBtn || "Reload";
+  errBtn.addEventListener("click", () => location.reload());
+  errDiv.append(errIcon, errText, errBtn);
+  el.innerHTML = "";
+  el.appendChild(errDiv);
+}
 })();
 
 

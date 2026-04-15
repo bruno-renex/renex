@@ -212,7 +212,7 @@ export async function handleChatRoutes(request, env, path, params) {
     case "/chat/delivered": {
       if (request.method === "POST") {
 
-        const session = await requireSession(request, env);
+        const session = await requireAnySession(request, env);
         if (!session) {
           return json(request, { error: "Not authenticated" }, 401);
         }

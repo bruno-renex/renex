@@ -2,7 +2,7 @@
   Cache-Control: no-cache, no-store, must-revalidate
 
 /js/*
-  Cache-Control: no-cache, must-revalidate
+  Cache-Control: no-store, no-cache, must-revalidate
 
 /*
   X-Frame-Options: DENY

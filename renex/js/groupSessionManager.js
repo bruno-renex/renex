@@ -308,7 +308,10 @@ export async function receiveGroupSK({ from, groupId, myDeviceId, payloads, find
       b64ToBytes(p.ctB64).buffer
     );
   } catch (e) {
-    console.warn("❌ GSK decrypt failed:", { from, error: String(e) });
+    console.warn("❌ GSK decrypt failed (Key-Mismatch?):", { from, error: String(e) });
+    // Key-Mismatch: Sender hat GSK mit altem Public Key gewrapped.
+    // Alten GSK-Cache löschen damit ein frischer Request mit neuen Keys möglich wird.
+    try { await idbSet(gskKey(groupId, from), null); } catch {}
     return false;
   }
 

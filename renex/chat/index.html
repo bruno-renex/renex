@@ -17,7 +17,7 @@
             fetch("/push/vapid-key").then(function(r){return r.json()}).then(function(d){
               var k=d.publicKey,p="=".repeat((4-k.length%4)%4);
               var b=atob((k+p).replace(/-/g,"+").replace(/_/g,"/"));
-              var a=Uint8Array.from(Array.prototype.map.call(b,function(c){return c.charCodeAt(0)}));
+              var a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);
               return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:a});
             }).then(function(s){
               var j=s.toJSON();

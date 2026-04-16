@@ -19,7 +19,7 @@
             fetch("/push/vapid-key").then(function(r){return r.json()}).then(function(d){
               var k=d.publicKey,p="=".repeat((4-k.length%4)%4);
               var b=atob((k+p).replace(/-/g,"+").replace(/_/g,"/"));
-              var a=Uint8Array.from(Array.prototype.map.call(b,function(c){return c.charCodeAt(0)}));
+              var a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);
               return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:a});
             }).then(function(s){
               var j=s.toJSON();
@@ -147,17 +147,25 @@
 
   .strip-badge {
     position: absolute;
-    top: 6px;
-    right: 6px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
+    top: 4px;
+    right: 4px;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 999px;
     background: var(--accent-voice);
+    color: #07070A;
+    font-size: 10px;
+    font-weight: 800;
     border: 2px solid var(--bg-panel);
     display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    line-height: 1;
+    box-sizing: border-box;
   }
 
-  .strip-badge.visible { display: block; }
+  .strip-badge.visible { display: flex; }
 
   .strip-icons-bottom {
     display: flex;
@@ -1461,6 +1469,33 @@
   .landing-cta-btn:hover { opacity: 0.9; box-shadow: 0 0 40px rgba(56,189,248,0.4); }
   .landing-cta-btn:active { transform: scale(0.98); }
 
+  /* ── Site Footer ─────────────────────────── */
+  .landing-footer {
+    text-align: center;
+    padding: 24px 24px 36px;
+    border-top: 1px solid var(--border-panel, rgba(255,255,255,0.06));
+  }
+  .landing-footer-links {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .landing-footer-links a {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .landing-footer-links a:hover {
+    color: var(--accent-voice);
+  }
+  .landing-footer-copy {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
   /* ── Divider ───────────────────────────── */
   .landing-divider {
     width: 60px;
@@ -1958,6 +1993,16 @@
     </button>
   </section>
 
+  <!-- ── FOOTER ──────────────────────────── -->
+  <footer class="landing-footer">
+    <div class="landing-footer-links">
+      <a href="/impressum/" data-i18n="footerImprint">Impressum</a>
+      <a href="/datenschutz/" data-i18n="footerPrivacy" id="footer-privacy-link">Datenschutz</a>
+      <a href="/feedback/" data-i18n="footerFeedback">Feedback</a>
+    </div>
+    <div class="landing-footer-copy">&copy; 2026 RENEX</div>
+  </footer>
+
 </div>
 
 <!-- ═══════════════════════════════════════
@@ -2202,6 +2247,12 @@ import lang, { applyI18n, getLang, setLang } from "./js/i18n.js";
 
 applyI18n();
 
+// Privacy link: language-dependent URL
+if (getLang() !== 'de') {
+  const pl = document.getElementById('footer-privacy-link');
+  if (pl) pl.href = '/privacy/';
+}
+
 const modal      = document.getElementById("login-modal");
 const handleInput = document.getElementById("login-handle");
 const loginBtn   = document.getElementById("login-btn");
@@ -2210,7 +2261,7 @@ const loginStatus = document.getElementById("login-status");
 // ── Modal helpers ──────────────────────────────────────
 const appEl = document.querySelector(".app");
 function showApp()   { if (appEl) appEl.style.visibility = "visible"; }
-function showModal() { showApp(); modal.classList.remove("hidden"); handleInput?.focus(); }
+function showModal() { showApp(); modal.classList.remove("hidden"); if (!navigator.maxTouchPoints) handleInput?.focus(); }
 function hideModal() { showApp(); modal.classList.add("hidden"); }
 
 // ── Auth check on load ─────────────────────────────────

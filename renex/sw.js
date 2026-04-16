@@ -48,9 +48,19 @@ async function handlePush(event) {
     ];
   }
 
-  if (data?.unreadTotal && navigator.setAppBadge) {
-    navigator.setAppBadge(data.unreadTotal).catch(() => {});
-  }
+  // App-Icon Badge
+  try {
+    if (navigator.setAppBadge) {
+      // Chromium: setAppBadge mit inkrementierendem Count
+      const cache = await caches.open("renex-badge");
+      const resp = await cache.match("badge-count").catch(() => null);
+      let count = resp ? parseInt(await resp.text()) || 0 : 0;
+      count++;
+      await cache.put("badge-count", new Response(String(count)));
+      navigator.setAppBadge(count).catch(() => {});
+    }
+  } catch {}
+
 
   try {
     await self.registration.showNotification(title || "RENEX", options);
@@ -196,6 +206,8 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SET_BADGE") {
     const count = event.data.count || 0;
+    // Badge-Cache synchronisieren
+    caches.open("renex-badge").then(c => c.put("badge-count", new Response(String(count)))).catch(() => {});
     if (count > 0 && navigator.setAppBadge) {
       navigator.setAppBadge(count).catch(() => {});
     } else if (navigator.clearAppBadge) {

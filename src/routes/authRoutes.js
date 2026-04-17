@@ -1,12 +1,15 @@
 import { json, readJson, base64url, base64urlToString, base64urlToArrayBuffer, decodeCBOR, corsHeaders } from '../utils.js';
 import { requireSession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions } from '../auth.js';
 import { handleLoginFinish } from '../helpers/loginFinish.js';
+import { readCredentials, writeCredentials, MAX_PASSKEYS } from '../helpers/credentials.js';
 
 // ======================================================
 // AUTH ROUTES: /auth/register/*, /auth/login/*,
 //              /auth/session, /auth/ws-ticket,
-//              /auth/logout, /users/me, /account
+//              /auth/logout, /users/me, /account,
+//              /auth/passkeys
 // ======================================================
+
 export async function handleAuthRoutes(request, env, path, params) {
   switch (path) {
 
@@ -38,6 +41,27 @@ export async function handleAuthRoutes(request, env, path, params) {
           return json(request, { error: "Handle not available" }, 409);
         }
 
+        // Prüfen ob User bereits existiert (Passkey hinzufügen vs. Neu-Registrierung)
+        const existingCreds = await readCredentials(env, h);
+        let excludeCredentials = [];
+
+        if (existingCreds) {
+          // User existiert → Session prüfen (nur eingeloggte User dürfen Passkey hinzufügen)
+          const session = await requireSession(request, env);
+          if (!session || session.handle !== h) {
+            return json(request, { error: "Not authenticated" }, 401);
+          }
+          if (existingCreds.length >= MAX_PASSKEYS) {
+            return json(request, { error: "Maximum number of passkeys reached" }, 400);
+          }
+          // excludeCredentials: verhindert Re-Registrierung desselben Authenticators
+          excludeCredentials = existingCreds.map(c => ({
+            type: "public-key",
+            id: c.credential_id,
+            transports: ["internal", "hybrid", "usb", "ble", "nfc"]
+          }));
+        }
+
         // Challenge erzeugen
         const challengeB64 = base64url(
           crypto.getRandomValues(new Uint8Array(32))
@@ -48,7 +72,8 @@ export async function handleAuthRoutes(request, env, path, params) {
           `challenge:register:${h}`,
           JSON.stringify({
             challenge: challengeB64,
-            ts: Date.now()
+            ts: Date.now(),
+            isAddPasskey: !!existingCreds  // Flag: Passkey hinzufügen vs. Neu-Registrierung
           }),
           { expirationTtl: 300 }
         );
@@ -79,6 +104,8 @@ export async function handleAuthRoutes(request, env, path, params) {
               requireResidentKey: false
             },
 
+            excludeCredentials,
+
             timeout: 60000,
             attestation: "none"
           }
@@ -108,7 +135,8 @@ export async function handleAuthRoutes(request, env, path, params) {
           return json(request, { error: "Register challenge expired" }, 400);
         }
 
-        const { challenge } = JSON.parse(chRaw);
+        const challengeData = JSON.parse(chRaw);
+        const { challenge } = challengeData;
 
         // clientDataJSON prüfen
         let clientData;
@@ -179,15 +207,28 @@ export async function handleAuthRoutes(request, env, path, params) {
           return json(request, { error: "Invalid COSE key" }, 400);
         }
 
-        // Credential + Public Key speichern
-        await env.RENEX_KV.put(
-          `webauthn:${handle}`,
-          JSON.stringify({
-            credential_id: body.id,
-            publicKeyJwk,
-            created_at: Date.now()
-          })
-        );
+        // Credential erstellen
+        const newCred = {
+          credential_id: body.id,
+          publicKeyJwk,
+          created_at: Date.now(),
+          signCount: 0,
+          name: body.name || null,   // Optional: z.B. "iPhone", "MacBook"
+          last_used: null,
+        };
+
+        if (challengeData.isAddPasskey) {
+          // Passkey hinzufügen: an bestehendes Array anhängen
+          const existing = await readCredentials(env, handle);
+          if (!existing) {
+            return json(request, { error: "Account not found" }, 404);
+          }
+          existing.push(newCred);
+          await writeCredentials(env, handle, existing);
+        } else {
+          // Neue Registrierung: Array mit erstem Credential erstellen
+          await writeCredentials(env, handle, [newCred]);
+        }
 
         return json(request, { status: "ok" });
       }
@@ -219,35 +260,23 @@ export async function handleAuthRoutes(request, env, path, params) {
         );
         if (!ok) return json(request, { error: "Too many requests" }, 429);
 
-        const stored = await env.RENEX_KV.get(`webauthn:${handle}`);
+        const credentials = await readCredentials(env, handle);
 
         // Login-Challenge erzeugen (immer, unabhängig ob User existiert)
         const challengeB64 = base64url(
           crypto.getRandomValues(new Uint8Array(32))
         );
 
-        if (!stored) {
+        if (!credentials || credentials.length === 0) {
           // User existiert nicht → Registrierung starten
           return json(request, { registered: false });
         }
 
-        let parsed;
-        try {
-          parsed = JSON.parse(stored);
-        } catch {
-          return json(request, { error: "Corrupted passkey data" }, 500);
-        }
-        const credential_id = parsed.credential_id;
-        if (!credential_id || typeof credential_id !== "string") {
-          return json(request, { error: "Invalid credential" }, 500);
-        }
-
-        // Login-Challenge speichern (5 Minuten)
+        // Login-Challenge speichern (5 Minuten) — ohne feste credential_id
         await env.RENEX_KV.put(
           `challenge:login:${handle}`,
           JSON.stringify({
             challenge: challengeB64,
-            credential_id,
             ts: Date.now()
           }),
           { expirationTtl: 300 }
@@ -258,11 +287,11 @@ export async function handleAuthRoutes(request, env, path, params) {
             challenge: challengeB64,
             rpId: "app.renex.id",
 
-            allowCredentials: [{
+            allowCredentials: credentials.map(c => ({
               type: "public-key",
-              id: credential_id,   // STRING!
-              transports: ["internal"]
-            }],
+              id: c.credential_id,
+              transports: ["internal", "hybrid", "usb", "ble", "nfc"]
+            })),
 
             userVerification: "required",
             timeout: 60000,
@@ -467,6 +496,85 @@ export async function handleAuthRoutes(request, env, path, params) {
 
         return json(request, { status: "deleted" });
       }
+      break;
+    }
+
+    // =========================
+    // AUTH / PASSKEYS (Liste + Löschen)
+    // =========================
+    case "/auth/passkeys": {
+
+      // GET: Alle Passkeys des Users auflisten
+      if (request.method === "GET") {
+        const session = await requireSession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+        const creds = await readCredentials(env, session.handle);
+        if (!creds) return json(request, { passkeys: [] });
+
+        return json(request, {
+          passkeys: creds.map(c => ({
+            credential_id: c.credential_id,
+            name:          c.name || null,
+            created_at:    c.created_at,
+            last_used:     c.last_used || null,
+          }))
+        });
+      }
+
+      // DELETE: Bestimmten Passkey entfernen
+      if (request.method === "DELETE") {
+        const session = await requireSession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+        const body = await readJson(request);
+        if (!body?.credential_id) {
+          return json(request, { error: "Missing credential_id" }, 400);
+        }
+
+        const creds = await readCredentials(env, session.handle);
+        if (!creds) return json(request, { error: "No passkeys found" }, 404);
+
+        if (creds.length <= 1) {
+          return json(request, { error: "Cannot remove last passkey" }, 400);
+        }
+
+        const idx = creds.findIndex(c => c.credential_id === body.credential_id);
+        if (idx === -1) {
+          return json(request, { error: "Passkey not found" }, 404);
+        }
+
+        creds.splice(idx, 1);
+        await writeCredentials(env, session.handle, creds);
+
+        return json(request, { status: "ok", remaining: creds.length });
+      }
+
+      // PATCH: Passkey umbenennen
+      if (request.method === "PATCH") {
+        const session = await requireSession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+        const body = await readJson(request);
+        if (!body?.credential_id || typeof body.name !== "string") {
+          return json(request, { error: "Missing credential_id or name" }, 400);
+        }
+
+        const name = body.name.trim().slice(0, 64);
+        if (!name) return json(request, { error: "Name cannot be empty" }, 400);
+
+        const creds = await readCredentials(env, session.handle);
+        if (!creds) return json(request, { error: "No passkeys found" }, 404);
+
+        const cred = creds.find(c => c.credential_id === body.credential_id);
+        if (!cred) return json(request, { error: "Passkey not found" }, 404);
+
+        cred.name = name;
+        await writeCredentials(env, session.handle, creds);
+
+        return json(request, { status: "ok" });
+      }
+
       break;
     }
 

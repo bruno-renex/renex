@@ -60,7 +60,13 @@ export function applyI18n() {
   });
   document.querySelectorAll("[data-i18n-placeholder]").forEach(el => {
     const val = lang[el.dataset.i18nPlaceholder];
-    if (typeof val === "string") el.placeholder = val;
+    if (typeof val !== "string") return;
+    // contenteditable divs haben kein .placeholder → data-placeholder setzen (für CSS ::before)
+    if (el.isContentEditable || el.contentEditable === "true" || el.contentEditable === "plaintext-only") {
+      el.dataset.placeholder = val;
+    } else {
+      el.placeholder = val;
+    }
   });
   document.querySelectorAll("[data-i18n-title]").forEach(el => {
     const val = lang[el.dataset.i18nTitle];

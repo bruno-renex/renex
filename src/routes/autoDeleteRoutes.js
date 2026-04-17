@@ -1,5 +1,5 @@
 import { json, readJson, dmConvoId } from '../utils.js';
-import { requireSession, pushToUserDO } from '../auth.js';
+import { requireSession, requireAnySession, pushToUserDO } from '../auth.js';
 
 // ======================================================
 // AUTO-DELETE ROUTES: /chat/auto-delete
@@ -11,7 +11,7 @@ export async function handleAutoDeleteRoutes(request, env, path, params) {
     // AUTO-DELETE PRO CONVERSATION
     // =========================
     case "/chat/auto-delete": {
-      const session = await requireSession(request, env);
+      const session = await requireAnySession(request, env);
       if (!session) return json(request, { error: "Not authenticated" }, 401);
       const me = session.handle;
 

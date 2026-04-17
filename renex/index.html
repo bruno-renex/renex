@@ -745,7 +745,26 @@
     z-index: 201;
     width: 300px;
     max-height: calc(100dvh - 80px);
+    overflow: hidden; /* Kein Scroll am Popup selbst */
+  }
+
+  /* Step 2: Flex-Column damit Button immer sichtbar bleibt */
+  #group-step-2 {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 112px); /* Popup max-height minus padding */
+  }
+
+  #group-contact-chips {
+    flex: 1;
+    min-height: 60px;
+    max-height: none; /* flex übernimmt die Kontrolle */
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #group-step-2-footer {
+    flex-shrink: 0; /* Button-Bereich bleibt immer sichtbar */
   }
 
   /* ═══════════════════════════════════════════
@@ -835,6 +854,168 @@
   #btn-confirm-delete.enabled {
     opacity: 1;
     pointer-events: auto;
+  }
+
+  /* ═══════════════════════════════════════════
+     PASSKEYS DIALOG
+  ═══════════════════════════════════════════ */
+  #passkeys-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.65);
+    z-index: 500;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #passkeys-overlay.show { display: flex; }
+
+  #passkeys-dialog {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-panel);
+    border-radius: 16px;
+    padding: 24px;
+    width: 380px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100dvh - 64px);
+    overflow-y: auto;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+  }
+
+  .passkeys-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+
+  .passkeys-header h3 {
+    margin: 0;
+    font-size: 17px;
+    color: var(--text-primary);
+  }
+
+  .passkeys-close-btn {
+    background: none;
+    border: none;
+    font-size: 22px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    line-height: 1;
+  }
+
+  .passkeys-close-btn:hover { color: var(--text-primary); background: var(--bg-panel-alt); }
+
+  #passkeys-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+    min-height: 40px;
+  }
+
+  .passkey-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+  }
+
+  .passkey-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+    width: 32px;
+    text-align: center;
+  }
+
+  .passkey-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .passkey-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    margin: -2px -4px;
+    border: 1px solid transparent;
+    transition: border-color 0.15s;
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .passkey-name:hover { border-color: var(--border-subtle); }
+
+  .passkey-name-input {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--bg-body);
+    border: 1px solid var(--accent-voice);
+    border-radius: 4px;
+    padding: 2px 4px;
+    outline: none;
+    font-family: inherit;
+    width: 100%;
+  }
+
+  .passkey-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .passkey-actions {
+    flex-shrink: 0;
+  }
+
+  .passkey-delete-btn {
+    background: none;
+    border: none;
+    color: var(--status-error);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+  }
+
+  .passkey-delete-btn:hover { opacity: 1; background: rgba(248,113,113,0.1); }
+
+  .passkeys-add-btn {
+    width: 100%;
+    padding: 12px;
+    background: var(--accent-voice);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .passkeys-add-btn:hover { opacity: 0.85; }
+  .passkeys-add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .passkeys-empty {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 16px 0;
   }
 
   /* ═══════════════════════════════════════════
@@ -1685,6 +1866,8 @@
             </div>
           </div>
           <div class="dropdown-divider"></div>
+          <div id="dropdown-passkeys" class="dropdown-item" data-i18n="passkeysLabel">Passkeys</div>
+          <div class="dropdown-divider"></div>
           <div id="dropdown-lang" class="dropdown-item has-sub">
             <span data-i18n="langToggleLabel">Sprache</span>
             <div id="lang-submenu">
@@ -1778,7 +1961,11 @@
      ADD CONTACT POPUP
 ═══════════════════════════════════════ -->
 <div id="add-contact-popup">
-  <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em;" data-i18n="addContactHeading">Kontakt hinzufügen</div>
+  <!-- Header mit ✕ -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+    <span style="font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em;" data-i18n="addContactHeading">Kontakt hinzufügen</span>
+    <button id="add-contact-close" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:0 2px;line-height:1;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;transition:background 0.12s;" onmouseenter="this.style.background='var(--bg-hover, rgba(255,255,255,0.07))'" onmouseleave="this.style.background='none'">✕</button>
+  </div>
   <div style="display:flex;gap:6px;margin-bottom:10px;">
     <input id="add-handle" type="search" placeholder="Handle (z. B. bob)"
       data-i18n-placeholder="addContactPlaceholder" autocomplete="off"
@@ -1795,7 +1982,6 @@
     </button>
     <div id="dm-invite-status" style="display:none;margin-top:6px;font-size:11px;color:var(--accent-voice);text-align:center;"></div>
   </div>
-  <button id="add-contact-done" style="width:100%;margin-top:10px;padding:9px;border-radius:10px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-primary);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;" data-i18n="doneBtn">Done</button>
 </div>
 
 <!-- ═══════════════════════════════════════
@@ -1803,27 +1989,38 @@
 ═══════════════════════════════════════ -->
 <div id="create-group-popup">
   <div id="group-step-1">
-    <div data-i18n="createGroupLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Create group</div>
+    <!-- Header with ✕ -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span data-i18n="createGroupLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em;">Create group</span>
+      <button id="create-group-close" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:0 2px;line-height:1;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;transition:background 0.12s;" onmouseenter="this.style.background='var(--bg-hover,rgba(255,255,255,0.07))'" onmouseleave="this.style.background='none'">✕</button>
+    </div>
     <input id="group-name-input" type="text" data-i18n-placeholder="groupNamePlaceholder" placeholder="Group name" autocomplete="off" autocorrect="off" autocapitalize="off"
       style="width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:16px;outline:none;margin-bottom:8px;font-family:inherit;" />
     <button id="group-create-confirm-btn" data-i18n="nextBtn" style="width:100%;padding:9px;border-radius:10px;border:none;background:var(--accent-voice);color:#07070A;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">Next →</button>
   </div>
   <div id="group-step-2" style="display:none;">
-    <div data-i18n="invitePeopleLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Invite people</div>
-    <div style="display:flex;gap:6px;margin-bottom:8px;">
-      <input id="group-invite-search" type="text" placeholder="Username…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-        style="flex:1;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:16px;outline:none;font-family:inherit;" />
-      <button id="group-invite-add-btn" style="padding:8px 12px;border-radius:8px;border:none;background:var(--accent-voice);color:#07070A;font-size:16px;font-weight:700;cursor:pointer;line-height:1;font-family:inherit;">+</button>
+    <!-- Header mit ✕ (flex-shrink:0) -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-shrink:0;">
+      <span data-i18n="invitePeopleLabel" style="font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em;">Invite people</span>
+      <button id="group-invite-close" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:0 2px;line-height:1;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;transition:background 0.12s;" onmouseenter="this.style.background='var(--bg-hover,rgba(255,255,255,0.07))'" onmouseleave="this.style.background='none'">✕</button>
     </div>
-    <div id="group-invite-error" data-i18n="onlyContactsWarning" style="display:none;font-size:11px;color:var(--status-error);margin-bottom:6px;padding:4px 6px;background:rgba(248,113,113,0.1);border-radius:6px;">Only your own contacts can be invited</div>
-    <div id="group-invited-chips" style="display:flex;flex-wrap:wrap;gap:5px;min-height:0;max-height:100px;overflow-y:auto;margin-bottom:8px;"></div>
-    <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;">
-      <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
-      <span data-i18n="orSeparator" style="font-size:11px;color:var(--text-muted);">or</span>
-      <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
+    <!-- Filter input (flex-shrink:0) -->
+    <input id="group-invite-filter" type="search" placeholder="Filtern…" data-i18n-placeholder="filterPlaceholder" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+      style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-size:16px;outline:none;font-family:inherit;margin-bottom:10px;flex-shrink:0;" />
+    <!-- Selectable contact chips — flex:1, scrollt wenn nötig -->
+    <div id="group-contact-chips" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;align-content:flex-start;"></div>
+    <!-- Empty state -->
+    <div id="group-no-contacts" style="display:none;font-size:12px;color:var(--text-muted);text-align:center;padding:6px 0;margin-bottom:8px;flex-shrink:0;"></div>
+    <!-- Footer: immer sichtbar -->
+    <div id="group-step-2-footer">
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;">
+        <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
+        <span data-i18n="orSeparator" style="font-size:11px;color:var(--text-muted);">or</span>
+        <div style="flex:1;height:1px;background:var(--border-subtle);"></div>
+      </div>
+      <button id="group-guest-link-btn" data-i18n="guestInviteLinkBtn" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;margin-bottom:10px;font-family:inherit;">🔗 Create guest invite link</button>
+      <button id="group-invite-done-btn" style="width:100%;padding:10px;border-radius:10px;border:none;background:var(--accent-voice);color:#07070A;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;transition:opacity 0.15s;">Gruppe erstellen</button>
     </div>
-    <button id="group-guest-link-btn" data-i18n="guestInviteLinkBtn" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;margin-bottom:8px;font-family:inherit;">🔗 Create guest invite link</button>
-    <button id="group-invite-done-btn" data-i18n="doneBtn" style="width:100%;padding:8px;border-radius:8px;border:none;background:var(--bg-panel-alt);color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Done</button>
   </div>
 </div>
 
@@ -2021,6 +2218,20 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════
+     PASSKEYS DIALOG
+═══════════════════════════════════════ -->
+<div id="passkeys-overlay">
+  <div id="passkeys-dialog">
+    <div class="passkeys-header">
+      <h3 data-i18n="passkeysTitle">Passkeys verwalten</h3>
+      <button id="btn-close-passkeys" class="passkeys-close-btn">&times;</button>
+    </div>
+    <div id="passkeys-list"></div>
+    <button id="btn-add-passkey" class="passkeys-add-btn" data-i18n="passkeyAdd">+ Passkey hinzufügen</button>
+  </div>
+</div>
+
 <script>
   // Section switcher (icon strip)
   function switchSection(name, btn) {
@@ -2058,16 +2269,21 @@
     app.classList.add("chat-open");
 
     // Chat nur neu laden wenn sich der Gesprächspartner ändert
-    if (frame.src === fullUrl) return;
+    // ABER: wenn iframe leer/fehlerhaft ist, trotzdem neu laden
+    const iframeLooksOk = frame.classList.contains("active") &&
+      frame.src === fullUrl &&
+      frame.contentDocument?.getElementById?.("messages");
+    if (iframeLooksOk) return;
 
     // Alten iframe zuerst leeren → gibt ihm Zeit sauber zu stoppen
     frame.classList.remove("active");
     frame.src = "about:blank";
 
-    requestAnimationFrame(() => {
+    // Kleines Delay damit "about:blank" vollständig angewendet wird
+    setTimeout(() => {
       frame.src = url;
       frame.classList.add("active");
-    });
+    }, 50);
   };
 
   window.closeChatPanel = function() {

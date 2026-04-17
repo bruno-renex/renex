@@ -1,7 +1,11 @@
 import { startGlobalControlPolling } from "./controlSocket.js";
 import { initServiceWorker, subscribeToPush, initInstallPrompt, isStandalone } from "./pushManager.js";
+import { checkAppVersion } from "./versionCheck.js";
 
 export function bootApp() {
+  // Version-Check zuerst (unabhängig von Login-Status) — erkennt veraltete PWA-Shells
+  checkAppVersion().catch(() => {});
+
   // nur wenn eingeloggt
   const me = localStorage.getItem("my_user");
   if (!me) return;
@@ -28,4 +32,14 @@ export function bootApp() {
   window.__controlPollerStarted = true;
 
   startGlobalControlPolling();
+
+  // Version-Check auch bei Tab-Wake-Up (PWA nach längerer Inaktivität)
+  if (!window.__versionVisibilityHandler) {
+    window.__versionVisibilityHandler = true;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        checkAppVersion().catch(() => {});
+      }
+    });
+  }
 }

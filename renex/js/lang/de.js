@@ -86,6 +86,11 @@ export default {
   cancelBtn:                  "Abbrechen",
   deleteAccountConfirmBtn:    "Account löschen",
 
+  // ── Footer ───────────────────────────────────────────
+  footerImprint:              "Impressum",
+  footerPrivacy:              "Datenschutz",
+  footerFeedback:             "Feedback",
+
   // ── inbox.js (dynamic strings) ───────────────────────
   cryptoInitFailed:       "Kryptografie konnte nicht initialisiert werden",
   noContacts:             "Noch keine Kontakte",
@@ -142,6 +147,10 @@ export default {
   onlyContactsWarning: "Nur eigene Kontakte können eingeladen werden",
   orSeparator:         "oder",
   guestInviteLinkBtn:  "🔗 Gast-Einladungslink erstellen",
+  createGroupFinish:   "Gruppe erstellen",
+  filterPlaceholder:   "Filtern…",
+  noContactsFound:     "Keine Treffer",
+  noContactsYet:       "Noch keine Kontakte",
 
   // ── Mitglieder ────────────────────────────────────────
   membersLabel:        (n) => `${n} Mitglieder`,
@@ -225,6 +234,29 @@ export default {
   joinErrorRetry:          "Bitte erneut versuchen.",
   networkErrorRetry:       "Netzwerkfehler. Bitte erneut versuchen.",
 
+  // ── Passkey-Verwaltung ────────────────────────────────
+  passkeysLabel:           "Passkeys",
+  passkeysTitle:           "Passkeys verwalten",
+  passkeyAdd:              "+ Passkey hinzufügen",
+  passkeyAdding:           "Passkey wird erstellt…",
+  passkeyAdded:            "Passkey hinzugefügt",
+  passkeyAddFailed:        "Passkey konnte nicht hinzugefügt werden",
+  passkeyDelete:           "Entfernen",
+  passkeyDeleteConfirm:    "Diesen Passkey wirklich entfernen?",
+  passkeyDeleteLast:       "Der letzte Passkey kann nicht entfernt werden",
+  passkeyDeleted:          "Passkey entfernt",
+  passkeyDeleteFailed:     "Passkey konnte nicht entfernt werden",
+  passkeyRename:           "Umbenennen",
+  passkeyRenamePlaceholder: "z.B. iPhone, MacBook…",
+  passkeyRenamed:          "Passkey umbenannt",
+  passkeyRenameFailed:     "Umbenennen fehlgeschlagen",
+  passkeyCreated:          "Erstellt",
+  passkeyLastUsed:         "Zuletzt benutzt",
+  passkeyNeverUsed:        "Nie benutzt",
+  passkeyUnnamed:          "Unbenannt",
+  passkeyLoadFailed:       "Passkeys konnten nicht geladen werden",
+  passkeyNamePrompt:       "Name für diesen Passkey (optional):",
+
   // ── Locale ───────────────────────────────────────────
   locale: "de-DE",
 
@@ -233,4 +265,9 @@ export default {
   pushBannerSubtitle:   "Verpasse keine Nachrichten",
   pushBannerActivating: "Wird aktiviert…",
   pushBannerBlocked:    "Benachrichtigungen blockiert",
+
+  // ── Version-Update-Banner ───────────────────────────
+  newVersionAvailable: "Neue Version verfügbar",
+  reloadNow:           "Jetzt aktualisieren",
+  dismissBtn:          "Schliessen",
 };

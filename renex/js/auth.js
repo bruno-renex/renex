@@ -115,6 +115,71 @@ await fetch(`${API}/auth/register/finish`, {
 }
 
 // ================================
+// ADD PASSKEY (für eingeloggte User)
+// ================================
+export async function addPasskey(handle, name) {
+  handle = handle.toLowerCase();
+
+  const startRes = await fetch(`${API}/auth/register/start`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ handle })
+  });
+
+  const startData = await startRes.json();
+  if (!startRes.ok || !startData.publicKey) {
+    throw new Error(startData.error || "Register start failed");
+  }
+
+  const publicKey = {
+    ...startData.publicKey,
+    challenge: base64urlToUint8Array(startData.publicKey.challenge),
+    user: {
+      ...startData.publicKey.user,
+      id: base64urlToUint8Array(startData.publicKey.user.id),
+    },
+    pubKeyCredParams: startData.publicKey.pubKeyCredParams,
+    authenticatorSelection: {
+      // KEIN authenticatorAttachment → erlaubt Platform, Cross-Device (QR), Security Keys
+      userVerification: "required",
+      residentKey: "preferred",
+    },
+    // excludeCredentials vom Backend konvertieren
+    excludeCredentials: (startData.publicKey.excludeCredentials || []).map(c => ({
+      ...c,
+      id: base64urlToUint8Array(c.id),
+    })),
+    timeout: 60000,
+    attestation: "none",
+  };
+
+  const credential = await navigator.credentials.create({ publicKey });
+
+  const finishRes = await fetch(`${API}/auth/register/finish`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      handle,
+      id: credential.id,
+      rawId: arrayBufferToBase64url(credential.rawId),
+      type: credential.type,
+      name: name || null,
+      response: {
+        attestationObject: arrayBufferToBase64url(credential.response.attestationObject),
+        clientDataJSON: arrayBufferToBase64url(credential.response.clientDataJSON)
+      }
+    })
+  });
+
+  if (!finishRes.ok) {
+    const err = await finishRes.json().catch(() => ({}));
+    throw new Error(err.error || "Register finish failed");
+  }
+}
+
+// ================================
 // LOGIN
 // ================================
 export async function loginWithPasskey(handle) {
@@ -172,6 +237,12 @@ try {
 
       // 🔑 aus REGISTER-Response
       pubKeyCredParams: regData.publicKey.pubKeyCredParams,
+
+      authenticatorSelection: {
+        authenticatorAttachment: "platform",
+        userVerification: "required",
+        residentKey: "required",
+      },
 
       timeout: regData.publicKey.timeout ?? 60000,
       attestation: regData.publicKey.attestation ?? "none",

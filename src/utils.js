@@ -12,7 +12,7 @@ export function corsHeaders(request) {
   if (origin?.startsWith("http://localhost:")) allowedOrigins.push(origin);
 
   const headers = {
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, PATCH, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Mime-Type, X-File-Name, X-File-Size, X-Attachment-Type, X-Convo-Id, X-Guest-Token",
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Max-Age": "0",   // kein Preflight-Cache → verhindert veraltete Browser-Caches

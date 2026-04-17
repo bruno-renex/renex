@@ -19,7 +19,16 @@ function getGuestTokenFromStorage() {
   } catch { return null; }
 }
 
+// Global backoff state: verhindert Request-Flood bei 429/Network-Error
+let _globalBackoffUntil = 0;
+
 export async function apiFetch(path, options = {}) {
+  // Global Backoff: wenn kürzlich 429/Network-Error → sofort rateLimited zurückgeben
+  const now = Date.now();
+  if (now < _globalBackoffUntil) {
+    return { rateLimited: true, error: "Backoff active", retryAfterMs: _globalBackoffUntil - now };
+  }
+
   const guestToken = getGuestTokenFromStorage();
   const method = (options.method || "GET").toUpperCase();
 
@@ -29,15 +38,23 @@ export async function apiFetch(path, options = {}) {
   // Preflight-Cache-Problemen in Safari/Chrome führen kann.
   const needsContentType = method !== "GET" && method !== "HEAD" && method !== "DELETE";
 
-  const res = await fetch("https://api.renex.id" + path, {
-    ...options,
-    credentials: "include",
-    headers: {
-      ...(needsContentType ? { "Content-Type": "application/json" } : {}),
-      ...(guestToken ? { "X-Guest-Token": guestToken } : {}),
-      ...(options.headers || {}),
-    }
-  });
+  let res;
+  try {
+    res = await fetch("https://api.renex.id" + path, {
+      ...options,
+      credentials: "include",
+      headers: {
+        ...(needsContentType ? { "Content-Type": "application/json" } : {}),
+        ...(guestToken ? { "X-Guest-Token": guestToken } : {}),
+        ...(options.headers || {}),
+      }
+    });
+  } catch (networkError) {
+    // Network Error / CORS-Block bei Preflight 429 → Global Backoff 10s
+    console.warn("⚠️ Network error (evtl. Rate-Limit):", path, networkError.message);
+    _globalBackoffUntil = Date.now() + 10_000;
+    return { rateLimited: true, error: "Network error", retryAfterMs: 10000 };
+  }
 
   if (res.status === 401) {
     // Gäste haben keine echte Session — kein Redirect, nur Error werfen
@@ -55,10 +72,13 @@ export async function apiFetch(path, options = {}) {
 
   if (res.status === 429) {
     const data = await res.json().catch(() => ({}));
+    // Global Backoff 10s — stoppt ALLE parallelen Requests
+    _globalBackoffUntil = Date.now() + (data.retryAfterMs || 10_000);
     return {
       rateLimited: true,
       status: data.status || null,
-      error: data.error || "Too many requests"
+      error: data.error || "Too many requests",
+      retryAfterMs: data.retryAfterMs || 10000
     };
   }
 

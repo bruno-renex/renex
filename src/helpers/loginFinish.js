@@ -1,5 +1,6 @@
 import { json, readJson, base64url, base64urlToString, base64urlToArrayBuffer, derToRawECDSA, corsHeaders } from '../utils.js';
 import { rateLimit, registerSessionToken } from '../auth.js';
+import { readCredentials } from './credentials.js';
 
 // ======================================================
 // AUTH / LOGIN / FINISH handler (extracted for line-count budget)
@@ -86,8 +87,14 @@ export async function handleLoginFinish(request, env) {
     return json(request, { error: "Challenge mismatch" }, 400);
   }
 
-  // Credential-ID MUSS passen
-  if (body.id !== challengeObj.credential_id) {
+  // Credential im Array finden (Multi-Passkey)
+  const credentials = await readCredentials(env, handle);
+  if (!credentials || credentials.length === 0) {
+    return json(request, { error: "Authentication failed" }, 401);
+  }
+
+  const matchedCred = credentials.find(c => c.credential_id === body.id);
+  if (!matchedCred) {
     await env.RENEX_KV.delete(`challenge:login:${handle}`);
     return json(request, { error: "Credential mismatch" }, 400);
   }
@@ -133,19 +140,15 @@ export async function handleLoginFinish(request, env) {
     (authData[35] << 8)  |
     authData[36];
 
-  // Stored Credential
-  const storedRaw = await env.RENEX_KV.get(`webauthn:${handle}`);
-  if (!storedRaw) return json(request, { error: "Authentication failed" }, 401);
-
-  const storedObj = JSON.parse(storedRaw);
-  const storedSignCount = Number(storedObj.signCount || 0);
+  // Per-Credential signCount prüfen (Replay-Schutz)
+  const storedSignCount = Number(matchedCred.signCount || 0);
 
   if (storedSignCount > 0 && newSignCount <= storedSignCount) {
     return json(request, { error: "Replay detected" }, 403);
   }
 
   // Kryptographische Signatur prüfen
-  const storedPublicKeyJwk = storedObj.publicKeyJwk;
+  const storedPublicKeyJwk = matchedCred.publicKeyJwk;
   if (!storedPublicKeyJwk) {
     return json(request, { error: "Passkey re-registration required" }, 403);
   }
@@ -226,10 +229,12 @@ export async function handleLoginFinish(request, env) {
   await env.RENEX_KV.delete(`challenge:login:${handle}`);
   await env.RENEX_KV.delete(failKey).catch(() => {});
 
-  // signCount persistieren
+  // signCount + last_used pro Credential persistieren
+  matchedCred.signCount = newSignCount;
+  matchedCred.last_used = Date.now();
   await env.RENEX_KV.put(
     `webauthn:${handle}`,
-    JSON.stringify({ ...storedObj, signCount: newSignCount, updated_at: Date.now() })
+    JSON.stringify({ credentials })
   );
 
   // Session

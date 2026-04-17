@@ -86,6 +86,11 @@ export default {
   cancelBtn:                  "Cancel",
   deleteAccountConfirmBtn:    "Delete account",
 
+  // ── Footer ───────────────────────────────────────────
+  footerImprint:              "Imprint",
+  footerPrivacy:              "Privacy Policy",
+  footerFeedback:             "Feedback",
+
   // ── inbox.js (dynamic strings) ───────────────────────
   cryptoInitFailed:       "Cryptography could not be initialized",
   noContacts:             "No contacts yet",
@@ -142,6 +147,10 @@ export default {
   onlyContactsWarning: "Only your own contacts can be invited",
   orSeparator:         "or",
   guestInviteLinkBtn:  "🔗 Create guest invite link",
+  createGroupFinish:   "Create group",
+  filterPlaceholder:   "Filter…",
+  noContactsFound:     "No matches",
+  noContactsYet:       "No contacts yet",
 
   // ── Members ────────────────────────────────────────
   membersLabel:        (n) => `${n} members`,
@@ -225,6 +234,29 @@ export default {
   joinErrorRetry:          "Please try again.",
   networkErrorRetry:       "Network error. Please try again.",
 
+  // ── Passkey Management ───────────────────────────────
+  passkeysLabel:           "Passkeys",
+  passkeysTitle:           "Manage Passkeys",
+  passkeyAdd:              "+ Add Passkey",
+  passkeyAdding:           "Creating Passkey…",
+  passkeyAdded:            "Passkey added",
+  passkeyAddFailed:        "Could not add Passkey",
+  passkeyDelete:           "Remove",
+  passkeyDeleteConfirm:    "Really remove this Passkey?",
+  passkeyDeleteLast:       "Cannot remove the last Passkey",
+  passkeyDeleted:          "Passkey removed",
+  passkeyDeleteFailed:     "Could not remove Passkey",
+  passkeyRename:           "Rename",
+  passkeyRenamePlaceholder: "e.g. iPhone, MacBook…",
+  passkeyRenamed:          "Passkey renamed",
+  passkeyRenameFailed:     "Rename failed",
+  passkeyCreated:          "Created",
+  passkeyLastUsed:         "Last used",
+  passkeyNeverUsed:        "Never used",
+  passkeyUnnamed:          "Unnamed",
+  passkeyLoadFailed:       "Could not load Passkeys",
+  passkeyNamePrompt:       "Name for this Passkey (optional):",
+
   // ── Locale ───────────────────────────────────────────
   locale: "en-GB",
 
@@ -233,4 +265,9 @@ export default {
   pushBannerSubtitle:   "Don't miss any messages",
   pushBannerActivating: "Activating…",
   pushBannerBlocked:    "Notifications blocked",
+
+  // ── Version Update Banner ───────────────────────────
+  newVersionAvailable: "New version available",
+  reloadNow:           "Reload now",
+  dismissBtn:          "Dismiss",
 };

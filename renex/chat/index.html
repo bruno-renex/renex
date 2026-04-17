@@ -38,32 +38,36 @@
       height: 100%;
       margin: 0;
       padding: 0;
+      overflow: hidden;
     }
 
     body {
       font-family: sans-serif;
-      display: flex;
-      flex-direction: column;
-      height: 100dvh;
-      overflow: hidden;
       background: var(--bg-body);
       color: var(--text-primary);
+      /* kein flex hier — Wrapper übernimmt das Layout */
     }
 
-    /* ── iOS-Fix: Header fixiert damit er beim Keyboard-Scroll nicht verschwindet ── */
+    /* ── Wrapper: am iframe-Viewport verankert, kann nicht wegscrollen ── */
+    #chat-wrapper {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header: nie wegscrollen ── */
     #chat-header {
-      position: fixed !important;
-      top: 0;
-      left: 0;
-      right: 0;
+      flex-shrink: 0;
+      position: relative;
       z-index: 20;
-      padding-top: calc(env(safe-area-inset-top, 0px) + 10px) !important;
+      padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
     }
 
-    /* Platzhalter damit Messages nicht unter dem Header anfangen */
+    /* Spacer nicht nötig */
     #chat-header-spacer {
-      flex-shrink: 0;
-      height: calc(env(safe-area-inset-top, 0px) + 54px);
+      display: none;
     }
 
 #chat-menu-btn:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
@@ -437,10 +441,10 @@
 }
 
 /* =========================
-   Input
+   Input (contenteditable div — kein iOS Undo/Redo-Toolbar)
    ========================= */
 
-textarea {
+#msg-input {
   width: 100%;
   background: var(--input-bg);
   color: var(--input-text);
@@ -448,15 +452,25 @@ textarea {
   caret-color: var(--input-caret);
   border-radius: 10px;
   padding: 10px 12px;
-  font-size: 16px; /* ≥16px verhindert iOS Auto-Zoom */
+  font-size: 16px;
   font-family: inherit;
-  resize: none;
   outline: none;
   display: block;
+  min-height: 42px;
+  max-height: 120px;
+  overflow-y: auto;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
-textarea::placeholder {
+/* Placeholder via CSS */
+#msg-input:empty::before {
+  content: attr(data-placeholder);
   color: var(--input-placeholder);
+  pointer-events: none;
 }
 
 /* ── Input-Footer (sticky am Bottom) ── */
@@ -526,7 +540,7 @@ textarea::placeholder {
   </style>
 </head>
 <body>
-
+<div id="chat-wrapper">
 <div id="chat-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border-panel);background:var(--bg-panel);gap:8px;">
   <button onclick="(window.parent !== window && typeof window.parent.closeChatPanel === 'function') ? window.parent.closeChatPanel() : window.location.href='/inbox/'" style="background:none;border:none;color:var(--accent);font-size:15px;cursor:pointer;padding:4px 8px;border-radius:6px;">←</button>
   <div style="position:relative;flex:1;display:flex;justify-content:center;">
@@ -633,7 +647,7 @@ textarea::placeholder {
   <div style="display:flex;align-items:center;gap:10px;min-width:0;">
     <span style="font-size:16px;flex-shrink:0;">👤</span>
     <div style="min-width:0;">
-      <div id="guest-name-display" data-i18n="guestLabel" style="font-weight:600;color:var(--text-primary);">Guest</div>
+      <div id="guest-name-display" style="font-weight:600;color:var(--text-primary);">Guest</div>
       <div style="color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
         <span id="guest-timer-display">--h --m</span> <span data-i18n="timeRemaining">remaining</span> &nbsp;·&nbsp; <span id="guest-msgs-display">20</span> <span data-i18n="msgsRemaining">messages left</span>
       </div>
@@ -653,13 +667,15 @@ textarea::placeholder {
   <input id="file-input" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.ics,.gif,.txt" style="display:none" />
 </div>
 
-<textarea
+<div
   id="msg-input"
-  placeholder="Nachricht…"
+  contenteditable="plaintext-only"
+  role="textbox"
+  aria-multiline="true"
+  data-placeholder="Nachricht…"
   data-i18n-placeholder="messagePlaceholder"
-  rows="2"
-  autofocus
-></textarea>
+  tabindex="0"
+></div>
 
 <!-- 👇 DAS HINZUFÜGEN -->
 <div id="length-warning"></div>
@@ -667,6 +683,7 @@ textarea::placeholder {
 <button id="send-btn" data-i18n="sendBtn">Senden</button>
 
 </div><!-- /#chat-input-footer -->
+</div><!-- /#chat-wrapper -->
 
 <!-- GIF-Suchmodal -->
 <div id="gif-modal" style="display:none;position:fixed;inset:0;z-index:800;background:rgba(0,0,0,0.6);">

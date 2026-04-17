@@ -2,10 +2,12 @@ import {
   initE2EKeys,
   uploadInboxKeyIfNeeded
 } from "./e2e.js";
+import { addPasskey } from "./auth.js";
 import lang, { getLang, setLang } from "./i18n.js";
 import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
 import { formatTime } from "./shared/timeFormat.js";
 import { initServiceWorker, subscribeToPush, getPushStatus, updateBadge } from "./pushManager.js";
+import { showPromptDialog } from "./shared/dialog.js";
 
 // ================================
 // CONFIG
@@ -547,6 +549,163 @@ if (btnConfirmDelete) {
   });
 }
 
+// ======================================================
+// 🔑 PASSKEY-VERWALTUNG
+// ======================================================
+const dropdownPasskeys = document.getElementById("dropdown-passkeys");
+const passkeysOverlay = document.getElementById("passkeys-overlay");
+const passkeysList = document.getElementById("passkeys-list");
+const btnAddPasskey = document.getElementById("btn-add-passkey");
+const btnClosePasskeys = document.getElementById("btn-close-passkeys");
+
+function formatDate(ts) {
+  if (!ts) return lang.passkeyNeverUsed;
+  const d = new Date(ts);
+  return d.toLocaleDateString(lang.locale, { day: "numeric", month: "short", year: "numeric" });
+}
+
+async function loadPasskeys() {
+  passkeysList.innerHTML = "";
+  try {
+    const res = await apiFetch("/auth/passkeys");
+    const { passkeys } = res;
+    if (!passkeys?.length) {
+      passkeysList.innerHTML = `<div class="passkeys-empty">${lang.passkeyLoadFailed}</div>`;
+      return;
+    }
+    passkeys.forEach((pk, _i) => {
+      const item = document.createElement("div");
+      item.className = "passkey-item";
+      item.innerHTML = `
+        <div class="passkey-icon">🔑</div>
+        <div class="passkey-info">
+          <span class="passkey-name" title="${lang.passkeyRename}">${pk.name || lang.passkeyUnnamed}</span>
+          <div class="passkey-meta">${lang.passkeyCreated}: ${formatDate(pk.created_at)}${pk.last_used ? ` · ${lang.passkeyLastUsed}: ${formatDate(pk.last_used)}` : ` · ${lang.passkeyNeverUsed}`}</div>
+        </div>
+        <div class="passkey-actions">
+          <button class="passkey-delete-btn" title="${lang.passkeyDelete}">${lang.passkeyDelete}</button>
+        </div>
+      `;
+
+      // Umbenennen (Inline-Edit)
+      const nameEl = item.querySelector(".passkey-name");
+      nameEl.addEventListener("click", () => {
+        const input = document.createElement("input");
+        input.className = "passkey-name-input";
+        input.value = pk.name || "";
+        input.placeholder = lang.passkeyRenamePlaceholder;
+        input.maxLength = 64;
+        nameEl.replaceWith(input);
+        input.focus();
+        input.select();
+
+        const save = async () => {
+          const newName = input.value.trim();
+          if (!newName || newName === (pk.name || "")) {
+            input.replaceWith(nameEl);
+            return;
+          }
+          try {
+            await apiFetch("/auth/passkeys", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ credential_id: pk.credential_id, name: newName })
+            });
+            pk.name = newName;
+            nameEl.textContent = newName;
+          } catch {
+            nameEl.textContent = pk.name || lang.passkeyUnnamed;
+          }
+          input.replaceWith(nameEl);
+        };
+
+        input.addEventListener("blur", save);
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+          if (e.key === "Escape") { input.value = pk.name || ""; input.blur(); }
+        });
+      });
+
+      // Löschen
+      const deleteBtn = item.querySelector(".passkey-delete-btn");
+      deleteBtn.addEventListener("click", async () => {
+        if (passkeys.length <= 1) {
+          alert(lang.passkeyDeleteLast);
+          return;
+        }
+        if (!confirm(lang.passkeyDeleteConfirm)) return;
+        try {
+          await apiFetch("/auth/passkeys", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ credential_id: pk.credential_id })
+          });
+          loadPasskeys(); // Liste neu laden
+        } catch {
+          alert(lang.passkeyDeleteFailed);
+        }
+      });
+
+      passkeysList.appendChild(item);
+    });
+  } catch {
+    passkeysList.innerHTML = `<div class="passkeys-empty">${lang.passkeyLoadFailed}</div>`;
+  }
+}
+
+// Dialog öffnen
+if (dropdownPasskeys && passkeysOverlay) {
+  dropdownPasskeys.addEventListener("click", (e) => {
+    e.stopPropagation();
+    profileDropdown.classList.remove("show");
+    passkeysOverlay.classList.add("show");
+    loadPasskeys();
+  });
+}
+
+// Dialog schliessen
+if (btnClosePasskeys) {
+  btnClosePasskeys.addEventListener("click", () => {
+    passkeysOverlay.classList.remove("show");
+  });
+}
+if (passkeysOverlay) {
+  passkeysOverlay.addEventListener("click", (e) => {
+    if (e.target === passkeysOverlay) passkeysOverlay.classList.remove("show");
+  });
+}
+
+// Passkey hinzufügen
+if (btnAddPasskey) {
+  btnAddPasskey.addEventListener("click", async () => {
+    const handle = localStorage.getItem("my_user");
+    if (!handle) return;
+
+    const name = await showPromptDialog({
+      title: lang.passkeyNamePrompt,
+      placeholder: "",
+      defaultValue: "",
+      confirmLabel: "OK",
+      cancelLabel: lang.cancelBtn || "Abbrechen",
+    });
+    if (name === null) return; // User hat abgebrochen
+
+    btnAddPasskey.disabled = true;
+    btnAddPasskey.textContent = lang.passkeyAdding;
+    try {
+      await addPasskey(handle, name || null);
+      loadPasskeys(); // Liste aktualisieren
+    } catch (err) {
+      if (err.name !== "NotAllowedError") {
+        alert(lang.passkeyAddFailed + (err.message ? "\n" + err.message : ""));
+      }
+    } finally {
+      btnAddPasskey.disabled = false;
+      btnAddPasskey.textContent = lang.passkeyAdd;
+    }
+  });
+}
+
 // ❌ Alle Dropdowns schließen bei Klick außerhalb
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".profile-wrapper")) {
@@ -728,12 +887,21 @@ if (langBtn && langSubmenu) {
     if (!addContactPopup) return;
     const isOpen = addContactPopup.style.display === "block";
     addContactPopup.style.display = isOpen ? "none" : "block";
-    if (!isOpen) setTimeout(() => addInput?.focus(), 50);
+    if (!isOpen && !navigator.maxTouchPoints) setTimeout(() => addInput?.focus(), 50);
   });
 
-  // Done-Button schliesst das Popup
-  document.getElementById("add-contact-done")?.addEventListener("click", () => {
+  // ✕-Button schliesst das Popup
+  document.getElementById("add-contact-close")?.addEventListener("click", () => {
     if (addContactPopup) addContactPopup.style.display = "none";
+  });
+
+  // Klick ausserhalb schliesst das Popup
+  document.addEventListener("click", (e) => {
+    if (addContactPopup?.style.display === "block"
+        && !addContactPopup.contains(e.target)
+        && e.target !== addContactBtn) {
+      addContactPopup.style.display = "none";
+    }
   });
 
   tabBtns.forEach(btn => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
@@ -788,7 +956,7 @@ async function loadContacts() {
   try {
     // 🔔 unread counts laden
     const unreadData = await apiFetch("/chat/unread");
-    unreadMap = unreadData.unread || {};
+    if (!unreadData.rateLimited) unreadMap = unreadData.unread || {};
   } catch (e) {
     console.warn("Unread fetch failed", e);
     unreadMap = {};
@@ -797,14 +965,21 @@ async function loadContacts() {
   try {
     // ETag: 304 → kein Re-Render nötig
     const API = window._API || "https://api.renex.id";
-    const contactsRes = await fetch(API + "/contacts/list", {
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(_contactsEtag ? { "If-None-Match": _contactsEtag } : {})
-      }
-    });
+    let contactsRes;
+    try {
+      contactsRes = await fetch(API + "/contacts/list", {
+        credentials: "include",
+        headers: {
+          ...(_contactsEtag ? { "If-None-Match": _contactsEtag } : {})
+        }
+      });
+    } catch (networkErr) {
+      // Network Error / CORS-Block bei Preflight 429 → still skippen
+      console.warn("Contacts fetch failed (network):", networkErr.message);
+      return;
+    }
     if (contactsRes.status === 304) return; // nichts geändert
+    if (contactsRes.status === 429) return; // Rate limited → still skippen
     if (!contactsRes.ok) throw new Error(contactsRes.statusText);
     _contactsEtag = contactsRes.headers.get("ETag") || _contactsEtag;
     const data = await contactsRes.json();
@@ -941,8 +1116,7 @@ async function loadContacts() {
 
   } catch (err) {
     if (!localStorage.getItem("my_user")) return;
-    console.error("Load contacts failed:", err);
-    alert(lang.loadContactsFailed);
+    console.warn("Load contacts failed:", err);
   }
 }
 
@@ -1246,6 +1420,7 @@ async function loadGroups() {
   if (!groupsEl) return;
   try {
     const data = await apiFetch("/groups/list");
+    if (data.rateLimited) return; // Rate limited → bestehende UI behalten
     const groups = Array.isArray(data.groups) ? data.groups : [];
     // Preview- UND Lesestatus-State einbeziehen → Re-Render bei jeder Änderung
     const previewState = groups.map(g =>
@@ -1447,9 +1622,9 @@ const createGroupPopup   = document.getElementById("create-group-popup");
 const groupStep1         = document.getElementById("group-step-1");
 const groupStep2         = document.getElementById("group-step-2");
 const groupCreateConfirm = document.getElementById("group-create-confirm-btn");
-const groupInviteSearch  = document.getElementById("group-invite-search");
-const groupInviteAddBtn  = document.getElementById("group-invite-add-btn");
-const groupInvitedChips  = document.getElementById("group-invited-chips");
+const groupInviteFilter  = document.getElementById("group-invite-filter");
+const groupContactChips  = document.getElementById("group-contact-chips");
+const groupNoContacts    = document.getElementById("group-no-contacts");
 const groupInviteDoneBtn = document.getElementById("group-invite-done-btn");
 const groupGuestLinkBtn  = document.getElementById("group-guest-link-btn");
 
@@ -1461,11 +1636,82 @@ function closeGroupPopup() {
   groupStep1.style.display = "block";
   groupStep2.style.display = "none";
   groupNameInput.value = "";
-  if (groupInviteSearch) groupInviteSearch.value = "";
-  if (groupInvitedChips) groupInvitedChips.innerHTML = "";
+  if (groupInviteFilter) groupInviteFilter.value = "";
+  if (groupContactChips) groupContactChips.innerHTML = "";
+  if (groupNoContacts)   groupNoContacts.style.display = "none";
   _pendingGroupId = null;
   _invitedHandles = new Set();
-  if (_inviteAcDrop) _inviteAcDrop.style.display = "none";
+  updateInviteDoneBtn();
+}
+
+function updateInviteDoneBtn() {
+  if (!groupInviteDoneBtn) return;
+  const n = _invitedHandles.size;
+  const base = lang.createGroupFinish || "Gruppe erstellen";
+  groupInviteDoneBtn.textContent = n > 0 ? `${base} (${n} ✓)` : base;
+}
+
+async function renderContactChips(filter) {
+  if (!groupContactChips) return;
+  const contacts = await fetchAcceptedContacts();
+  const q = (filter || "").trim().toLowerCase();
+  const filtered = q ? contacts.filter(h => h.includes(q)) : contacts;
+
+  groupContactChips.innerHTML = "";
+
+  if (filtered.length === 0) {
+    if (groupNoContacts) {
+      groupNoContacts.style.display = "block";
+      groupNoContacts.textContent = q
+        ? (lang.noContactsFound || "Keine Treffer")
+        : (lang.noContactsYet  || "Noch keine Kontakte");
+    }
+    return;
+  }
+  if (groupNoContacts) groupNoContacts.style.display = "none";
+
+  filtered.forEach(handle => {
+    const selected = _invitedHandles.has(handle);
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.style.cssText = [
+      "display:inline-flex;align-items:center;gap:6px;",
+      "padding:7px 12px;border-radius:20px;font-size:13px;",
+      "font-family:inherit;cursor:pointer;transition:all 0.15s;",
+      "min-height:36px;",
+      selected
+        ? "border:1.5px solid var(--accent-voice);background:rgba(56,189,248,0.15);color:var(--accent-voice);font-weight:600;"
+        : "border:1.5px solid var(--border-subtle);background:var(--bg-panel-alt);color:var(--text-primary);font-weight:400;"
+    ].join("");
+
+    const avatar = document.createElement("span");
+    avatar.style.cssText = [
+      "width:18px;height:18px;border-radius:50%;font-size:10px;font-weight:700;",
+      "display:flex;align-items:center;justify-content:center;flex-shrink:0;",
+      selected
+        ? "background:var(--accent-voice);color:#07070A;"
+        : "background:var(--bg-panel);color:var(--text-secondary);"
+    ].join("");
+    avatar.textContent = selected ? "✓" : handle.charAt(0).toUpperCase();
+
+    const label = document.createElement("span");
+    label.textContent = handle;
+
+    chip.append(avatar, label);
+
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (_invitedHandles.has(handle)) {
+        _invitedHandles.delete(handle);
+      } else {
+        _invitedHandles.add(handle);
+      }
+      updateInviteDoneBtn();
+      renderContactChips(groupInviteFilter?.value || "");
+    });
+
+    groupContactChips.appendChild(chip);
+  });
 }
 
 async function doCreateGroup() {
@@ -1491,48 +1737,11 @@ async function doCreateGroup() {
 function showInviteStep() {
   groupStep1.style.display = "none";
   groupStep2.style.display = "block";
-  // Kontaktliste frisch laden damit Validierung zuverlässig funktioniert
   _cachedAcceptedContacts = null;
   fetchAcceptedContacts().then(() => {
-    setTimeout(() => groupInviteSearch?.focus(), 50);
+    renderContactChips("");
   });
-}
-
-function doInviteOne() {
-  const handle = groupInviteSearch?.value.trim().toLowerCase();
-  if (!handle || _invitedHandles.has(handle)) {
-    if (groupInviteSearch) groupInviteSearch.value = "";
-    return;
-  }
-  // Sicherheitsprüfung: nur akzeptierte Kontakte dürfen eingeladen werden
-  if (!_acceptedContactHandles.includes(handle)) {
-    const errEl = document.getElementById("group-invite-error");
-    if (errEl) { errEl.style.display = "block"; setTimeout(() => errEl.style.display = "none", 2500); }
-    groupInviteSearch.style.outline = "2px solid var(--status-error)";
-    setTimeout(() => { if (groupInviteSearch) groupInviteSearch.style.outline = ""; }, 1500);
-    groupInviteSearch.value = "";
-    return;
-  }
-  // Nur Chip hinzufügen — kein API-Call yet
-  _invitedHandles.add(handle);
-  const chip = document.createElement("span");
-  chip.style.cssText = "display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:20px;background:var(--bg-panel-alt);border:1px solid var(--border-subtle);font-size:12px;color:var(--text-primary);";
-  const label = document.createElement("span");
-  label.textContent = handle;
-  const removeBtn = document.createElement("button");
-  removeBtn.textContent = "×";
-  removeBtn.style.cssText = "background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:14px;line-height:1;padding:0;margin:0;opacity:0.6;";
-  removeBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    _invitedHandles.delete(handle);
-    chip.remove();
-  });
-  chip.appendChild(label);
-  chip.appendChild(removeBtn);
-  groupInvitedChips.appendChild(chip);
-  if (groupInviteSearch) groupInviteSearch.value = "";
-  if (_inviteAcDrop) _inviteAcDrop.style.display = "none";
-  groupInviteSearch?.focus();
+  updateInviteDoneBtn();
 }
 
 async function doInviteAll() {
@@ -1551,82 +1760,12 @@ async function doInviteAll() {
     }));
   } finally {
     groupInviteDoneBtn.disabled = false;
-    groupInviteDoneBtn.textContent = lang.doneBtn;
+    updateInviteDoneBtn();
     if (errors.length) {
       alert(lang.someInvitesFailed + "\n" + errors.join("\n"));
     }
     closeGroupPopup();
   }
-}
-
-// Autocomplete-Dropdown für Invite-Search (gleiche Logik wie chat.js)
-let _inviteAcDrop = null;
-if (groupInviteSearch && groupInviteAddBtn) {
-  _inviteAcDrop = document.createElement("div");
-  _inviteAcDrop.style.cssText = "display:none;position:fixed;min-width:170px;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);z-index:9999;max-height:200px;overflow-y:auto;";
-  // Alle clicks im Dropdown stoppen — verhindert dass der document-click-Handler das Popup schliesst
-  _inviteAcDrop.addEventListener("mousedown", (e) => e.stopPropagation());
-  _inviteAcDrop.addEventListener("click",     (e) => e.stopPropagation());
-  document.body.appendChild(_inviteAcDrop);
-
-  function positionInviteAcDrop() {
-    const r = groupInviteSearch.getBoundingClientRect();
-    _inviteAcDrop.style.left  = r.left + "px";
-    _inviteAcDrop.style.top   = (r.bottom + 4) + "px";
-    _inviteAcDrop.style.width = Math.max(r.width, 170) + "px";
-  }
-
-  async function renderInviteAcDropdown(query) {
-    const contacts = await fetchAcceptedContacts();
-    const q = query.trim().toLowerCase();
-    const matches = contacts.filter(h => !q || h.includes(q));
-    if (!matches.length) { _inviteAcDrop.style.display = "none"; return; }
-
-    _inviteAcDrop.innerHTML = "";
-    matches.forEach(handle => {
-      const alreadyInvited = _invitedHandles.has(handle);
-      const item = document.createElement("div");
-      item.style.cssText = `padding:8px 12px;font-size:13px;cursor:${alreadyInvited ? "default" : "pointer"};` +
-        `color:${alreadyInvited ? "var(--text-secondary)" : "var(--text-primary)"};` +
-        `opacity:${alreadyInvited ? ".5" : "1"};display:flex;align-items:center;gap:8px;`;
-      // XSS-safe: textContent statt innerHTML
-      const iconSpanInv = document.createElement("span");
-      iconSpanInv.textContent = "👤";
-      const nameSpanInv = document.createElement("span");
-      nameSpanInv.textContent = handle;
-      item.append(iconSpanInv, nameSpanInv);
-      if (alreadyInvited) {
-        const invitedSpan = document.createElement("span");
-        invitedSpan.style.cssText = "font-size:11px;margin-left:auto";
-        invitedSpan.textContent = "✓ eingeladen";
-        item.appendChild(invitedSpan);
-      }
-      if (!alreadyInvited) {
-        item.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          groupInviteSearch.value = handle;
-          _inviteAcDrop.style.display = "none";
-          doInviteOne();
-        });
-        item.addEventListener("mouseover", () => item.style.background = "var(--bg-panel-alt)");
-        item.addEventListener("mouseout",  () => item.style.background = "");
-      }
-      _inviteAcDrop.appendChild(item);
-    });
-    positionInviteAcDrop();
-    _inviteAcDrop.style.display = "block";
-  }
-
-  groupInviteSearch.addEventListener("focus", () => renderInviteAcDropdown(groupInviteSearch.value));
-  groupInviteSearch.addEventListener("input", () => renderInviteAcDropdown(groupInviteSearch.value));
-  groupInviteSearch.addEventListener("blur",  () => setTimeout(() => { _inviteAcDrop.style.display = "none"; }, 150));
-  groupInviteSearch.addEventListener("keydown", (e) => {
-    if (e.key === "Enter")  { e.preventDefault(); doInviteOne(); }
-    if (e.key === "Escape") { closeGroupPopup(); }
-  });
-  window.addEventListener("scroll", positionInviteAcDrop, { passive: true });
-  window.addEventListener("resize", () => { if (_inviteAcDrop) _inviteAcDrop.style.display = "none"; }, { passive: true });
 }
 
 groupNameInput?.addEventListener("keydown", (e) => {
@@ -1635,13 +1774,18 @@ groupNameInput?.addEventListener("keydown", (e) => {
 });
 
 groupCreateConfirm?.addEventListener("click", (e) => { e.stopPropagation(); doCreateGroup(); });
-groupInviteAddBtn?.addEventListener("click",  (e) => { e.stopPropagation(); doInviteOne(); });
 groupInviteDoneBtn?.addEventListener("click", (e) => { e.stopPropagation(); doInviteAll(); });
 groupGuestLinkBtn?.addEventListener("click",  (e) => {
   e.stopPropagation();
   if (!_pendingGroupId) return;
   const groupName = groupNameInput?.value.trim() || "";
   createGroupInviteLink(_pendingGroupId, groupName, groupGuestLinkBtn);
+});
+
+// Filter-Input für Kontakt-Chips
+groupInviteFilter?.addEventListener("input", () => renderContactChips(groupInviteFilter.value));
+groupInviteFilter?.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeGroupPopup();
 });
 
 createGroupBtn?.addEventListener("click", (e) => {
@@ -1655,7 +1799,24 @@ createGroupBtn?.addEventListener("click", (e) => {
   }
 });
 
-// Popup schliesst nur über Fertig-Button, Escape oder erneuten FAB-Klick
+// ✕ buttons for both steps
+document.getElementById("create-group-close")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  closeGroupPopup();
+});
+document.getElementById("group-invite-close")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  closeGroupPopup();
+});
+
+// Outside click closes group popup
+document.addEventListener("click", (e) => {
+  if (createGroupPopup?.style.display === "block"
+      && !createGroupPopup.contains(e.target)
+      && e.target !== createGroupBtn) {
+    closeGroupPopup();
+  }
+});
 
 // ================================
 // ADD CONTACT

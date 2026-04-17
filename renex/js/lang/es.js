@@ -86,6 +86,11 @@ export default {
   cancelBtn:                  "Cancelar",
   deleteAccountConfirmBtn:    "Eliminar cuenta",
 
+  // ── Footer ───────────────────────────────────────────
+  footerImprint:              "Aviso legal",
+  footerPrivacy:              "Privacidad",
+  footerFeedback:             "Comentarios",
+
   // ── inbox.js (dynamic strings) ───────────────────────
   cryptoInitFailed:       "No se pudo inicializar la criptografía",
   noContacts:             "Aún no hay contactos",
@@ -142,6 +147,10 @@ export default {
   onlyContactsWarning: "Solo tus propios contactos pueden ser invitados",
   orSeparator:         "o",
   guestInviteLinkBtn:  "🔗 Crear link de invitación para invitados",
+  createGroupFinish:   "Crear grupo",
+  filterPlaceholder:   "Filtrar…",
+  noContactsFound:     "Sin resultados",
+  noContactsYet:       "Sin contactos aún",
 
   // ── Miembros ─────────────────────────────────────────
   membersLabel:        (n) => `${n} miembros`,
@@ -225,6 +234,29 @@ export default {
   joinErrorRetry:          "Por favor, inténtalo de nuevo.",
   networkErrorRetry:       "Error de red. Por favor, inténtalo de nuevo.",
 
+  // ── Gestión de Passkeys ──────────────────────────────
+  passkeysLabel:           "Passkeys",
+  passkeysTitle:           "Gestionar Passkeys",
+  passkeyAdd:              "+ Añadir Passkey",
+  passkeyAdding:           "Creando Passkey…",
+  passkeyAdded:            "Passkey añadido",
+  passkeyAddFailed:        "No se pudo añadir el Passkey",
+  passkeyDelete:           "Eliminar",
+  passkeyDeleteConfirm:    "¿Eliminar este Passkey?",
+  passkeyDeleteLast:       "No se puede eliminar el último Passkey",
+  passkeyDeleted:          "Passkey eliminado",
+  passkeyDeleteFailed:     "No se pudo eliminar el Passkey",
+  passkeyRename:           "Renombrar",
+  passkeyRenamePlaceholder: "ej. iPhone, MacBook…",
+  passkeyRenamed:          "Passkey renombrado",
+  passkeyRenameFailed:     "Error al renombrar",
+  passkeyCreated:          "Creado",
+  passkeyLastUsed:         "Último uso",
+  passkeyNeverUsed:        "Nunca usado",
+  passkeyUnnamed:          "Sin nombre",
+  passkeyLoadFailed:       "No se pudieron cargar los Passkeys",
+  passkeyNamePrompt:       "Nombre para este Passkey (opcional):",
+
   // ── Locale ───────────────────────────────────────────
   locale: "es-ES",
 
@@ -233,4 +265,9 @@ export default {
   pushBannerSubtitle:   "No te pierdas ningún mensaje",
   pushBannerActivating: "Activando…",
   pushBannerBlocked:    "Notificaciones bloqueadas",
+
+  // ── Banner de actualización de versión ──────────────
+  newVersionAvailable: "Nueva versión disponible",
+  reloadNow:           "Actualizar ahora",
+  dismissBtn:          "Cerrar",
 };

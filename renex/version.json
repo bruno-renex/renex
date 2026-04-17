@@ -1,0 +1,4 @@
+{
+  "version": "2026-04-16-2",
+  "notes": "Bei jedem Deploy hochzählen. Format: YYYY-MM-DD-N. Frontend vergleicht mit localStorage und triggert Force-Reload bei Mismatch."
+}

@@ -164,7 +164,7 @@ function updateGuestBannerCount() {
     }
     showSystemToast(lang.guestLimitReached, 10000);
     // Eingabe sperren
-    if (inputEl) inputEl.disabled = true;
+    if (inputEl) inputEl.contentEditable = "false";
     updateSendButton();
   }
 }
@@ -194,7 +194,7 @@ function _startGuestCountdown() {
       _guestCountdownTimer = null;
       showSystemToast(lang.guestExpired, 10000);
       // Eingabe sperren
-      if (inputEl) inputEl.disabled = true;
+      if (inputEl) inputEl.contentEditable = "false";
       updateSendButton();
     }
   };
@@ -213,7 +213,7 @@ async function guestSendMessage(text) {
   const tempId     = `tmp-${now}-${Math.random().toString(16).slice(2)}`;
   const pendingDiv = renderMessage({ from: getMyUser(), message: text, ts: now, tempId, status: "pending" });
   if (pendingDiv) pendingByTempId.set(tempId, pendingDiv);
-  inputEl.value = "";
+  inputEl.textContent = "";
   scrollToBottom();
   updateSendButton();
 
@@ -519,8 +519,8 @@ if (!inputEl || !sendBtn) {
   return;
 }
 
-inputEl.value = text;
-sendBtn.click();  
+inputEl.textContent = text;
+sendBtn.click();
 }
 
 // Guest session → chatState.js (_guestData, _isGuestMode)
@@ -1744,7 +1744,7 @@ if (firstLoad) {
   // SEND BUTTON
   // =========================
   sendBtn.addEventListener("click", async () => {
-    const text = inputEl.value.trim();
+    const text = inputEl.textContent.trim();
 
     if (!text) return;
 
@@ -1771,7 +1771,7 @@ if (!e2eReady) {
 
   deferredQueue.push({ text, tempId });
 
-  inputEl.value = "";
+  inputEl.textContent = "";
   scrollToBottom();
   updateSendButton();
 
@@ -1819,7 +1819,7 @@ if (now - lastSendTime < SEND_COOLDOWN_MS) {
     // _replyState sichern VOR clearReplyBar (sonst ist es null beim Encrypt)
     const _savedReplyState = getReplyState() ? { ...getReplyState() } : null;
 
-    inputEl.value = "";
+    inputEl.textContent = "";
     clearReplyBar();
     scrollToBottom();
 
@@ -2036,7 +2036,7 @@ inputEl.addEventListener("keydown", (e) => {
 // MESSAGE LENGTH CHECK
 // =========================
 inputEl.addEventListener("input", () => {
-  const len = inputEl.value.length;
+  const len = inputEl.textContent.length;
 
   // ❌ Zu lang → immer blockieren
   if (len >= MAX_MESSAGE_LENGTH) {

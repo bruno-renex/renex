@@ -4,6 +4,7 @@
 import { apiFetch } from "./api.js";
 import lang from "./i18n.js";
 import { _isGuestMode } from "./chatState.js";
+import { showPromptDialog } from "./shared/dialog.js";
 
 // Module-private state
 let _autoDeleteDays = null;
@@ -207,7 +208,12 @@ export async function initAutoDeleteUI() {
       if (menuDropdown) menuDropdown.style.display = "none";
       const titleEl = document.getElementById("chat-with");
       const currentName = titleEl?.textContent.trim() || "";
-      const newName = prompt(lang.groupNameLabel + ":", currentName);
+      const newName = await showPromptDialog({
+        title: lang.groupNameLabel,
+        defaultValue: currentName,
+        confirmLabel: "OK",
+        cancelLabel: lang.cancelBtn || "Abbrechen",
+      });
       if (!newName || newName.trim() === currentName) return;
       try {
         await apiFetch("/groups/rename", { method: "POST", body: JSON.stringify({ groupId: withUser, name: newName.trim() }) });

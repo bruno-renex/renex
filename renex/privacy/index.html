@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#38bdf8" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>RENEX – Privacy Policy</title>
+  <link rel="stylesheet" href="/colors.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-body, #07070A);
+      color: var(--text-primary, #E6E6EB);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: var(--bg-panel, #0D0D11);
+      border: 1px solid var(--border-panel, rgba(255,255,255,0.06));
+      border-radius: 20px;
+      padding: 36px 32px;
+      max-width: 600px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      margin: auto;
+    }
+
+    .logo {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--text-primary, #E6E6EB);
+      text-align: center;
+    }
+    .logo .x { color: var(--accent-voice, #38BDF8); }
+
+    .page-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .page-icon svg {
+      width: 44px;
+      height: 44px;
+      color: var(--accent-voice, #38BDF8);
+      filter: drop-shadow(0 0 10px var(--accent-voice-glow, rgba(56,189,248,0.35)));
+    }
+
+    .title {
+      font-size: 20px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    .lang-switch {
+      text-align: center;
+      font-size: 13px;
+    }
+    .lang-switch a {
+      color: var(--text-secondary, #9A9AA3);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .lang-switch a:hover { color: var(--accent-voice, #38BDF8); }
+
+    .section-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent-voice, #38BDF8);
+      margin-top: 8px;
+    }
+
+    .text {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      line-height: 1.7;
+    }
+
+    .text a {
+      color: var(--accent-voice, #38BDF8);
+      text-decoration: none;
+    }
+    .text a:hover { text-decoration: underline; }
+
+    .text ul {
+      margin: 8px 0;
+      padding-left: 20px;
+    }
+    .text ul li {
+      margin-bottom: 6px;
+    }
+
+    .back-link {
+      text-align: center;
+      margin-top: 8px;
+    }
+    .back-link a {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .back-link a:hover { color: var(--accent-voice, #38BDF8); }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">RENE<span class="x">X</span></div>
+
+  <div class="page-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+      <path d="M7 11V7a5 5 0 0110 0v4"/>
+    </svg>
+  </div>
+
+  <div class="title">Privacy Policy</div>
+  <div class="subtitle">Effective from April 15, 2026</div>
+  <div class="lang-switch"><a href="/datenschutz/">Deutsch</a></div>
+
+  <div class="section-title">1. Data Controller</div>
+  <div class="text" id="ci-responsible"></div>
+
+  <div class="section-title">2. General</div>
+  <div class="text">
+    Based on Article 13 of the Swiss Federal Constitution and the data protection provisions
+    of the Swiss Confederation (Data Protection Act, DSG), every person is entitled to the protection
+    of their privacy and to protection against misuse of their personal data. We comply with these
+    provisions. Personal data is treated in strict confidence and is neither sold nor shared with
+    third parties.
+  </div>
+
+  <div class="section-title">3. Legal Basis</div>
+  <div class="text">
+    Data processing is based on the following legal grounds:
+    <ul>
+      <li><strong>Swiss DSG:</strong> Processing for contract performance and based on legitimate interests.</li>
+      <li><strong>EU GDPR (for users in the EEA):</strong> Art. 6(1)(b) (contract performance), Art. 6(1)(f) (legitimate interest in operating and securing the service).</li>
+    </ul>
+  </div>
+
+  <div class="section-title">4. Data Collected</div>
+  <div class="text">
+    RENEX collects as little personal data as possible. Specifically:
+    <ul>
+      <li><strong>Handle (username):</strong> Freely chosen, used for identification within the app.</li>
+      <li><strong>Passkey data:</strong> WebAuthn credentials are stored locally on your device. We only store the public key and a credential ID for authentication.</li>
+      <li><strong>Messages:</strong> All messages are end-to-end encrypted (AES-256-GCM + X25519 ECDH). The server stores only encrypted data that cannot be read without the participants' private keys.</li>
+      <li><strong>Metadata:</strong> To deliver messages, communication relationships (who communicates with whom) and timestamps are stored. This metadata is technically necessary for the operation of the service.</li>
+      <li><strong>Technical data:</strong> IP address and user agent are temporarily processed in session data for the operation and security of the service. RENEX only logs technical metadata for stability and security, never message content or keys.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">5. Purpose of Data Processing</div>
+  <div class="text">
+    The collected data is used exclusively for the following purposes:
+    <ul>
+      <li>Providing and operating the messaging service</li>
+      <li>Authentication via WebAuthn/Passkeys</li>
+      <li>Delivering encrypted messages</li>
+      <li>Ensuring technical functionality and security</li>
+    </ul>
+  </div>
+
+  <div class="section-title">6. Encryption</div>
+  <div class="text">
+    RENEX uses end-to-end encryption for all messages. Encryption keys are generated and stored
+    exclusively on users' devices. The operator has no access to the plaintext of messages at any
+    time. Users are responsible for creating backups of their private keys or messages.
+  </div>
+
+  <div class="section-title">7. Data Retention and Deletion</div>
+  <div class="text">
+    <ul>
+      <li><strong>Messages:</strong> Messages with auto-delete enabled are deleted client-side after the chosen period expires. Messages without auto-delete remain stored until the user deletes them or removes their account.</li>
+      <li><strong>Account deletion:</strong> You can delete your account at any time within the app. All messages and contact data are removed. Your handle is reserved for 300 days to prevent identity abuse, then released.</li>
+      <li><strong>Metadata:</strong> Communication relationships are cleaned up upon account deletion.</li>
+      <li><strong>Technical data:</strong> IP addresses and user agent data in sessions are not stored permanently and expire with the session.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">8. Cookies and Local Storage</div>
+  <div class="text">
+    RENEX does not use tracking cookies. Only technically necessary data is stored in the
+    browser's local storage (localStorage/sessionStorage), such as session data and encryption keys.
+  </div>
+
+  <div class="section-title">9. Third-Party Services</div>
+  <div class="text">
+    <ul>
+      <li><strong>Cloudflare:</strong> RENEX is hosted via Cloudflare (CDN, Workers, D1, R2). Cloudflare may process technical data such as IP addresses according to their own privacy policy. Data may be processed on servers in the USA. Transfer is based on the EU Standard Contractual Clauses (SCCs) and the EU-US Data Privacy Framework.</li>
+      <li><strong>Cloudflare Turnstile:</strong> Used for bot detection on certain pages (e.g., feedback, invitations). No personal data is shared with third parties.</li>
+      <li><strong>GIF Search (Tenor / Google):</strong> We use the Tenor API (Google LLC, USA) for the GIF search feature. Search queries are anonymized through our servers — Tenor does not see your IP address or handle. Google processes search queries according to their privacy policy. Legal basis: Art. 6(1)(f) GDPR (legitimate interest). Third-country transfer is based on the EU-US Data Privacy Framework.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">10. Data Security</div>
+  <div class="text">
+    RENEX implements the following technical and organizational measures to protect your data:
+    <ul>
+      <li>All connections are exclusively encrypted via TLS 1.3 / HTTPS.</li>
+      <li>Message content is end-to-end encrypted (AES-256-GCM + X25519 ECDH) — the server cannot decrypt it.</li>
+      <li>Private keys never leave the user's device.</li>
+      <li>Authentication is exclusively via WebAuthn/Passkeys — no passwords are stored.</li>
+      <li>Infrastructure is operated through Cloudflare, with DDoS protection and Web Application Firewall.</li>
+    </ul>
+    RENEX does not store connection logs. Neither IP addresses nor access logs are permanently
+    recorded. Technical data in sessions expires automatically with the session.
+  </div>
+
+  <div class="section-title">11. Data Sharing</div>
+  <div class="text">
+    Personal data is not sold, traded, or otherwise transferred to third parties,
+    unless there is a legal obligation to do so.
+  </div>
+
+  <div class="section-title">12. International Data Transfer</div>
+  <div class="text">
+    Data may be transferred to the USA in connection with the third-party services mentioned
+    in section 9. This transfer is secured by the EU Standard Contractual Clauses (SCCs) and/or
+    the EU-US Data Privacy Framework.
+  </div>
+
+  <div class="section-title">13. Your Rights</div>
+  <div class="text">
+    Under the Swiss Data Protection Act (DSG) and the EU GDPR, you have the following rights:
+    <ul>
+      <li><strong>Right of access:</strong> You can request information about your stored data at any time.</li>
+      <li><strong>Right to rectification:</strong> You can request the correction of inaccurate data.</li>
+      <li><strong>Right to deletion:</strong> You can request the deletion of your data. You can delete your account at any time within the app.</li>
+      <li><strong>Data portability:</strong> You have the right to receive your data in a common format.</li>
+      <li><strong>Right to object:</strong> You can object to the processing of your data at any time.</li>
+    </ul>
+    Requests should be directed to: <span id="ci-email-rights"></span>
+  </div>
+
+  <div class="section-title">14. Privacy Contact</div>
+  <div class="text">
+    For questions about data protection, access requests, or complaints, please contact:<br>
+    <span id="ci-privacy-contact"></span>
+  </div>
+
+  <div class="section-title">15. Report Abuse</div>
+  <div class="text">
+    If you would like to report abuse, illegal content, or security-related issues
+    in connection with RENEX, please contact us at: <span id="ci-email-abuse"></span>
+  </div>
+
+  <div class="section-title">16. Minimum Age</div>
+  <div class="text">
+    Use of RENEX requires a minimum age of 16 years. Persons under 16 may only use
+    the service with the consent of a legal guardian.
+  </div>
+
+  <div class="section-title">17. Changes</div>
+  <div class="text">
+    We reserve the right to amend this privacy policy at any time. The current version
+    is always available on this page.
+  </div>
+
+  <div class="back-link">
+    <a href="/">&larr; Back to home</a>
+  </div>
+</div>
+
+<script>
+  // Contact info rendered via JS to prevent scraping by bots
+  (function() {
+    var p = [
+      'QnJ1bm8gSG9jaHN0cmFzc2Vy',       // Bruno Hochstrasser
+      'S2lyY2hhY2tlcnN0cmFzc2UgMjg=',     // Kirchackerstrasse 28
+      'NTIyMyBSaW5pa2Vu',                   // 5223 Riniken
+      'U2Nod2Vpeg=='                         // Schweiz
+    ];
+    var e = 'bGVnYWxAcmVuZXguaWQ=';    // legal@renex.id
+    var d = function(s) { return atob(s); };
+    var resp = document.getElementById('ci-responsible');
+    var rights = document.getElementById('ci-email-rights');
+    if (resp) {
+      var em = d(e);
+      resp.innerHTML = p.map(d).join('<br>') + '<br>Email: <a href="mai' + 'lto:' + em + '">' + em + '</a>';
+    }
+    if (rights) {
+      var em = d(e);
+      rights.innerHTML = '<a href="mai' + 'lto:' + em + '">' + em + '</a>';
+    }
+    var pc = document.getElementById('ci-privacy-contact');
+    if (pc) {
+      var em = d(e);
+      pc.innerHTML = d(p[0]) + '<br>' + d(p[1]) + '<br>' + d(p[2]) + '<br>' + d(p[3])
+        + '<br>Email: <a href="mai' + 'lto:' + em + '">' + em + '</a>';
+    }
+    var abuse = document.getElementById('ci-email-abuse');
+    if (abuse) {
+      var ab = d('YWJ1c2VAcmVuZXguaWQ='); // abuse@renex.id
+      abuse.innerHTML = '<a href="mai' + 'lto:' + ab + '">' + ab + '</a>';
+    }
+  })();
+</script>
+</body>
+</html>

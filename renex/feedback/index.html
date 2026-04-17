@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#38bdf8" />
+  <title>RENEX – Feedback</title>
+  <link rel="stylesheet" href="/colors.css" />
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-body, #07070A);
+      color: var(--text-primary, #E6E6EB);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: var(--bg-panel, #0D0D11);
+      border: 1px solid var(--border-panel, rgba(255,255,255,0.06));
+      border-radius: 20px;
+      padding: 36px 32px;
+      max-width: 440px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .logo {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--text-primary, #E6E6EB);
+      text-align: center;
+    }
+    .logo .x { color: var(--accent-voice, #38BDF8); }
+
+    .feedback-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .feedback-icon svg {
+      width: 44px;
+      height: 44px;
+      color: var(--accent-voice, #38BDF8);
+      filter: drop-shadow(0 0 10px var(--accent-voice-glow, rgba(56,189,248,0.35)));
+    }
+
+    .title {
+      font-size: 20px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary, #9A9AA3);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border-panel, rgba(255,255,255,0.06));
+      background: var(--bg-body, #07070A);
+      color: var(--text-primary, #E6E6EB);
+      font-family: inherit;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent-voice, #38BDF8);
+    }
+
+    select {
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239A9AA3' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 36px;
+    }
+    select option {
+      background: #0D0D11;
+      color: #E6E6EB;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 120px;
+      line-height: 1.5;
+    }
+
+    .char-count {
+      font-size: 11px;
+      color: var(--text-muted, #6F6F78);
+      text-align: right;
+      margin-top: 4px;
+    }
+
+    .field { display: flex; flex-direction: column; }
+
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, box-shadow 0.15s;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--accent-voice, #38BDF8);
+      color: #07070A;
+      box-shadow: 0 0 16px var(--accent-voice-glow, rgba(56,189,248,0.35));
+    }
+    .btn-primary:hover:not(:disabled) {
+      box-shadow: 0 0 24px var(--accent-voice-glow, rgba(56,189,248,0.45));
+    }
+
+    .status {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      min-height: 18px;
+      text-align: center;
+    }
+    .status.error { color: var(--status-error, #F87171); }
+    .status.ok    { color: var(--status-speaking, #3CE47A); }
+
+    .spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Success card */
+    .success-card {
+      display: none;
+      text-align: center;
+    }
+    .success-card .check-icon {
+      font-size: 48px;
+      color: var(--status-speaking, #3CE47A);
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- FORMULAR -->
+<div class="card" id="formCard">
+  <div class="logo">RENE<span class="x">X</span></div>
+
+  <div class="feedback-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+    </svg>
+  </div>
+
+  <div class="title">Your Feedback</div>
+  <div class="subtitle">Help us make RENEX better. Your feedback is anonymous and treated confidentially.</div>
+
+  <div class="field">
+    <label for="name">Name (optional)</label>
+    <input type="text" id="name" placeholder="Anonymous" maxlength="50" autocomplete="off" />
+  </div>
+
+  <div class="field">
+    <label for="category">Category</label>
+    <select id="category">
+      <option value="allgemein">General</option>
+      <option value="bug">Bug / Issue</option>
+      <option value="feature">Feature Request</option>
+      <option value="lob">Praise</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="message">Message</label>
+    <textarea id="message" placeholder="What's on your mind?" maxlength="2000"></textarea>
+    <div class="char-count"><span id="charCount">0</span> / 2000</div>
+  </div>
+
+  <!-- Turnstile Widget -->
+  <div class="cf-turnstile"
+       data-sitekey="0x4AAAAAACtyEOf-Gqc2i4DY"
+       data-theme="dark"
+       data-language="en"
+       data-callback="onTurnstileSolved"
+       style="display:flex; justify-content:center;">
+  </div>
+
+  <button class="btn btn-primary" id="submitBtn" onclick="submitFeedback()" disabled>
+    Submit Feedback
+  </button>
+
+  <div class="status" id="submitStatus"></div>
+</div>
+
+<!-- ERFOLG -->
+<div class="card success-card" id="successCard">
+  <div class="logo">RENE<span class="x">X</span></div>
+  <div class="feedback-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color: var(--status-speaking, #3CE47A);">
+      <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+      <polyline points="22 4 12 14.01 9 11.01"/>
+    </svg>
+  </div>
+  <div class="title">Thank you!</div>
+  <div class="subtitle">Your feedback has been submitted successfully. We'll take a look at it.</div>
+  <button class="btn btn-primary" onclick="resetForm()">Send more feedback</button>
+</div>
+
+<script>
+  const API = 'https://api.renex.id';
+  let _cfToken = null;
+
+  // Turnstile callback
+  window.onTurnstileSolved = function(t) {
+    _cfToken = t;
+    document.getElementById('submitBtn').disabled = false;
+  };
+
+  // Zeichenzähler
+  document.getElementById('message').addEventListener('input', function() {
+    document.getElementById('charCount').textContent = this.value.length;
+  });
+
+  // Absenden
+  window.submitFeedback = async function() {
+    const btn = document.getElementById('submitBtn');
+    const status = document.getElementById('submitStatus');
+    const message = document.getElementById('message').value.trim();
+
+    if (message.length < 10) {
+      status.className = 'status error';
+      status.textContent = 'Please write at least 10 characters.';
+      return;
+    }
+
+    if (!_cfToken) {
+      status.className = 'status error';
+      status.textContent = 'Please wait for bot verification.';
+      return;
+    }
+
+    btn.disabled = true;
+    status.className = 'status';
+    status.innerHTML = '<span class="spinner"></span> Submitting...';
+
+    try {
+      const res = await fetch(API + '/feedback/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('name').value.trim() || '',
+          category: document.getElementById('category').value,
+          message: message,
+          cfTurnstileToken: _cfToken,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        status.className = 'status error';
+        status.textContent = data.error || 'Failed to submit. Please try again.';
+        btn.disabled = false;
+        _cfToken = null;
+        if (window.turnstile) window.turnstile.reset();
+        return;
+      }
+
+      document.getElementById('formCard').style.display = 'none';
+      document.getElementById('successCard').style.display = 'flex';
+
+    } catch (e) {
+      status.className = 'status error';
+      status.textContent = 'Network error. Please try again.';
+      btn.disabled = false;
+    }
+  };
+
+  // Formular zurücksetzen
+  window.resetForm = function() {
+    document.getElementById('name').value = '';
+    document.getElementById('category').value = 'allgemein';
+    document.getElementById('message').value = '';
+    document.getElementById('charCount').textContent = '0';
+    document.getElementById('submitStatus').textContent = '';
+    document.getElementById('submitBtn').disabled = true;
+    _cfToken = null;
+    if (window.turnstile) window.turnstile.reset();
+    document.getElementById('successCard').style.display = 'none';
+    document.getElementById('formCard').style.display = 'flex';
+  };
+</script>
+</body>
+</html>

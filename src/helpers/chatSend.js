@@ -500,15 +500,9 @@ export async function handleChatSend(request, env) {
             }
           }
 
-          // Online-Check: wenn WS aktiv, kein Push nötig
-          const presence = await env.RENEX_KV.get(`presence:${handle}`);
-          if (presence) {
-            try {
-              const p = JSON.parse(presence);
-              if (p.online) return; // User ist online via WebSocket
-            } catch {}
-          }
-
+          // Gruppen: Immer Push senden (kein zuverlässiger Online-Check möglich
+          // da pushToGroupMembers parallel läuft und kein WS-Delivery-Count hat).
+          // Notification-Tag dedupliziert auf dem Gerät.
           await pushToUser(env, handle, {
             title: `${groupName}`,
             body: `${me}: ${msg.e2e ? "Verschlüsselte Nachricht" : (msg.message || "").slice(0, 100)}`,
@@ -517,7 +511,7 @@ export async function handleChatSend(request, env) {
               type: "message",
               convoId: cid,
               from: me,
-              url: `/inbox.html?open=${cid}`,
+              url: `/chat?with=${encodeURIComponent(cid)}&name=${encodeURIComponent(groupName)}`,
               e2e: !!msg.e2e,
             },
           });
@@ -554,7 +548,7 @@ export async function handleChatSend(request, env) {
                 type: "message",
                 convoId: cid,
                 from: me,
-                url: `/inbox.html?open=${me}`,
+                url: `/chat?with=${encodeURIComponent(me)}`,
                 e2e: !!msg.e2e,
               },
             });

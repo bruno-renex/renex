@@ -6,8 +6,9 @@
 // voiceList.js) — nicht mehr im Profil-Dropdown.
 // ======================================================
 import { startOutgoingCall } from "./voiceUI.js";
+import { joinRoom } from "./voiceRooms.js";
 
-// UUID = Gruppe → Call für V2 (Phase 5 Group-Voice)
+// UUID = Gruppe → Group-Voice-Room (Phase 5)
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HANDLE_RE = /^[a-z0-9_]{1,30}$/;
 
@@ -29,26 +30,49 @@ function currentChatPeer() {
   } catch { return null; }
 }
 
-// ── Call-Button im Chat-Header ─────────────────────────
-function injectChatCallButton() {
-  const peer = currentChatPeer();
-  if (!peer) return;
+// Wenn ?with=<UUID> → Gruppen-Chat → Voice-Room statt 1:1
+function currentGroupRoomId() {
+  try {
+    const u = new URL(window.location.href);
+    const w = (u.searchParams.get("with") || "").toLowerCase();
+    return UUID_RE.test(w) ? w : null;
+  } catch { return null; }
+}
 
+// ── Call-Button im Chat-Header ─────────────────────────
+// 1:1 DM  → startet direkten Anruf
+// Group   → joint den Voice-Room der Gruppe
+function injectChatCallButton() {
   const header = document.getElementById("chat-header");
   if (!header) return;
   if (header.querySelector(".voice-call-btn")) return;
 
+  const peer   = currentChatPeer();
+  const roomId = currentGroupRoomId();
+  if (!peer && !roomId) return;
+
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "voice-call-btn";
-  btn.title = `Anrufen: ${peer}`;
-  btn.setAttribute("aria-label", `Sprach-Anruf starten an ${peer}`);
   btn.textContent = "📞";
-  btn.addEventListener("click", (e) => {
-    e.preventDefault();
-    triggerCall(peer);
-  });
-  // Ans Ende des Headers (rechts)
+
+  if (peer) {
+    btn.title = `Anrufen: ${peer}`;
+    btn.setAttribute("aria-label", `Sprach-Anruf starten an ${peer}`);
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      triggerCall(peer);
+    });
+  } else {
+    btn.title = "Voice-Room beitreten";
+    btn.setAttribute("aria-label", "Voice-Room der Gruppe beitreten");
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      // Im iframe → postMessage; im Top-Window → direkt joinRoom
+      joinRoom(roomId);
+    });
+  }
+
   header.appendChild(btn);
 }
 

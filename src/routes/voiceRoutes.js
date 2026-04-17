@@ -9,9 +9,46 @@
 // Front-Channel (voiceSignaling.js) hört voice:* Events ab und
 // routet sie an voiceUI.js.
 // ======================================================
-import { json, readJson, checkCsrf, dmConvoId, UUID_RE } from '../utils.js';
+import { json, readJson, checkCsrf, dmConvoId, UUID_RE, isUUID } from '../utils.js';
 import { requireSession, isAcceptedContact, pushToUserDO, rateLimit } from '../auth.js';
 import { pushToUser } from '../helpers/pushSend.js';
+
+// Voice-Rooms (Phase 5) — mesh P2P, max 4 members for stability
+const ROOM_MEMBER_TTL = 180;       // seconds — heartbeat jede 45s client-side,
+                                   // bis zu 3 Fehler in Folge toleriert (135s)
+const ROOM_MAX_MEMBERS = 4;        // mesh-limit; >4 → SFU nötig (future)
+
+async function getRoom(env, roomId) {
+  try {
+    const raw = await env.RENEX_KV.get(`voice_room:${roomId}`);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    // Inaktive Members rausfiltern (TTL-Schutz falls letzter heartbeat > TTL)
+    const cutoff = Date.now() - ROOM_MEMBER_TTL * 1000;
+    return Array.isArray(arr) ? arr.filter(m => m.lastSeen > cutoff) : [];
+  } catch { return []; }
+}
+
+async function putRoom(env, roomId, members) {
+  if (!members.length) {
+    await env.RENEX_KV.delete(`voice_room:${roomId}`).catch(() => {});
+    return;
+  }
+  await env.RENEX_KV.put(
+    `voice_room:${roomId}`,
+    JSON.stringify(members),
+    { expirationTtl: ROOM_MEMBER_TTL * 2 }  // KV-TTL doppelt so lang, clients räumen
+  );
+}
+
+async function isGroupMember(env, groupId, handle) {
+  try {
+    const row = await env.RENEX_DB.prepare(
+      `SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ? LIMIT 1`
+    ).bind(groupId, handle).first();
+    return !!row;
+  } catch { return false; }
+}
 
 // Call-State wird 60s gehalten — jeder Signaling-Call refreshed die TTL.
 // Verhindert Zombie-State wenn Client abschmiert.
@@ -101,6 +138,156 @@ export async function handleVoiceRoutes(request, env, path, params) {
   const session = await requireSession(request, env);
   if (!session) return json(request, { error: "Not authenticated" }, 401);
   const me = String(session.handle).toLowerCase();
+
+  // ────────────────────────────────────────────────────
+  // VOICE ROOMS (Phase 5) — dynamische Pfade vor dem Switch
+  // ────────────────────────────────────────────────────
+  if (path.startsWith("/voice/room/")) {
+    const ROOM_RE = /^\/voice\/room\/([0-9a-f-]{36})\/(join|leave|heartbeat|members|signal)$/i;
+    const m = path.match(ROOM_RE);
+    if (!m) return json(request, { error: "Not found" }, 404);
+
+    const roomId = m[1].toLowerCase();
+    const action = m[2];
+    if (!isUUID(roomId)) return json(request, { error: "Invalid roomId" }, 400);
+
+    // Group-Membership-Check
+    if (!(await isGroupMember(env, roomId, me))) {
+      return json(request, { error: "Not a group member" }, 403);
+    }
+
+    // GET members
+    if (action === "members") {
+      if (request.method !== "GET") return json(request, { error: "Method not allowed" }, 405);
+      const members = await getRoom(env, roomId);
+      return json(request, { roomId, members });
+    }
+
+    // POST join
+    if (action === "join") {
+      if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
+      if (!(await rateLimit(env, `voice_join:${me}`, 60_000, 30, { failOpen: false }))) {
+        return json(request, { error: "Rate limit exceeded" }, 429);
+      }
+      const members = await getRoom(env, roomId);
+      const already = members.find(x => x.handle === me);
+      const now = Date.now();
+      let nextMembers;
+      if (already) {
+        nextMembers = members.map(x => x.handle === me ? { ...x, lastSeen: now } : x);
+      } else {
+        if (members.length >= ROOM_MAX_MEMBERS) {
+          return json(request, { error: "Room full", max: ROOM_MAX_MEMBERS }, 409);
+        }
+        nextMembers = [...members, { handle: me, joinedAt: now, lastSeen: now }];
+      }
+      await putRoom(env, roomId, nextMembers);
+
+      if (!already) {
+        await Promise.allSettled(
+          nextMembers
+            .filter(x => x.handle !== me)
+            .map(x => pushToUserDO(env, x.handle, makeEvent({
+              type: "voice:room:join",
+              roomId,
+              handle: me,
+              joinedAt: now,
+            })))
+        );
+      }
+
+      return json(request, {
+        roomId, me,
+        members: nextMembers,
+        isFirstJoin: !already,
+        max: ROOM_MAX_MEMBERS,
+      });
+    }
+
+    // POST heartbeat
+    if (action === "heartbeat") {
+      if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
+      const members = await getRoom(env, roomId);
+      const idx = members.findIndex(x => x.handle === me);
+      if (idx < 0) return json(request, { error: "Not in room" }, 404);
+      const now = Date.now();
+      members[idx] = { ...members[idx], lastSeen: now };
+      await putRoom(env, roomId, members);
+      return json(request, { ok: true, ts: now });
+    }
+
+    // POST leave
+    if (action === "leave") {
+      if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
+      const members = await getRoom(env, roomId);
+      const nextMembers = members.filter(x => x.handle !== me);
+      await putRoom(env, roomId, nextMembers);
+
+      await Promise.allSettled(
+        nextMembers.map(x => pushToUserDO(env, x.handle, makeEvent({
+          type: "voice:room:leave",
+          roomId,
+          handle: me,
+        })))
+      );
+
+      return json(request, { ok: true, members: nextMembers });
+    }
+
+    // POST signal — Body: { to, kind: "offer"|"answer"|"ice", sdp?, candidate? }
+    if (action === "signal") {
+      if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
+      const body = await readJson(request);
+      if (!body) return json(request, { error: "Invalid JSON" }, 400);
+
+      const to   = String(body.to || "").toLowerCase();
+      const kind = String(body.kind || "");
+      if (!isHandle(to) || to === me) return json(request, { error: "Invalid 'to'" }, 400);
+      if (!["offer", "answer", "ice"].includes(kind)) {
+        return json(request, { error: "Invalid 'kind'" }, 400);
+      }
+
+      const members = await getRoom(env, roomId);
+      if (!members.find(x => x.handle === me)) return json(request, { error: "You are not in room" }, 409);
+      if (!members.find(x => x.handle === to)) return json(request, { error: "Peer not in room" }, 409);
+
+      if (kind === "offer" || kind === "answer") {
+        const sdp = body.sdp;
+        if (!sdp || typeof sdp !== "object" || typeof sdp.sdp !== "string") {
+          return json(request, { error: "Invalid 'sdp'" }, 400);
+        }
+        if (sdp.sdp.length > MAX_SDP_BYTES) return json(request, { error: "SDP too large" }, 413);
+        if ((kind === "offer"  && sdp.type !== "offer") ||
+            (kind === "answer" && sdp.type !== "answer")) {
+          return json(request, { error: "Mismatched sdp.type" }, 400);
+        }
+        await pushToUserDO(env, to, makeEvent({
+          type: `voice:room:${kind}`,
+          roomId, from: me, sdp,
+        }));
+      } else {
+        const candidate = body.candidate;
+        if (!candidate || typeof candidate !== "object") {
+          return json(request, { error: "Invalid 'candidate'" }, 400);
+        }
+        try {
+          if (JSON.stringify(candidate).length > MAX_ICE_BYTES) {
+            return json(request, { error: "Candidate too large" }, 413);
+          }
+        } catch {
+          return json(request, { error: "Invalid 'candidate'" }, 400);
+        }
+        await pushToUserDO(env, to, makeEvent({
+          type: "voice:room:ice",
+          roomId, from: me, candidate,
+        }));
+      }
+
+      return json(request, { ok: true });
+    }
+
+    return json(request, { error: "Not found" }, 404);
+  }
 
   switch (path) {
 

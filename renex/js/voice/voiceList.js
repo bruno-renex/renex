@@ -11,6 +11,7 @@
 // ======================================================
 import { voiceBus, fetchHistory } from "./voiceSignaling.js";
 import { startOutgoingCall } from "./voiceUI.js";
+import { roomBus, leaveRoom, toggleRoomMute, setRoomPTT, getActiveRoom } from "./voiceRooms.js";
 
 const LAST_SEEN_KEY = "voice_tab_seen_ts";
 const RE_LIST_ID    = "voice-call-list";
@@ -178,6 +179,28 @@ function onVoiceTabClick() {
   scheduleRefresh();
 }
 
+// ── Aktiv zum Voice-Tab switchen (nach Join) ────────────
+function switchToVoiceTab() {
+  try {
+    const btn = document.querySelector(TAB_BTN_SELECTOR);
+    if (!btn) return;
+    // Inbox nutzt window.switchSection(name, btn) — mit Fallback,
+    // falls die Funktion (noch) nicht global existiert.
+    if (typeof window.switchSection === "function") {
+      window.switchSection("voice", btn);
+    } else {
+      // Manuelle Klassen-Toggle-Variante
+      document.querySelectorAll(".list-section").forEach(s => s.classList.remove("active"));
+      document.querySelectorAll(".strip-icon").forEach(i => i.classList.remove("active"));
+      const sec = document.getElementById("section-voice");
+      if (sec) sec.classList.add("active");
+      btn.classList.add("active");
+    }
+  } catch (e) {
+    console.warn("[voice] switchToVoiceTab failed", e);
+  }
+}
+
 function ensureStyles() {
   if (document.getElementById("voice-overlay-css")) return;
   const link = document.createElement("link");
@@ -185,6 +208,73 @@ function ensureStyles() {
   link.rel = "stylesheet";
   link.href = "/js/voice/voiceUI.css";
   document.head.appendChild(link);
+}
+
+// ── Active-Room-Card (über der Anrufliste) ──────────────
+function getOrCreateRoomCard() {
+  let card = document.getElementById("voice-room-card");
+  if (card) return card;
+  const section = document.getElementById("section-voice");
+  if (!section) return null;
+  card = document.createElement("div");
+  card.id = "voice-room-card";
+  card.className = "voice-room-card";
+  card.style.display = "none";
+  // Nach dem header, vor .contact-scroll einfügen
+  const header = section.querySelector(".panel-list-header");
+  if (header && header.nextSibling) {
+    section.insertBefore(card, header.nextSibling);
+  } else {
+    section.appendChild(card);
+  }
+  return card;
+}
+
+function renderRoomCard() {
+  const card = getOrCreateRoomCard();
+  if (!card) return;
+  const room = getActiveRoom();
+  if (!room) {
+    card.style.display = "none";
+    card.innerHTML = "";
+    return;
+  }
+  const others = room.members.filter(x => x.handle !== room.me);
+  const memberCount = room.members.length;
+
+  card.style.display = "";
+  card.innerHTML = `
+    <div class="vrc-head">
+      <span class="vrc-dot"></span>
+      <span class="vrc-title">Voice-Room</span>
+      <span class="vrc-count">${memberCount}/4</span>
+    </div>
+    <ul class="vrc-members"></ul>
+    <div class="vrc-actions">
+      <button class="vrc-btn vrc-mute" type="button"  aria-pressed="${room.muted}">
+        ${room.muted ? "🔇 Stumm aus" : "🎙 Stumm"}
+      </button>
+      <button class="vrc-btn vrc-ptt"  type="button"  aria-pressed="${room.pttEnabled}">
+        PTT${room.pttEnabled ? " ✓" : ""}
+      </button>
+      <button class="vrc-btn vrc-leave" type="button">Verlassen</button>
+    </div>
+  `;
+  const ul = card.querySelector(".vrc-members");
+  for (const m of room.members) {
+    const li = document.createElement("li");
+    li.className = "vrc-member";
+    li.innerHTML = `
+      <span class="vrc-member-dot"></span>
+      <span class="vrc-member-handle"></span>
+      ${m.handle === room.me ? '<span class="vrc-me">du</span>' : ''}
+    `;
+    li.querySelector(".vrc-member-handle").textContent = m.handle;
+    ul.appendChild(li);
+  }
+  card.querySelector(".vrc-leave").addEventListener("click", () => leaveRoom().catch(() => {}));
+  card.querySelector(".vrc-mute" ).addEventListener("click", () => { toggleRoomMute(); renderRoomCard(); });
+  card.querySelector(".vrc-ptt"  ).addEventListener("click", () => { setRoomPTT(!room.pttEnabled); renderRoomCard(); });
 }
 
 // ── Init ───────────────────────────────────────────────
@@ -204,6 +294,27 @@ export function initVoiceList() {
     tabBtn.__voiceHandlerAttached = true;
     tabBtn.addEventListener("click", onVoiceTabClick);
   }
+
+  // Active-Room-Card bei Room-Events re-rendern
+  roomBus.addEventListener("room:joined", () => {
+    renderRoomCard();
+    // Auf Voice-Tab umschalten, damit der User das Room-Panel sieht
+    switchToVoiceTab();
+  });
+  roomBus.addEventListener("room:left",    () => renderRoomCard());
+  roomBus.addEventListener("room:members", () => renderRoomCard());
+  roomBus.addEventListener("room:mute",    () => renderRoomCard());
+  roomBus.addEventListener("room:ptt",     () => renderRoomCard());
+  roomBus.addEventListener("room:mic-denied", () => {
+    alert("Mikrofon-Zugriff wurde verweigert. Bitte in den Browser-Einstellungen erlauben.");
+  });
+  roomBus.addEventListener("room:error", (e) => {
+    console.warn("[voice] room error:", e.detail?.error);
+    alert("Voice-Room konnte nicht beigetreten werden: " + (e.detail?.error || "unbekannter Fehler"));
+  });
+
+  // Initial render (falls bereits in einem Room aus früherer Session)
+  renderRoomCard();
 
   // Erstes Fetch
   scheduleRefresh();

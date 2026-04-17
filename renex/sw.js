@@ -48,6 +48,23 @@ async function handlePush(event) {
     ];
   }
 
+  // ── VOICE CALL PUSH ─────────────────────────────────
+  // Wenn der Empfänger offline war (keine WS-Verbindung),
+  // sendet das Backend einen Web-Push mit type="voice_call".
+  // Notification bleibt persistent sichtbar, Vibrations-Pattern
+  // ist aggressiver (Call-Feel statt Message-Feel).
+  if (data?.type === "voice_call") {
+    options.tag = tag || `voice-call-${data.callId || "unknown"}`;
+    options.requireInteraction = true;   // bleibt bis User interagiert
+    options.renotify = true;
+    options.silent = false;
+    options.vibrate = [400, 100, 400, 100, 400, 100, 400];
+    options.actions = [
+      { action: "voice_accept",  title: "📞 Annehmen" },
+      { action: "voice_decline", title: "✖ Ablehnen" },
+    ];
+  }
+
   // App-Icon Badge
   try {
     if (navigator.setAppBadge) {
@@ -92,6 +109,28 @@ self.addEventListener("notificationclick", (event) => {
     return;
   }
 
+  // ── VOICE CALL ACTIONS ─────────────────────────────
+  if (action === "voice_decline") {
+    event.waitUntil(
+      fetch(`${API_BASE}/voice/decline`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callId: data.callId }),
+      }).catch(e => console.warn("SW: voice decline failed", e.message))
+    );
+    return;
+  }
+
+  if (action === "voice_accept" || data?.type === "voice_call") {
+    // App öffnen/fokussieren mit Auto-Call-Flag — voiceUI.js pickt
+    // den ?call=1 Query-Param beim Laden/Navigieren auf und startet
+    // den Anruf erneut (Offer wird neu verhandelt).
+    const targetUrl = data?.url || `/chat/?with=${encodeURIComponent(data?.from || "")}&call=1`;
+    event.waitUntil(openOrFocus(targetUrl));
+    return;
+  }
+
   // Default: App öffnen / fokussieren
   const targetUrl = data.url || "/inbox.html";
   event.waitUntil(
@@ -117,6 +156,28 @@ self.addEventListener("notificationclick", (event) => {
     })
   );
 });
+
+// ── OPEN OR FOCUS ──────────────────────────────────────
+async function openOrFocus(targetUrl) {
+  try {
+    const windowClients = await clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of windowClients) {
+      try {
+        const pathname = new URL(client.url).pathname;
+        if (pathname.startsWith("/inbox") || pathname.startsWith("/chat")) {
+          await client.focus();
+          client.postMessage({ type: "navigate", url: targetUrl });
+          return;
+        }
+      } catch (e) {
+        console.warn("SW: focus failed", e.message);
+      }
+    }
+    await clients.openWindow(targetUrl);
+  } catch (e) {
+    console.warn("SW: openOrFocus error", e.message);
+  }
+}
 
 // ── NOTIFICATION CLOSE (Dismiss) ────────────────────────
 self.addEventListener("notificationclose", (event) => {

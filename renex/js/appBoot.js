@@ -1,6 +1,8 @@
 import { startGlobalControlPolling } from "./controlSocket.js";
 import { initServiceWorker, subscribeToPush, initInstallPrompt, isStandalone } from "./pushManager.js";
 import { checkAppVersion } from "./versionCheck.js";
+import { initVoiceUI } from "./voice/voiceUI.js";
+import { initVoiceButtons } from "./voice/voiceButtons.js";
 
 export function bootApp() {
   // Version-Check zuerst (unabhängig von Login-Status) — erkennt veraltete PWA-Shells
@@ -32,6 +34,10 @@ export function bootApp() {
   window.__controlPollerStarted = true;
 
   startGlobalControlPolling();
+
+  // Voice-UI initialisieren (Overlay + Signaling-Listener)
+  try { initVoiceUI();     } catch (e) { console.warn("initVoiceUI failed", e); }
+  try { initVoiceButtons(); } catch (e) { console.warn("initVoiceButtons failed", e); }
 
   // Version-Check auch bei Tab-Wake-Up (PWA nach längerer Inaktivität)
   if (!window.__versionVisibilityHandler) {

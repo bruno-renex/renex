@@ -13,6 +13,7 @@ import { handleGifRoutes } from './src/routes/gifRoutes.js';
 import { handleInviteRoutes } from './src/routes/inviteRoutes.js';
 import { handlePushRoutes } from './src/routes/pushRoutes.js';
 import { handleFeedbackRoutes } from './src/routes/feedbackRoutes.js';
+import { handleVoiceRoutes } from './src/routes/voiceRoutes.js';
 import { scheduled } from './src/cron.js';
 
 // Cloudflare Durable Object binding requirement — must be re-exported from entry point
@@ -73,6 +74,9 @@ async function fetch(request, env) {
     }
     if (path.startsWith('/feedback/')) {
       return await handleFeedbackRoutes(request, env, path, params);
+    }
+    if (path.startsWith('/voice/')) {
+      return await handleVoiceRoutes(request, env, path, params);
     }
     return json(request, { error: 'Not found' }, 404);
 

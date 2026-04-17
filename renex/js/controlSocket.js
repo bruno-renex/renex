@@ -107,6 +107,14 @@ async function processControlMessage(m) {
   const me = localStorage.getItem("my_user");
   if (!me) return;
 
+  // 0) VOICE SIGNALING — ring/answer/ice/decline/cancel/hangup
+  // Frühes Exit: voice:* Events werden vom voiceUI (separater Listener)
+  // über den BroadcastChannel verarbeitet.
+  if (typeof m.type === "string" && m.type.startsWith("voice:")) {
+    notify({ type: "VOICE_EVENT", payload: m });
+    return;
+  }
+
   // 1) CMK_REQ: wenn ich Leader → CMK senden
   if (m.type === "cmk_req") {
     const peer = m.from;

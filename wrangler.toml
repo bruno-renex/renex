@@ -1,6 +1,7 @@
 name = "renex-backend"
 main = "backend.js"
 compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
 
 routes = [
   { pattern = "api.renex.id", custom_domain = true }

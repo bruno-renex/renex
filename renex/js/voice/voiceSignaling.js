@@ -27,6 +27,29 @@ function getBcToken() {
 // Ein einzelner Listener pro Tab — mehrfach-Init verhindern
 let _inboundBound = false;
 
+// Event-ID-Dedup auf BroadcastChannel-Ebene.
+// Hintergrund: Jede WS-Verbindung des Users (parent-Tab, iframe, zusätzlicher
+// Tab, PWA-Window …) empfängt dasselbe voice:*-Event und postet es über BC.
+// Ohne Dedup würde z.B. "voice:answer" mehrfach verarbeitet → WebRTC wirft
+// "Called in wrong state: stable".
+const _seenEventIds = new Map();   // id → timestamp
+const SEEN_MAX_AGE_MS = 60 * 1000;
+const SEEN_MAX_SIZE   = 500;
+function markEventSeen(id) {
+  const now = Date.now();
+  if (_seenEventIds.size >= SEEN_MAX_SIZE) {
+    // älteste Einträge droppen
+    const cutoff = now - SEEN_MAX_AGE_MS;
+    for (const [k, t] of _seenEventIds) {
+      if (t < cutoff) _seenEventIds.delete(k);
+    }
+    if (_seenEventIds.size >= SEEN_MAX_SIZE) {
+      _seenEventIds.delete(_seenEventIds.keys().next().value);
+    }
+  }
+  _seenEventIds.set(id, now);
+}
+
 export function initVoiceSignalingInbound() {
   if (_inboundBound) return;
   _inboundBound = true;
@@ -54,6 +77,9 @@ export function initVoiceSignalingInbound() {
 
 function dispatchInbound(payload) {
   if (!payload || typeof payload.type !== "string") return;
+  // Dedup: wenn dieselbe Event-ID bereits verarbeitet wurde → droppen
+  if (payload.id && _seenEventIds.has(payload.id)) return;
+  if (payload.id) markEventSeen(payload.id);
   // payload.type ist z.B. "voice:ring", "voice:answer", "voice:ice", …
   voiceBus.dispatchEvent(new CustomEvent(payload.type, { detail: payload }));
 }
@@ -98,8 +124,11 @@ export async function fetchIceServers() {
 export async function fetchHistory(limit = 50) {
   try {
     const r = await apiFetch(`/voice/history?limit=${encodeURIComponent(limit)}`);
-    return Array.isArray(r?.calls) ? r.calls : [];
-  } catch {
+    if (Array.isArray(r?.calls)) return r.calls;
+    console.warn("[voice] history response unexpected:", r);
+    return [];
+  } catch (e) {
+    console.warn("[voice] history fetch failed:", e?.message || e);
     return [];
   }
 }

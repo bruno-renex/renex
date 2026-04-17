@@ -244,3 +244,84 @@
 #voice-history-modal .vh-empty {
   padding: 30px 16px; text-align: center; opacity: 0.55;
 }
+
+/* ── Anrufliste im Voice-Sidebar-Tab ────────────────── */
+#voice-call-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.voice-call-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.04));
+  cursor: default;
+  min-height: 52px;
+}
+.voice-call-item:hover {
+  background: var(--bg-hover, rgba(255,255,255,0.03));
+}
+
+.voice-call-item .vci-icon {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+}
+.voice-call-item .vci-icon.in      { color: #22c55e; background: rgba(34,197,94,0.12); }
+.voice-call-item .vci-icon.out     { color: #38bdf8; background: rgba(56,189,248,0.12); }
+.voice-call-item .vci-icon.missed  { color: #ef4444; background: rgba(239,68,68,0.14); }
+
+.voice-call-item .vci-main {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+.voice-call-item .vci-peer {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #e6edf5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.voice-call-item[data-status="missed"] .vci-peer,
+.voice-call-item[data-status="declined"] .vci-peer {
+  color: #ef4444;
+}
+
+.voice-call-item .vci-meta {
+  font-size: 11px;
+  color: var(--text-secondary, #94a3b8);
+  opacity: 0.8;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voice-call-item .vci-call {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent, #38bdf8);
+  font-size: 18px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease, transform 80ms ease;
+}
+.voice-call-item .vci-call:hover  { background: rgba(56,189,248,0.12); }
+.voice-call-item .vci-call:active { transform: scale(0.92); }

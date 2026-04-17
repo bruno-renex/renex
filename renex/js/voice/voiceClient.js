@@ -258,12 +258,30 @@ export class VoiceCall extends EventTarget {
 
   async applyRemoteOffer(sdp) {
     const pc = await this._ensurePC();
+    // Guard: Offer-Doppel-Zustellung überspringen
+    const state = pc.signalingState;
+    if (state !== "stable" && state !== "have-remote-offer") {
+      console.warn("applyRemoteOffer skipped, signalingState =", state);
+      return;
+    }
+    if (state === "have-remote-offer") {
+      // bereits gesetzt — Idempotenz
+      return;
+    }
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     await this._flushPendingIce();
   }
 
   async applyRemoteAnswer(sdp) {
     if (!this.pc) return;
+    // Guard: nur setzen wenn PC tatsächlich auf Answer wartet.
+    // Vermeidet "wrong state: stable" bei Doppel-Zustellung (mehrere Tabs,
+    // mehrere WS-Verbindungen desselben Users).
+    const state = this.pc.signalingState;
+    if (state !== "have-local-offer") {
+      console.warn("applyRemoteAnswer skipped, signalingState =", state);
+      return;
+    }
     await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
     await this._flushPendingIce();
   }

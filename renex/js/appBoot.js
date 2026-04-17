@@ -3,6 +3,7 @@ import { initServiceWorker, subscribeToPush, initInstallPrompt, isStandalone } f
 import { checkAppVersion } from "./versionCheck.js";
 import { initVoiceUI } from "./voice/voiceUI.js";
 import { initVoiceButtons } from "./voice/voiceButtons.js";
+import { initVoiceList } from "./voice/voiceList.js";
 
 export function bootApp() {
   // Version-Check zuerst (unabhängig von Login-Status) — erkennt veraltete PWA-Shells
@@ -35,9 +36,10 @@ export function bootApp() {
 
   startGlobalControlPolling();
 
-  // Voice-UI initialisieren (Overlay + Signaling-Listener)
-  try { initVoiceUI();     } catch (e) { console.warn("initVoiceUI failed", e); }
+  // Voice-UI initialisieren (Overlay + Signaling-Listener + Anrufliste)
+  try { initVoiceUI();      } catch (e) { console.warn("initVoiceUI failed", e); }
   try { initVoiceButtons(); } catch (e) { console.warn("initVoiceButtons failed", e); }
+  try { initVoiceList();    } catch (e) { console.warn("initVoiceList failed", e); }
 
   // Version-Check auch bei Tab-Wake-Up (PWA nach längerer Inaktivität)
   if (!window.__versionVisibilityHandler) {

@@ -61,6 +61,37 @@ function makeEvent(payload) {
   };
 }
 
+// ==========================================================
+// Call-Lookup via D1 (call_log) — Source of Truth für
+// Signaling-State-Validation. KV ist eventually-consistent
+// zwischen Edges und kann bei /voice/answer /ice 404s erzeugen,
+// wenn Ring und Answer von unterschiedlichen Edges kommen.
+//
+// D1-Reads haben sub-sekundäre Replikations-Latenz — falls ein
+// Read nichts findet, einmal kurz retry'en.
+// ==========================================================
+async function getCallForUser(env, callId, me, { retry = true } = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const row = await env.RENEX_DB.prepare(
+        `SELECT id, caller, callee, status, started_at, answered_at
+           FROM call_log WHERE id = ?`
+      ).bind(callId).first();
+      if (row && (row.caller === me || row.callee === me)) {
+        return {
+          ...row,
+          peer: row.caller === me ? row.callee : row.caller,
+          role: row.caller === me ? "caller" : "callee",
+        };
+      }
+    } catch { /* ignore, retry */ }
+    if (!retry || attempt >= 1) break;
+    // Kurzer Retry für D1-Replica-Lag
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return null;
+}
+
 // ======================================================
 export async function handleVoiceRoutes(request, env, path, params) {
   // CSRF-Schutz für state-mutierende Requests
@@ -191,19 +222,20 @@ export async function handleVoiceRoutes(request, env, path, params) {
       }
       if (sdp.sdp.length > MAX_SDP_BYTES) return json(request, { error: "SDP too large" }, 413);
 
-      const myState = await getVoiceState(env, me);
-      if (!myState || myState.callId !== callId || myState.state !== "ringing") {
+      // Source of truth: call_log (D1, stark konsistent)
+      const call = await getCallForUser(env, callId, me);
+      if (!call || call.role !== "callee" || call.status !== "ringing") {
         return json(request, { error: "No matching incoming call" }, 404);
       }
-      const peer = myState.peer;
+      const peer = call.peer;
       if (!isHandle(peer)) return json(request, { error: "Invalid call state" }, 500);
 
       const answeredAt = Date.now();
 
-      // Beide Seiten auf "connected" setzen
+      // KV-State "best effort" auffrischen (Busy-Check-Cache)
       await Promise.all([
-        setVoiceState(env, me,   { state: "connected", callId, peer, startedAt: myState.startedAt, answeredAt }),
-        setVoiceState(env, peer, { state: "connected", callId, peer: me, startedAt: myState.startedAt, answeredAt }),
+        setVoiceState(env, me,   { state: "connected", callId, peer, startedAt: call.started_at, answeredAt }),
+        setVoiceState(env, peer, { state: "connected", callId, peer: me, startedAt: call.started_at, answeredAt }),
       ]);
 
       // Call-Log aktualisieren
@@ -254,14 +286,14 @@ export async function handleVoiceRoutes(request, env, path, params) {
         return json(request, { error: "Invalid 'candidate'" }, 400);
       }
 
-      // Nur innerhalb eines aktiven Calls weiterleiten
-      const myState = await getVoiceState(env, me);
-      if (!myState || myState.callId !== callId || myState.peer !== to) {
+      // Source of truth: call_log (D1, stark konsistent)
+      const call = await getCallForUser(env, callId, me);
+      if (!call || !["ringing", "connected"].includes(call.status)) {
         return json(request, { error: "No matching call" }, 404);
       }
-
-      // State refreshen (Call lebt)
-      await setVoiceState(env, me, myState);
+      if (call.peer !== to) {
+        return json(request, { error: "Wrong peer" }, 400);
+      }
 
       const delivered = await pushToUserDO(env, to, makeEvent({
         type: "voice:ice",
@@ -285,8 +317,8 @@ export async function handleVoiceRoutes(request, env, path, params) {
       const callId = String(body.callId || "");
       if (!isCallId(callId)) return json(request, { error: "Invalid 'callId'" }, 400);
 
-      const myState = await getVoiceState(env, me);
-      const peer = myState?.peer;
+      const call = await getCallForUser(env, callId, me);
+      const peer = call?.peer;
       const endedAt = Date.now();
 
       // Call-Log: declined

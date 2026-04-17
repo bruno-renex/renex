@@ -32,6 +32,29 @@ let _ringNodes = null;
 let _durationTimer = null;
 let _iceServersCache = null;
 
+// Nur das oberste Fenster betreibt die Voice-UI. Iframes delegieren
+// Call-Start via postMessage an das Parent. So gibt es NIE zwei parallel
+// laufende Overlays / Ringtones / PeerConnections für denselben User.
+const _isTopWindow = (() => {
+  try { return window.top === window.self; } catch { return false; }
+})();
+
+// Outbound ICE Queue — zwischen setLocalDescription und dem
+// bestätigten /voice/ring (bzw. /voice/answer) feuert der Browser
+// bereits die ersten ICE-Candidates. Backend weist sie mit 404 ab
+// (voice_state noch nicht gesetzt). Queue puffert sie bis das
+// Signaling-Setup bestätigt ist und flusht dann.
+let _iceReady  = false;
+let _iceQueue  = [];   // Array<candidate>
+function resetIceQueue() { _iceReady = false; _iceQueue = []; }
+function flushIceQueue(call) {
+  _iceReady = true;
+  const pending = _iceQueue.splice(0);
+  for (const c of pending) {
+    sendIce({ to: call.peer, callId: call.callId, candidate: c }).catch(() => {});
+  }
+}
+
 // ── Text ────────────────────────────────────────────────
 const T = {
   incoming:   "Eingehender Anruf",
@@ -68,6 +91,25 @@ export function initVoiceUI() {
   if (_inited) return;
   _inited = true;
 
+  // Iframe: keine eigene UI. Nur in DevTools als Platzhalter.
+  if (!_isTopWindow) {
+    window.RenexVoice = Object.freeze({
+      startCall: (peer) => {
+        // an das Top-Fenster weiterleiten
+        try {
+          window.top.postMessage(
+            { type: "RENEX_VOICE_START_CALL", peer: String(peer || "").toLowerCase() },
+            window.location.origin
+          );
+        } catch {}
+        return Promise.resolve();
+      },
+      get active() { return null; },
+      get stats()  { return null; },
+    });
+    return;
+  }
+
   initVoiceSignalingInbound();
   mountOverlay();
 
@@ -85,6 +127,14 @@ export function initVoiceUI() {
   voiceBus.addEventListener("voice:cancel",  (e) => onPeerEnd(e.detail, "cancel"));
   voiceBus.addEventListener("voice:hangup",  (e) => onPeerEnd(e.detail, "hangup"));
 
+  // Nachrichten aus Child-iframes (Chat-Panel) — Call-Start-Requests
+  window.addEventListener("message", (ev) => {
+    if (ev.origin !== window.location.origin) return;
+    if (!ev.data || ev.data.type !== "RENEX_VOICE_START_CALL") return;
+    const peer = String(ev.data.peer || "").toLowerCase();
+    if (peer) startOutgoingCall(peer).catch(() => {});
+  });
+
   // Deep-Link: /chat/?with=peer&call=1 → Auto-Call starten
   maybeHandleCallDeepLink();
 
@@ -95,6 +145,16 @@ export function initVoiceUI() {
 }
 
 export async function startOutgoingCall(to) {
+  // Delegation ins Top-Fenster wenn aus Iframe gerufen
+  if (!_isTopWindow) {
+    try {
+      window.top.postMessage(
+        { type: "RENEX_VOICE_START_CALL", peer: String(to || "").toLowerCase() },
+        window.location.origin
+      );
+    } catch {}
+    return;
+  }
   if (_active) { console.warn("Voice: bereits in einem Call"); return; }
   const peer = String(to || "").toLowerCase();
   if (!peer) return;
@@ -103,6 +163,7 @@ export async function startOutgoingCall(to) {
   let iceServers;
   try { iceServers = await getIceServers(); } catch { iceServers = undefined; }
 
+  resetIceQueue();
   const call = new VoiceCall({ callId, peer, direction: "outgoing", iceServers });
   bindCallEvents(call);
   _active = call;
@@ -129,6 +190,8 @@ export async function startOutgoingCall(to) {
       endLocal("error", reason);
       return;
     }
+    // Backend hat voice_state geschrieben → bisher gepufferte ICE flushen
+    flushIceQueue(call);
   } catch (e) {
     console.warn("voice:ring failed", e);
     endLocal("error", T.error);
@@ -146,6 +209,11 @@ async function onIncomingRing(detail) {
   }
   let iceServers;
   try { iceServers = await getIceServers(); } catch { iceServers = undefined; }
+
+  resetIceQueue();
+  // Callee: voice_state wurde vom Backend beim Ring-Handler bereits
+  // gesetzt (Seite = "ringing"). ICE darf also sofort fliessen.
+  _iceReady = true;
 
   const call = new VoiceCall({
     callId: detail.callId,
@@ -196,6 +264,10 @@ function onPeerEnd(detail, reason) {
 // =========================================================
 function bindCallEvents(call) {
   call.addEventListener("icecandidate", (e) => {
+    if (!_iceReady) {
+      _iceQueue.push(e.detail);
+      return;
+    }
     sendIce({ to: call.peer, callId: call.callId, candidate: e.detail }).catch(() => {});
   });
   call.addEventListener("state", () => {
@@ -223,6 +295,7 @@ function endLocal(reason, message) {
   clearMediaSession();
 
   renderEnded(c, message);
+  resetIceQueue();
   setTimeout(() => {
     if (_active === c) {
       c.destroy();

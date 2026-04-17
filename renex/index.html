@@ -1851,6 +1851,7 @@
           <line x1="12" y1="19" x2="12" y2="23"/>
           <line x1="8" y1="23" x2="16" y2="23"/>
         </svg>
+        <span class="strip-badge" id="strip-badge-voice"></span>
       </button>
 
     </div>
@@ -1928,17 +1929,22 @@
     <!-- ── Voice ── -->
     <div class="list-section" id="section-voice">
       <div class="panel-list-header">
-        <span class="panel-list-title">Voice</span>
+        <span class="panel-list-title">📞 Anrufe</span>
       </div>
 
       <!-- Active sessions (populated by JS in future) -->
       <div id="voice-active-list" style="display:none; flex-direction:column; gap:6px; padding:10px 8px; flex-shrink:0;"></div>
 
-      <!-- No active calls state -->
-      <div class="voice-empty" id="voice-empty">
-        <div class="voice-empty-icon">🎤</div>
-        <div class="voice-empty-title">Kein aktiver Call</div>
-        <div class="voice-empty-hint">Voice-Gruppen findest du unter<br><strong>👥 Gruppen</strong></div>
+      <!-- Call-Log Liste (von voiceList.js befüllt) -->
+      <div class="contact-scroll">
+        <ul id="voice-call-list"></ul>
+
+        <!-- Empty state -->
+        <div class="voice-empty" id="voice-empty">
+          <div class="voice-empty-icon">🎤</div>
+          <div class="voice-empty-title">Noch keine Anrufe</div>
+          <div class="voice-empty-hint">Öffne einen Chat und tippe oben auf 📞</div>
+        </div>
       </div>
     </div>
 

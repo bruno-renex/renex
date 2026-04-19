@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-19-5" />
+  <meta name="renex-version" content="2026-04-19-6" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
@@ -2481,9 +2481,27 @@ const loginStatus = document.getElementById("login-status");
 
 // ── Modal helpers ──────────────────────────────────────
 const appEl = document.querySelector(".app");
-function showApp()   { if (appEl) appEl.style.visibility = "visible"; }
-function showModal() { showApp(); modal.classList.remove("hidden"); if (!navigator.maxTouchPoints) handleInput?.focus(); }
-function hideModal() { showApp(); modal.classList.add("hidden"); }
+const htmlEl = document.documentElement;
+
+function showApp() {
+  if (appEl) appEl.style.visibility = "visible";
+  htmlEl.classList.add("has-user");
+}
+function hideApp() {
+  if (appEl) appEl.style.visibility = "hidden";
+  htmlEl.classList.remove("has-user");
+}
+// Modal zeigt die App NICHT an — Login-Modal steht für sich alleine
+// und deckt die App ab. Sonst flackert die unauthentifizierte App durch.
+function showModal() {
+  hideApp();
+  modal.classList.remove("hidden");
+  if (!navigator.maxTouchPoints) handleInput?.focus();
+}
+function hideModal() {
+  showApp();
+  modal.classList.add("hidden");
+}
 
 // ── Auth check on load ─────────────────────────────────
 // Synchron: gecachten User direkt zeigen, sonst Login-Modal → kein Flash
@@ -2500,6 +2518,10 @@ if (new URLSearchParams(location.search).get("registered") === "1") {
 }
 
 // Async: Session serverseitig verifizieren
+// Wichtig für iOS-PWA: Safari und PWA haben getrennte Cookie-Container.
+// Wenn User in Safari eingeloggt war und dann PWA installiert, kann iOS
+// den localStorage übertragen (manchmal), aber NICHT die Session-Cookies.
+// Das führt zu "App sichtbar aber leer" — deshalb hier streng aufräumen:
 (async () => {
   try {
     const res = await apiFetch("/auth/session");
@@ -2507,6 +2529,8 @@ if (new URLSearchParams(location.search).get("registered") === "1") {
       hideModal();
       bootApp();
     } else {
+      // Session invalid → kompletter Reset: localStorage + has-user-Klasse
+      // entfernen, dann Modal zeigen (hideApp deckt die App wirklich ab).
       localStorage.removeItem("my_user");
       showModal();
     }

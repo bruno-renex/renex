@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-19-5" />
+  <meta name="renex-version" content="2026-04-19-6" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
@@ -1509,8 +1509,28 @@ const loginBtn   = document.getElementById("login-btn");
 const loginStatus = document.getElementById("login-status");
 
 // ── Modal helpers ──────────────────────────────────────
-function showModal() { modal.classList.remove("hidden"); handleInput?.focus(); }
-function hideModal() { modal.classList.add("hidden"); }
+// App-Sichtbarkeit zentral steuern — verhindert das iOS-PWA-Problem,
+// dass Safari's localStorage in die PWA übertragen wird aber Cookies NICHT.
+// Ohne den hideApp-Reset würde die App leer und unauthentifiziert angezeigt.
+const appEl = document.querySelector(".app");
+const htmlEl = document.documentElement;
+function showApp() {
+  if (appEl) appEl.style.visibility = "visible";
+  htmlEl.classList.add("has-user");
+}
+function hideApp() {
+  if (appEl) appEl.style.visibility = "hidden";
+  htmlEl.classList.remove("has-user");
+}
+function showModal() {
+  hideApp();
+  modal.classList.remove("hidden");
+  handleInput?.focus();
+}
+function hideModal() {
+  showApp();
+  modal.classList.add("hidden");
+}
 
 // ── Auth check on load ─────────────────────────────────
 (async () => {
@@ -1520,6 +1540,7 @@ function hideModal() { modal.classList.add("hidden"); }
       hideModal();
       bootApp();
     } else {
+      // Session invalid → kompletter Reset (localStorage + UI) und Login zeigen
       localStorage.removeItem("my_user");
       showModal();
     }

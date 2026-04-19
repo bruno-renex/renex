@@ -275,6 +275,9 @@ function bindCallEvents(call) {
     if (call.state === CallState.CONNECTED) {
       startDurationTimer();
       call.startStatsPolling(2000);
+      document.getElementById("section-voice")?.classList.add("voice-live");
+    } else if (call.state === CallState.ENDED) {
+      document.getElementById("section-voice")?.classList.remove("voice-live");
     }
   });
   call.addEventListener("stats", (e) => renderStats(e.detail));
@@ -296,6 +299,7 @@ function endLocal(reason, message) {
 
   renderEnded(c, message);
   resetIceQueue();
+  document.getElementById("section-voice")?.classList.remove("voice-live");
   setTimeout(() => {
     if (_active === c) {
       c.destroy();

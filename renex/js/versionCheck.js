@@ -13,6 +13,17 @@ import lang from "./i18n.js";
 const VERSION_KEY = "renex_app_version";
 const VERSION_URL = "/version.json";
 
+// Die HTML-Datei trägt die Version als <meta name="renex-version" content="...">.
+// Nur wenn HTML-Version === Server-Version ist, sind wir wirklich auf dem aktuellen
+// Build. Damit verhindern wir das iOS-PWA-Problem, dass ein fehlgeschlagener Reload
+// localStorage vorzeitig setzt und so zukünftige Updates nie mehr sichtbar werden.
+function getHtmlVersion() {
+  try {
+    const el = document.querySelector('meta[name="renex-version"]');
+    return el?.getAttribute("content") || null;
+  } catch { return null; }
+}
+
 // Einmaliger Check beim App-Start
 export async function checkAppVersion() {
   try {
@@ -21,27 +32,41 @@ export async function checkAppVersion() {
       cache: "no-store",
       credentials: "omit"
     });
-    if (!res.ok) return; // Offline oder 404 → still
+    if (!res.ok) return;
     const data = await res.json();
     const serverVersion = data?.version;
     if (!serverVersion) return;
 
     const localVersion = localStorage.getItem(VERSION_KEY);
+    const htmlVersion  = getHtmlVersion();
 
-    // Erster Start: Version speichern, kein Banner
+    // Fall 1: wir laufen TATSÄCHLICH auf der aktuellen Version
+    // (HTML-Tag matched Server-version). Nur dann localStorage sync.
+    if (htmlVersion && htmlVersion === serverVersion) {
+      if (localVersion !== serverVersion) {
+        localStorage.setItem(VERSION_KEY, serverVersion);
+      }
+      return;
+    }
+
+    // Fall 2: altes HTML läuft noch → Banner zeigen (egal was localStorage sagt)
+    if (htmlVersion) {
+      console.warn(`🔄 App-Version veraltet: html=${htmlVersion}, server=${serverVersion}`);
+      showUpdateBanner(serverVersion);
+      return;
+    }
+
+    // Fall 3: kein HTML-Marker (z.B. ganz altes Deployment ohne Marker).
+    // Fallback auf localStorage-Vergleich wie früher.
     if (!localVersion) {
       localStorage.setItem(VERSION_KEY, serverVersion);
       return;
     }
-
-    // Versions gleich → alles gut
-    if (localVersion === serverVersion) return;
-
-    // Mismatch → neue Version verfügbar
-    console.warn(`🔄 App-Version veraltet: local=${localVersion}, server=${serverVersion}`);
-    showUpdateBanner(serverVersion);
+    if (localVersion !== serverVersion) {
+      console.warn(`🔄 App-Version veraltet (fallback): local=${localVersion}, server=${serverVersion}`);
+      showUpdateBanner(serverVersion);
+    }
   } catch (e) {
-    // Netzwerk-Fehler ignorieren — beim nächsten Start nochmal versuchen
     console.warn("Version check failed:", e.message);
   }
 }
@@ -97,8 +122,11 @@ function showUpdateBanner(newVersion) {
 
 async function forceReload(newVersion) {
   try {
-    // Neue Version speichern BEVOR Reload — damit nach Reload kein neuer Banner
-    localStorage.setItem(VERSION_KEY, newVersion);
+    // WICHTIG: version NICHT hier in localStorage schreiben.
+    // Wenn der Reload auf iOS-PWA nicht wirklich greift (cached shell),
+    // würde das den User dauerhaft ausschliessen vom Banner-System.
+    // Das Speichern passiert nach dem Reload — wenn die HTML-Meta-Version
+    // mit der Server-Version übereinstimmt (siehe checkAppVersion oben).
 
     // Alle Caches leeren (PWA Service Worker Caches etc.)
     if ("caches" in window) {

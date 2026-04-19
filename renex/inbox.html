@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-19-6" />
+  <meta name="renex-version" content="2026-04-19-7" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
@@ -1533,6 +1533,9 @@ function hideModal() {
 }
 
 // ── Auth check on load ─────────────────────────────────
+// iOS-PWA kann aus Safari's Container localStorage/IndexedDB leaken, aber
+// NICHT die Session-Cookies — das erzeugt Zombie-State. Harter Reset auf
+// Invalid stellt sicher, dass der User sauber einloggen kann.
 (async () => {
   try {
     const res = await apiFetch("/auth/session");
@@ -1540,14 +1543,38 @@ function hideModal() {
       hideModal();
       bootApp();
     } else {
-      // Session invalid → kompletter Reset (localStorage + UI) und Login zeigen
-      localStorage.removeItem("my_user");
+      await nukeLocalState("session invalid");
       showModal();
     }
   } catch {
+    await nukeLocalState("session check failed").catch(() => {});
     showModal();
   }
 })();
+
+async function nukeLocalState(reason) {
+  console.warn("🧹 Nuking local state:", reason);
+  try { localStorage.clear(); } catch {}
+  try { sessionStorage.clear(); } catch {}
+  try {
+    if (indexedDB?.databases) {
+      const dbs = await indexedDB.databases();
+      await Promise.all((dbs || []).map(db => {
+        if (!db.name) return null;
+        return new Promise((resolve) => {
+          const req = indexedDB.deleteDatabase(db.name);
+          req.onsuccess = req.onerror = req.onblocked = () => resolve();
+        });
+      }));
+    }
+  } catch {}
+  try {
+    if ("caches" in window) {
+      const names = await caches.keys();
+      await Promise.all(names.map(n => caches.delete(n)));
+    }
+  } catch {}
+}
 
 // ── Login button ───────────────────────────────────────
 let loginInProgress = false;

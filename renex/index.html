@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-19-6" />
+  <meta name="renex-version" content="2026-04-19-7" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
@@ -2520,8 +2520,9 @@ if (new URLSearchParams(location.search).get("registered") === "1") {
 // Async: Session serverseitig verifizieren
 // Wichtig für iOS-PWA: Safari und PWA haben getrennte Cookie-Container.
 // Wenn User in Safari eingeloggt war und dann PWA installiert, kann iOS
-// den localStorage übertragen (manchmal), aber NICHT die Session-Cookies.
-// Das führt zu "App sichtbar aber leer" — deshalb hier streng aufräumen:
+// den localStorage (und ggf. IndexedDB-State) in die PWA leaken, aber
+// NICHT die Session-Cookies. Resultat: Zombie-State mit localStorage-
+// Daten aber ohne gültige Session. Aggressiver Reset auf Invalid:
 (async () => {
   try {
     const res = await apiFetch("/auth/session");
@@ -2529,15 +2530,44 @@ if (new URLSearchParams(location.search).get("registered") === "1") {
       hideModal();
       bootApp();
     } else {
-      // Session invalid → kompletter Reset: localStorage + has-user-Klasse
-      // entfernen, dann Modal zeigen (hideApp deckt die App wirklich ab).
-      localStorage.removeItem("my_user");
+      // HARTER Cleanup (iOS-PWA-safe):
+      await nukeLocalState("session invalid");
       showModal();
     }
   } catch {
+    await nukeLocalState("session check failed").catch(() => {});
     showModal();
   }
 })();
+
+// Nuke-Helper: alles lokal vergessen und komplett frisch starten.
+// Überlebt: nur Passkey-Credentials (OS-Level, nicht in Web-Storage).
+async function nukeLocalState(reason) {
+  console.warn("🧹 Nuking local state:", reason);
+  try { localStorage.clear(); } catch {}
+  try { sessionStorage.clear(); } catch {}
+  // IndexedDB leeren — typ. E2E-Keys / Peer-Device-Cache. Dürfen weg,
+  // werden beim nächsten Login neu bootstrapped.
+  try {
+    if (indexedDB?.databases) {
+      const dbs = await indexedDB.databases();
+      await Promise.all((dbs || []).map(db => {
+        if (!db.name) return null;
+        return new Promise((resolve) => {
+          const req = indexedDB.deleteDatabase(db.name);
+          req.onsuccess = req.onerror = req.onblocked = () => resolve();
+        });
+      }));
+    }
+  } catch {}
+  // Service Worker Caches leeren (SW selbst bleibt registriert)
+  try {
+    if ("caches" in window) {
+      const names = await caches.keys();
+      await Promise.all(names.map(n => caches.delete(n)));
+    }
+  } catch {}
+}
 
 // ── Login button ───────────────────────────────────────
 let loginInProgress = false;

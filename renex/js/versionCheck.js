@@ -52,21 +52,43 @@ function showUpdateBanner(newVersion) {
 
   const banner = document.createElement("div");
   banner.id = "renex-update-banner";
-  banner.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99999;background:var(--accent,#38BDF8);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:14px;box-shadow:0 2px 12px rgba(0,0,0,0.3);font-family:sans-serif;";
+  // Safe-Area-Top für iOS-PWA (Notch / Dynamic Island)
+  banner.style.cssText = [
+    "position:fixed",
+    "top:0", "left:0", "right:0",
+    "z-index:99999",
+    "background:var(--accent-voice,#38BDF8)",
+    "color:#07070A",
+    "padding:calc(env(safe-area-inset-top,0px) + 10px) 14px 10px",
+    "display:flex", "align-items:center", "justify-content:space-between",
+    "gap:10px",
+    "font-size:14px", "font-weight:600",
+    "box-shadow:0 4px 16px rgba(0,0,0,0.35)",
+    "font-family:system-ui,-apple-system,sans-serif",
+    "animation:renexSlideDown 240ms ease-out",
+  ].join(";");
+
+  // Animation-Keyframes einmalig injizieren
+  if (!document.getElementById("renex-update-banner-style")) {
+    const style = document.createElement("style");
+    style.id = "renex-update-banner-style";
+    style.textContent = "@keyframes renexSlideDown{from{transform:translateY(-100%)}to{transform:translateY(0)}}";
+    document.head.appendChild(style);
+  }
 
   const text = document.createElement("span");
-  text.textContent = lang?.newVersionAvailable || "New version available";
-  text.style.cssText = "flex:1;font-weight:600;";
+  text.textContent = "🔄 " + (lang?.newVersionAvailable || "Neue Version verfügbar");
+  text.style.cssText = "flex:1;min-width:0;";
 
   const btn = document.createElement("button");
-  btn.textContent = lang?.reloadNow || "Reload now";
-  btn.style.cssText = "padding:6px 14px;border-radius:8px;border:none;background:#fff;color:var(--accent,#38BDF8);font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0;";
+  btn.textContent = lang?.reloadNow || "Jetzt aktualisieren";
+  btn.style.cssText = "padding:7px 14px;border-radius:999px;border:none;background:#07070A;color:var(--accent-voice,#38BDF8);font-size:13px;font-weight:800;cursor:pointer;flex-shrink:0;";
   btn.addEventListener("click", () => forceReload(newVersion));
 
   const dismissBtn = document.createElement("button");
   dismissBtn.textContent = "✕";
-  dismissBtn.title = lang?.dismissBtn || "Dismiss";
-  dismissBtn.style.cssText = "padding:4px 8px;border-radius:6px;border:none;background:transparent;color:#fff;font-size:16px;cursor:pointer;flex-shrink:0;opacity:0.8;";
+  dismissBtn.title = lang?.dismissBtn || "Schliessen";
+  dismissBtn.style.cssText = "padding:4px 8px;border-radius:6px;border:none;background:transparent;color:#07070A;font-size:16px;cursor:pointer;flex-shrink:0;opacity:0.7;";
   dismissBtn.addEventListener("click", () => banner.remove());
 
   banner.append(text, btn, dismissBtn);
@@ -84,17 +106,21 @@ async function forceReload(newVersion) {
       await Promise.all(names.map(n => caches.delete(n)));
     }
 
-    // Service Worker aktualisieren
+    // Service Worker: unregister UND update. unregister ist aggressiver —
+    // iOS-PWA cacht den SW-Shell hartnäckig, deshalb killen wir ihn hier
+    // komplett; beim nächsten Load registriert index.html ihn neu.
     if ("serviceWorker" in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(regs.map(r => r.update()));
+      await Promise.all(regs.map(r => r.unregister().catch(() => r.update())));
     }
   } catch (e) {
     console.warn("Force-reload cleanup failed:", e.message);
   }
 
-  // Hard-Reload mit Cache-Busting
+  // Hard-Reload mit Cache-Busting (_v-Query triggert CDN-neu-fetch;
+  // Cloudflare Pages respektiert den Query-String als Cache-Key).
   const url = new URL(window.location.href);
   url.searchParams.set("_v", newVersion);
+  // location.replace (kein History-Eintrag) + neue URL → Browser muss neu laden
   window.location.replace(url.toString());
 }

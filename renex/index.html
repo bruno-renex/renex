@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-19-7" />
+  <meta name="renex-version" content="2026-04-20-1" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
@@ -46,6 +46,7 @@
     font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg-body);
     color: var(--text-primary);
+    height: 100vh;       /* Fallback für alte Browser (Huawei 2019 / Chromium <108) */
     height: 100dvh;
     overflow: hidden;
     display: flex;
@@ -58,6 +59,7 @@
     visibility: hidden; /* wird nach Auth-Check eingeblendet — oder sofort via html.has-user */
     display: flex;
     width: 100%;
+    height: 100vh;       /* Fallback */
     height: 100dvh;
     overflow: hidden;
   }
@@ -745,6 +747,7 @@
     padding: 16px;
     z-index: 201;
     width: 300px;
+    max-height: calc(100vh - 80px);  /* Fallback */
     max-height: calc(100dvh - 80px);
     overflow: hidden; /* Kein Scroll am Popup selbst */
   }
@@ -753,6 +756,7 @@
   #group-step-2 {
     display: flex;
     flex-direction: column;
+    max-height: calc(100vh - 112px); /* Fallback */
     max-height: calc(100dvh - 112px); /* Popup max-height minus padding */
   }
 
@@ -879,6 +883,7 @@
     padding: 24px;
     width: 380px;
     max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 64px);  /* Fallback */
     max-height: calc(100dvh - 64px);
     overflow-y: auto;
     box-shadow: 0 16px 48px rgba(0,0,0,0.6);
@@ -1326,6 +1331,7 @@
   /* ── Hero Section ───────────────────────── */
   .landing-hero {
     position: relative;
+    min-height: 100vh;   /* Fallback */
     min-height: 100dvh;
     display: flex;
     flex-direction: column;
@@ -2527,10 +2533,27 @@ if (new URLSearchParams(location.search).get("registered") === "1") {
   try {
     const res = await apiFetch("/auth/session");
     if (res?.valid) {
+      // iOS-PWA: Cookies können aus Safari leaken aber localStorage nicht.
+      // Wenn Session valid ist aber `my_user` fehlt (fresh PWA-Container mit
+      // geleakter Cookie), handle aus dem Server-Response spiegeln — sonst
+      // bleibt die UI auf "?" und bootApp() bricht ab.
+      if (res.handle && !localStorage.getItem("my_user")) {
+        localStorage.setItem("my_user", String(res.handle).toLowerCase());
+      }
       hideModal();
       bootApp();
+    } else if (res?.rateLimited) {
+      // Rate-Limited oder Network-Error — KEINE Aussage über Session-Gültigkeit!
+      // Niemals localStorage wipen auf Verdacht (zerstört Push-Subscription).
+      console.warn("Session-Check fehlgeschlagen (rate-limited/network) — behalte lokalen State");
+      if (localStorage.getItem("my_user")) {
+        hideModal();
+        bootApp();
+      } else {
+        showModal();
+      }
     } else {
-      // HARTER Cleanup (iOS-PWA-safe):
+      // HARTER Cleanup (iOS-PWA-safe) — nur bei eindeutig ungültiger Session:
       await nukeLocalState("session invalid");
       showModal();
     }

@@ -442,12 +442,13 @@ async function initPushBanner() {
 // ================================
 // INIT
 // ================================
-document.addEventListener("DOMContentLoaded", async () => {
-  initProfileCircle();   // 👈 HIER EINBAUEN
+// In die komplette Init-Logik refaktoriert — wird aufgerufen sobald
+// `my_user` verfügbar ist (sei es von Anfang an oder erst nach dem
+// async Session-Check in index.html/inbox.html bei iOS-PWA).
+async function runInboxInit() {
+  initProfileCircle();
 
-  if (!localStorage.getItem("my_user")) {
-    return; // Login-Modal in index.html übernimmt Auth
-  }
+  if (!localStorage.getItem("my_user")) return;
 
   try {
     // 🔐 E2E lokal sicherstellen
@@ -909,7 +910,28 @@ if (langBtn && langSubmenu) {
   // Letzten Tab wiederherstellen (contacts-Tab existiert nicht mehr → chats)
   const savedTab = localStorage.getItem("inbox_tab");
   switchTab(savedTab === "groups" ? "groups" : "chats");
+}
+
+// Gate: Init nur laufen lassen, wenn `my_user` bereits da ist.
+// Sonst warten bis das "renex-user-ready"-Event gefeuert wird — das feuert
+// der async Auth-Check in index.html/inbox.html sobald handle gesetzt ist.
+// Fix für iOS-PWA: Session-Cookie kommt aus Safari, localStorage NICHT →
+// `my_user` wird asynchron aus /auth/session gespiegelt. Ohne dieses Gate
+// would inbox.js bei DOMContentLoaded return'en → Chats+Gruppen leer.
+let _inboxInitDone = false;
+function triggerInboxInit() {
+  if (_inboxInitDone) return;
+  _inboxInitDone = true;
+  runInboxInit().catch(err => console.warn("inbox init failed:", err));
+}
+document.addEventListener("DOMContentLoaded", () => {
+  if (localStorage.getItem("my_user")) {
+    triggerInboxInit();
+  }
+  // Sonst: auf renex-user-ready warten (dispatched aus index.html/inbox.html
+  // nach erfolgreichem /auth/session Check).
 });
+window.addEventListener("renex-user-ready", triggerInboxInit);
 
 // ================================
 // LOAD CONTACTS

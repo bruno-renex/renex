@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-20-1" />
+  <meta name="renex-version" content="2026-04-20-2" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
@@ -1547,11 +1547,17 @@ function hideModal() {
       // Wenn Session valid ist aber `my_user` fehlt (fresh PWA-Container mit
       // geleakter Cookie), handle aus dem Server-Response spiegeln — sonst
       // bleibt die UI auf "?" und bootApp() bricht bei `if (!me) return;` ab.
-      if (res.handle && !localStorage.getItem("my_user")) {
+      const justLearnedUser = !localStorage.getItem("my_user") && !!res.handle;
+      if (justLearnedUser) {
         localStorage.setItem("my_user", String(res.handle).toLowerCase());
       }
       hideModal();
       bootApp();
+      // inbox.js hat bei DOMContentLoaded early-return'ed weil my_user leer war;
+      // jetzt wo wir ihn haben, den Init-Durchlauf anstossen.
+      if (justLearnedUser) {
+        window.dispatchEvent(new Event("renex-user-ready"));
+      }
     } else if (res?.rateLimited) {
       // Rate-Limited oder Network-Error — KEINE Aussage über Session-Gültigkeit!
       // NIEMALS localStorage wipen auf Verdacht, sonst verlieren wir

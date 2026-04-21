@@ -116,16 +116,18 @@ CREATE TABLE IF NOT EXISTS unread_counters (
 -- Conversion: guest_handle → echter Account via Passkey
 -- ======================================================
 CREATE TABLE IF NOT EXISTS guest_sessions (
-  token        TEXT    PRIMARY KEY,            -- "guest_[32 hex]" — URL-sicherer Einladungstoken
-  convo_id     TEXT    NOT NULL,               -- Welche Konversation der Gast betreten darf
-  convo_type   TEXT    NOT NULL DEFAULT 'dm',  -- 'dm' | 'group'
-  created_by   TEXT    NOT NULL,               -- Handle des Einladenden
-  created_at   INTEGER NOT NULL,
-  expires_at   INTEGER NOT NULL,               -- Unix-Timestamp ms
-  msg_limit    INTEGER NOT NULL DEFAULT 50,    -- Max. sendbare Nachrichten
-  msg_count    INTEGER NOT NULL DEFAULT 0,     -- Bisher gesendete Nachrichten
-  guest_handle TEXT    NOT NULL DEFAULT '',    -- "guest_[8 hex]" — wird beim ersten Join vergeben
-  converted_to TEXT    DEFAULT NULL            -- Echter Handle nach Passkey-Registrierung
+  token             TEXT    PRIMARY KEY,            -- "guest_[32 hex]" — URL-sicherer Einladungstoken
+  convo_id          TEXT    NOT NULL,               -- Welche Konversation der Gast betreten darf
+  convo_type        TEXT    NOT NULL DEFAULT 'dm',  -- 'dm' | 'group'
+  created_by        TEXT    NOT NULL,               -- Handle des Einladenden
+  created_at        INTEGER NOT NULL,
+  expires_at        INTEGER NOT NULL,               -- Unix-Timestamp ms
+  msg_limit         INTEGER NOT NULL DEFAULT 50,    -- Max. sendbare Nachrichten
+  msg_count         INTEGER NOT NULL DEFAULT 0,     -- Bisher gesendete Nachrichten
+  guest_handle      TEXT    NOT NULL DEFAULT '',    -- "guest_[8 hex]" — wird beim ersten Join vergeben
+  converted_to      TEXT    DEFAULT NULL,           -- Echter Handle nach Passkey-Registrierung
+  terms_accepted_at INTEGER DEFAULT NULL,           -- Unix-Timestamp ms — Zeitpunkt der AGB/Datenschutz-Zustimmung
+  terms_version     TEXT    DEFAULT NULL            -- z.B. "2026-04-15"
 );
 
 CREATE INDEX IF NOT EXISTS idx_guest_sessions_convo

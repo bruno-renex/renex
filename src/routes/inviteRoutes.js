@@ -140,9 +140,15 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { token, publicKeyJwk, guestDeviceId, cfTurnstileToken } = body;
+    const { token, publicKeyJwk, guestDeviceId, cfTurnstileToken, termsVersion } = body;
     if (!token || !GUEST_TOKEN_RE.test(token)) {
       return json(request, { error: "Invalid token" }, 400);
+    }
+
+    // ── Terms Acceptance Pflicht ──────────────────────────────────────────
+    const ACCEPTED_TERMS_VERSIONS = ["2026-04-15"];
+    if (typeof termsVersion !== "string" || !ACCEPTED_TERMS_VERSIONS.includes(termsVersion)) {
+      return json(request, { error: "Terms acceptance required" }, 400);
     }
 
     // ── Turnstile Bot-Schutz ──────────────────────────────────────────────
@@ -259,12 +265,12 @@ export async function handleInviteRoutes(request, env, path, params) {
       if (inviteRow.created_by) await pushToUserDO(env, inviteRow.created_by, guestJoinEvent);
     }
 
-    // ── Session-Row in D1 anlegen ─────────────────────────────────────────
+    // ── Session-Row in D1 anlegen (inkl. Terms-Nachweis) ──────────────────
     await env.RENEX_DB.prepare(
       `INSERT INTO guest_sessions
-         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL)`
-    ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle).run();
+         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, terms_accepted_at, terms_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?)`
+    ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle, joinTs, termsVersion).run();
 
     // ── DM-Invite: Template-Row invalidieren (einmalig verwendbar) ─────
     if (inviteRow.convo_type === "dm") {
@@ -483,10 +489,11 @@ export async function handleInviteRoutes(request, env, path, params) {
     env.RENEX_KV.delete(`grp_members:${row.convo_id}`).catch(() => {});
 
     return json(request, {
-      ok:        true,
+      ok:            true,
       realHandle,
-      convoId:   finalConvoId,
-      convoType: row.convo_type,
+      convoId:       finalConvoId,
+      convoType:     row.convo_type,
+      inviterHandle: row.created_by,
     });
   }
 

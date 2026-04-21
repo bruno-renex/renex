@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#38bdf8" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>RENEX – Terms of Service</title>
+  <link rel="stylesheet" href="/colors.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-body, #07070A);
+      color: var(--text-primary, #E6E6EB);
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: var(--bg-panel, #0D0D11);
+      border: 1px solid var(--border-panel, rgba(255,255,255,0.06));
+      border-radius: 20px;
+      padding: 36px 32px;
+      max-width: 600px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      margin: auto;
+    }
+
+    .logo {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--text-primary, #E6E6EB);
+      text-align: center;
+    }
+    .logo .x { color: var(--accent-voice, #38BDF8); }
+
+    .page-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .page-icon svg {
+      width: 44px;
+      height: 44px;
+      color: var(--accent-voice, #38BDF8);
+      filter: drop-shadow(0 0 10px var(--accent-voice-glow, rgba(56,189,248,0.35)));
+    }
+
+    .title {
+      font-size: 20px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    .lang-switch {
+      text-align: center;
+      font-size: 13px;
+    }
+    .lang-switch a {
+      color: var(--text-secondary, #9A9AA3);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .lang-switch a:hover { color: var(--accent-voice, #38BDF8); }
+
+    .section-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent-voice, #38BDF8);
+      margin-top: 8px;
+    }
+
+    .text {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      line-height: 1.7;
+    }
+
+    .text a {
+      color: var(--accent-voice, #38BDF8);
+      text-decoration: none;
+    }
+    .text a:hover { text-decoration: underline; }
+
+    .text ul {
+      margin: 8px 0;
+      padding-left: 20px;
+    }
+    .text ul li {
+      margin-bottom: 6px;
+    }
+
+    .back-link {
+      text-align: center;
+      margin-top: 8px;
+    }
+    .back-link a {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .back-link a:hover { color: var(--accent-voice, #38BDF8); }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">RENE<span class="x">X</span></div>
+
+  <div class="page-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 11l3 3L22 4"/>
+      <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+    </svg>
+  </div>
+
+  <div class="title">Terms of Service</div>
+  <div class="subtitle">Effective from April 15, 2026</div>
+  <div class="lang-switch"><a href="/agb/">Deutsch</a></div>
+
+  <div class="section-title">1. Scope</div>
+  <div class="text">
+    These Terms of Service («Terms») govern the legal relationship between the provider
+    («provider», «we») and users («user», «you») of the RENEX messaging service. By using RENEX,
+    you agree to these Terms. Conflicting or supplementary terms of the user are not recognized.
+  </div>
+
+  <div class="section-title">2. Provider</div>
+  <div class="text" id="ci-provider"></div>
+
+  <div class="section-title">3. Service Description</div>
+  <div class="text">
+    <ul>
+      <li>RENEX is an end-to-end encrypted messaging service that works without traditional registration, using WebAuthn/Passkeys.</li>
+      <li>The service is currently in <strong>beta stage</strong> («work-in-progress») and operated as a private software project by a single developer.</li>
+      <li>Use of the service is <strong>free of charge</strong>. There is no entitlement to specific features, continuous availability, or further development.</li>
+      <li>The service is provided «as is». No particular fitness for a specific purpose or functionality is warranted.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">4. Registration and User Account</div>
+  <div class="text">
+    <ul>
+      <li>To use the service, you choose a handle (username) and register a passkey according to the WebAuthn standard.</li>
+      <li>The private key remains on your device and is never transmitted to the provider.</li>
+      <li>You are responsible for the security of your device and your access credentials.</li>
+      <li>There is no entitlement to registration or to a specific handle. The provider reserves the right to refuse or change handles that violate third-party rights, applicable law, or public morals.</li>
+      <li>You may delete your account at any time within the app. The handle is reserved for 300 days after deletion to prevent identity abuse.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">5. Minimum Age</div>
+  <div class="text">
+    Use of RENEX requires a minimum age of <strong>16 years</strong>. Persons under 16 may only
+    use the service with the consent of a legal guardian.
+  </div>
+
+  <div class="section-title">6. User Obligations and Prohibited Use</div>
+  <div class="text">
+    You agree to use the service only within the scope of applicable law and these Terms.
+    In particular, the following is <strong>prohibited</strong>:
+    <ul>
+      <li>distributing illegal, youth-endangering, pornographic, violence-glorifying, racist, discriminatory, or otherwise unlawful content</li>
+      <li>sending spam, unsolicited advertising, or bulk messages</li>
+      <li>harassment, bullying, threats, or stalking of other users</li>
+      <li>infringement of copyrights, trademarks, or other third-party rights</li>
+      <li>distributing malware, phishing links, or fraud attempts</li>
+      <li>abuse of technical features (e.g., automated requests, denial-of-service attacks, circumvention of security measures)</li>
+      <li>use of false identities to deceive other users</li>
+      <li>any action that could harm the service or its users</li>
+    </ul>
+    Because the service is end-to-end encrypted, the provider cannot moderate message content.
+    Responsibility for transmitted content lies exclusively with the respective user.
+  </div>
+
+  <div class="section-title">7. Suspension and Termination</div>
+  <div class="text">
+    <ul>
+      <li>The provider reserves the right – <strong>after examination of the individual case</strong> – to suspend, remove, or deactivate handles, accounts, or content upon reasonable suspicion of violations of these Terms or applicable law.</li>
+      <li>In serious cases (e.g., illegal content, acute danger to third parties), suspension may also be provisional and immediate, followed by subsequent review.</li>
+      <li>The provider may discontinue or restrict the service at any time, in whole or in part, without any claims arising for the user.</li>
+      <li>You may delete your account at any time without giving reasons within the app.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">8. Reporting Abuse</div>
+  <div class="text">
+    Abuse, illegal content, or security-related issues can be reported by email to:
+    <span id="ci-email-abuse"></span>. Reports will be reviewed and handled within the scope
+    of technical possibilities.
+  </div>
+
+  <div class="section-title">9. Warranty and Liability</div>
+  <div class="text">
+    <ul>
+      <li><strong>No warranty:</strong> The service is provided «as is». No guarantee is given for continuous availability, freedom from errors, data integrity, or protection against data loss.</li>
+      <li><strong>Limitation of liability (Art. 100 Swiss Code of Obligations):</strong> To the extent permitted by law, any liability for direct or indirect damages – including data loss, lost profits, or consequential damages – arising from the use or unavailability of the service is excluded.</li>
+      <li><strong>Mandatory liability:</strong> In the case of gross negligence, intent, or unlawful intent, statutory liability remains.</li>
+      <li><strong>User responsibility:</strong> Since the service is end-to-end encrypted, the user is responsible for creating backups of their keys and messages. Recovery by the provider is technically impossible.</li>
+      <li><strong>No commercial support:</strong> As this is a non-commercial project, there is no entitlement to technical support or bug fixes.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">10. Data Protection</div>
+  <div class="text">
+    The processing of personal data is governed by the
+    <a href="/privacy/">Privacy Policy</a>, which is an integral part of these Terms.
+  </div>
+
+  <div class="section-title">11. Changes to the Terms</div>
+  <div class="text">
+    The provider reserves the right to modify these Terms at any time. Changes will be published
+    on this page. Continued use of the service after a change is deemed acceptance of the updated
+    Terms. In case of substantial changes, the user will additionally be informed within the app.
+  </div>
+
+  <div class="section-title">12. Final Provisions</div>
+  <div class="text">
+    <ul>
+      <li><strong>Applicable law:</strong> Swiss law applies exclusively, excluding conflict-of-law rules and the UN Convention on Contracts for the International Sale of Goods (CISG).</li>
+      <li><strong>Jurisdiction:</strong> Exclusive place of jurisdiction for all disputes arising from or in connection with these Terms is Aarau (Canton of Aargau, Switzerland), unless mandatory statutory provisions provide for a different jurisdiction.</li>
+      <li><strong>Severability:</strong> Should a provision of these Terms be or become invalid or unenforceable in whole or in part, the validity of the remaining provisions shall remain unaffected. The invalid provision shall be replaced by an effective provision that comes closest to the economic purpose of the invalid one.</li>
+      <li><strong>Written form:</strong> Amendments and supplements to these Terms require written form or explicit publication by the provider to be effective.</li>
+    </ul>
+  </div>
+
+  <div class="back-link">
+    <a href="/">&larr; Back to home</a>
+  </div>
+</div>
+
+<script>
+  // Contact info rendered via JS to prevent scraping by bots
+  (function() {
+    var p = [
+      'QnJ1bm8gSG9jaHN0cmFzc2Vy',       // Bruno Hochstrasser
+      'S2lyY2hhY2tlcnN0cmFzc2UgMjg=',     // Kirchackerstrasse 28
+      'NTIyMyBSaW5pa2Vu',                   // 5223 Riniken
+      'U2Nod2Vpeg=='                         // Schweiz
+    ];
+    var e = 'bGVnYWxAcmVuZXguaWQ=';    // legal@renex.id
+    var d = function(s) { return atob(s); };
+    var prov = document.getElementById('ci-provider');
+    if (prov) {
+      var em = d(e);
+      prov.innerHTML = p.map(d).join('<br>') + '<br>Email: <a href="mai' + 'lto:' + em + '">' + em + '</a>';
+    }
+    var abuse = document.getElementById('ci-email-abuse');
+    if (abuse) {
+      var ab = d('YWJ1c2VAcmVuZXguaWQ='); // abuse@renex.id
+      abuse.innerHTML = '<a href="mai' + 'lto:' + ab + '">' + ab + '</a>';
+    }
+  })();
+</script>
+</body>
+</html>

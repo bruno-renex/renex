@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#38bdf8" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>RENEX – Allgemeine Nutzungsbedingungen</title>
+  <link rel="stylesheet" href="/colors.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-body, #07070A);
+      color: var(--text-primary, #E6E6EB);
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: var(--bg-panel, #0D0D11);
+      border: 1px solid var(--border-panel, rgba(255,255,255,0.06));
+      border-radius: 20px;
+      padding: 36px 32px;
+      max-width: 600px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      margin: auto;
+    }
+
+    .logo {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--text-primary, #E6E6EB);
+      text-align: center;
+    }
+    .logo .x { color: var(--accent-voice, #38BDF8); }
+
+    .page-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .page-icon svg {
+      width: 44px;
+      height: 44px;
+      color: var(--accent-voice, #38BDF8);
+      filter: drop-shadow(0 0 10px var(--accent-voice-glow, rgba(56,189,248,0.35)));
+    }
+
+    .title {
+      font-size: 20px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    .lang-switch {
+      text-align: center;
+      font-size: 13px;
+    }
+    .lang-switch a {
+      color: var(--text-secondary, #9A9AA3);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .lang-switch a:hover { color: var(--accent-voice, #38BDF8); }
+
+    .section-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent-voice, #38BDF8);
+      margin-top: 8px;
+    }
+
+    .text {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      line-height: 1.7;
+    }
+
+    .text a {
+      color: var(--accent-voice, #38BDF8);
+      text-decoration: none;
+    }
+    .text a:hover { text-decoration: underline; }
+
+    .text ul {
+      margin: 8px 0;
+      padding-left: 20px;
+    }
+    .text ul li {
+      margin-bottom: 6px;
+    }
+
+    .back-link {
+      text-align: center;
+      margin-top: 8px;
+    }
+    .back-link a {
+      font-size: 13px;
+      color: var(--text-secondary, #9A9AA3);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .back-link a:hover { color: var(--accent-voice, #38BDF8); }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">RENE<span class="x">X</span></div>
+
+  <div class="page-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 11l3 3L22 4"/>
+      <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+    </svg>
+  </div>
+
+  <div class="title">Allgemeine Nutzungsbedingungen (AGB)</div>
+  <div class="subtitle">Gültig ab 15. April 2026</div>
+  <div class="lang-switch"><a href="/terms/">English</a></div>
+
+  <div class="section-title">1. Geltungsbereich</div>
+  <div class="text">
+    Diese Allgemeinen Nutzungsbedingungen (nachfolgend «AGB») regeln das Rechtsverhältnis zwischen
+    dem Anbieter (nachfolgend «Anbieter», «wir») und den Nutzern (nachfolgend «Nutzer», «du») des
+    Messenger-Dienstes RENEX. Mit der Nutzung von RENEX erklärst du dich mit diesen AGB einverstanden.
+    Abweichende oder ergänzende Bedingungen des Nutzers werden nicht anerkannt.
+  </div>
+
+  <div class="section-title">2. Anbieter</div>
+  <div class="text" id="ci-provider"></div>
+
+  <div class="section-title">3. Leistungsbeschreibung</div>
+  <div class="text">
+    <ul>
+      <li>RENEX ist ein Ende-zu-Ende-verschlüsselter Messenger-Dienst, der ohne klassische Registrierung mittels WebAuthn/Passkeys funktioniert.</li>
+      <li>Der Dienst befindet sich derzeit im <strong>Beta-Stadium</strong> («Work-in-Progress») und wird als privates Software-Projekt eines Einzelentwicklers betrieben.</li>
+      <li>Die Nutzung ist <strong>kostenlos</strong>. Es besteht kein Anspruch auf bestimmte Funktionen, ständige Verfügbarkeit oder Weiterentwicklung.</li>
+      <li>Der Dienst wird «wie besehen» («as is») zur Verfügung gestellt. Eine bestimmte Nutzungseignung oder Funktionalität wird nicht zugesichert.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">4. Registrierung und Nutzerkonto</div>
+  <div class="text">
+    <ul>
+      <li>Zur Nutzung wählst du einen Handle (Benutzername) und hinterlegst einen Passkey gemäss WebAuthn-Standard.</li>
+      <li>Der private Schlüssel verbleibt auf deinem Endgerät und wird nie an den Anbieter übertragen.</li>
+      <li>Du bist für die Sicherheit deines Geräts und deiner Zugangsdaten selbst verantwortlich.</li>
+      <li>Ein Anspruch auf Registrierung oder einen bestimmten Handle besteht nicht. Der Anbieter behält sich vor, Handles zu verweigern oder zu ändern, wenn diese gegen Rechte Dritter, geltendes Recht oder den guten Sitten verstossen.</li>
+      <li>Du kannst dein Konto jederzeit selbst in der App löschen. Der Handle wird nach Löschung für 300 Tage gesperrt, um Identitätsmissbrauch zu verhindern.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">5. Mindestalter</div>
+  <div class="text">
+    Die Nutzung von RENEX setzt ein Mindestalter von <strong>16 Jahren</strong> voraus. Personen unter
+    16 Jahren dürfen den Dienst nur mit Zustimmung eines Erziehungsberechtigten nutzen.
+  </div>
+
+  <div class="section-title">6. Pflichten des Nutzers und verbotene Nutzung</div>
+  <div class="text">
+    Du verpflichtest dich, den Dienst nur im Rahmen der geltenden Rechtsordnung und dieser AGB zu nutzen.
+    Insbesondere ist <strong>untersagt</strong>:
+    <ul>
+      <li>die Verbreitung illegaler, jugendgefährdender, pornografischer, gewaltverherrlichender, rassistischer, diskriminierender oder anderweitig rechtswidriger Inhalte</li>
+      <li>das Versenden von Spam, unerwünschter Werbung oder Massennachrichten</li>
+      <li>Belästigung, Mobbing, Bedrohung oder Stalking anderer Nutzer</li>
+      <li>die Verletzung von Urheberrechten, Markenrechten oder sonstigen Rechten Dritter</li>
+      <li>die Verbreitung von Schadsoftware, Phishing-Links oder Betrugsversuchen</li>
+      <li>der Missbrauch technischer Funktionen (z.B. automatisierte Anfragen, Denial-of-Service, Umgehung von Sicherheitsmassnahmen)</li>
+      <li>die Nutzung falscher Identitäten zur Täuschung anderer Nutzer</li>
+      <li>jede Handlung, die den Dienst oder dessen Nutzer schädigen könnte</li>
+    </ul>
+    Da der Dienst Ende-zu-Ende-verschlüsselt ist, kann der Anbieter Nachrichteninhalte nicht moderieren.
+    Die Verantwortung für verbreitete Inhalte liegt ausschliesslich beim jeweiligen Nutzer.
+  </div>
+
+  <div class="section-title">7. Sperrung und Kündigung</div>
+  <div class="text">
+    <ul>
+      <li>Der Anbieter behält sich vor, bei begründetem Verdacht auf Verstösse gegen diese AGB oder geltendes Recht – <strong>nach Prüfung des Einzelfalls</strong> – Handles, Accounts oder Inhalte zu sperren, zu entfernen oder zu deaktivieren.</li>
+      <li>In schwerwiegenden Fällen (z.B. illegale Inhalte, akute Gefahr für Dritte) kann eine Sperrung auch vorläufig und umgehend erfolgen, gefolgt von einer nachträglichen Prüfung.</li>
+      <li>Der Anbieter kann den Dienst jederzeit, ganz oder teilweise, einstellen oder einschränken, ohne dass dem Nutzer daraus Ansprüche erwachsen.</li>
+      <li>Du kannst dein Konto jederzeit ohne Angabe von Gründen in der App löschen.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">8. Missbrauch melden</div>
+  <div class="text">
+    Missbrauch, illegale Inhalte oder sicherheitsrelevante Probleme können per E-Mail gemeldet werden
+    an: <span id="ci-email-abuse"></span>. Meldungen werden geprüft und im Rahmen der technischen
+    Möglichkeiten behandelt.
+  </div>
+
+  <div class="section-title">9. Gewährleistung und Haftung</div>
+  <div class="text">
+    <ul>
+      <li><strong>Keine Gewährleistung:</strong> Der Dienst wird «wie besehen» zur Verfügung gestellt. Es wird keine Garantie für ständige Verfügbarkeit, Fehlerfreiheit, Datenintegrität oder Schutz vor Datenverlust übernommen.</li>
+      <li><strong>Haftungsausschluss (Art. 100 OR):</strong> Soweit gesetzlich zulässig, wird jede Haftung für direkte oder indirekte Schäden – einschliesslich Datenverlust, entgangenem Gewinn oder Folgeschäden –, die durch die Nutzung oder Nichtverfügbarkeit des Dienstes entstehen, ausgeschlossen.</li>
+      <li><strong>Zwingende Haftung:</strong> Bei grober Fahrlässigkeit, Vorsatz oder rechtswidriger Absicht bleibt die gesetzliche Haftung bestehen.</li>
+      <li><strong>Eigenverantwortung:</strong> Da der Dienst Ende-zu-Ende-verschlüsselt ist, ist der Nutzer selbst dafür verantwortlich, Backups seiner Schlüssel und Nachrichten zu erstellen. Ein Wiederherstellen durch den Anbieter ist technisch nicht möglich.</li>
+      <li><strong>Kein kommerzieller Support:</strong> Da es sich um ein unentgeltliches Projekt handelt, besteht kein Anspruch auf technischen Support oder Fehlerbehebung.</li>
+    </ul>
+  </div>
+
+  <div class="section-title">10. Datenschutz</div>
+  <div class="text">
+    Die Verarbeitung personenbezogener Daten richtet sich nach der
+    <a href="/datenschutz/">Datenschutzerklärung</a>, welche integraler Bestandteil dieser AGB ist.
+  </div>
+
+  <div class="section-title">11. Änderungen der AGB</div>
+  <div class="text">
+    Der Anbieter behält sich vor, diese AGB jederzeit anzupassen. Änderungen werden auf dieser Seite
+    veröffentlicht. Die weitere Nutzung des Dienstes nach einer Änderung gilt als Zustimmung zu den
+    angepassten AGB. Bei wesentlichen Änderungen wird der Nutzer zusätzlich innerhalb der App informiert.
+  </div>
+
+  <div class="section-title">12. Schlussbestimmungen</div>
+  <div class="text">
+    <ul>
+      <li><strong>Anwendbares Recht:</strong> Es gilt ausschliesslich schweizerisches Recht, unter Ausschluss kollisionsrechtlicher Regeln und des UN-Kaufrechts (CISG).</li>
+      <li><strong>Gerichtsstand:</strong> Ausschliesslicher Gerichtsstand für alle Streitigkeiten aus oder im Zusammenhang mit diesen AGB ist Aarau (Kanton Aargau, Schweiz), soweit zwingende gesetzliche Bestimmungen nicht einen anderen Gerichtsstand vorsehen.</li>
+      <li><strong>Salvatorische Klausel:</strong> Sollte eine Bestimmung dieser AGB ganz oder teilweise unwirksam oder undurchführbar sein oder werden, so bleibt die Wirksamkeit der übrigen Bestimmungen unberührt. Anstelle der unwirksamen Bestimmung gilt diejenige wirksame Regelung, welche dem wirtschaftlichen Zweck am nächsten kommt.</li>
+      <li><strong>Schriftform:</strong> Änderungen und Ergänzungen dieser AGB bedürfen zu ihrer Wirksamkeit der schriftlichen Form oder der ausdrücklichen Veröffentlichung durch den Anbieter.</li>
+    </ul>
+  </div>
+
+  <div class="back-link">
+    <a href="/">&larr; Zurück zur Startseite</a>
+  </div>
+</div>
+
+<script>
+  // Contact info rendered via JS to prevent scraping by bots
+  (function() {
+    var p = [
+      'QnJ1bm8gSG9jaHN0cmFzc2Vy',       // Bruno Hochstrasser
+      'S2lyY2hhY2tlcnN0cmFzc2UgMjg=',     // Kirchackerstrasse 28
+      'NTIyMyBSaW5pa2Vu',                   // 5223 Riniken
+      'U2Nod2Vpeg=='                         // Schweiz
+    ];
+    var e = 'bGVnYWxAcmVuZXguaWQ=';    // legal@renex.id
+    var d = function(s) { return atob(s); };
+    var prov = document.getElementById('ci-provider');
+    if (prov) {
+      var em = d(e);
+      prov.innerHTML = p.map(d).join('<br>') + '<br>E-Mail: <a href="mai' + 'lto:' + em + '">' + em + '</a>';
+    }
+    var abuse = document.getElementById('ci-email-abuse');
+    if (abuse) {
+      var ab = d('YWJ1c2VAcmVuZXguaWQ='); // abuse@renex.id
+      abuse.innerHTML = '<a href="mai' + 'lto:' + ab + '">' + ab + '</a>';
+    }
+  })();
+</script>
+</body>
+</html>

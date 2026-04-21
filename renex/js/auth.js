@@ -4,11 +4,18 @@ import {
   getDeviceId          // ⬅️ HIER
 } from "./e2e.js";
 import { initServiceWorker, subscribeToPush } from "./pushManager.js";
+import { clearGuestSession } from "./shared/guestStorage.js";
 
 // ================================
 // API BASE URL
 // ================================
 const API = "https://api.renex.id";
+
+// ================================
+// TERMS VERSION
+// Muss synchron mit AGB/Datenschutz-Gültigkeitsdatum sein.
+// ================================
+const TERMS_VERSION = "2026-04-15";
 
 // ================================
 // BASE64URL HELPERS (KORREKT)
@@ -100,6 +107,7 @@ await fetch(`${API}/auth/register/finish`, {
     id: credential.id,
     rawId: arrayBufferToBase64url(credential.rawId),
     type: credential.type,
+    termsVersion: TERMS_VERSION,
     response: {
       attestationObject: arrayBufferToBase64url(
         credential.response.attestationObject
@@ -275,6 +283,7 @@ try {
         id: credential.id,
         rawId: arrayBufferToBase64url(credential.rawId),
         type: credential.type,
+        termsVersion: TERMS_VERSION,
         response: {
           attestationObject: arrayBufferToBase64url(
             credential.response.attestationObject
@@ -362,9 +371,9 @@ try {
   
 if (data.authenticated) {
   localStorage.setItem("my_user", handle);
-  // Alte Gast-Session löschen — sonst wird requireAnySession fälschlicherweise
-  // die Gast-Session zurückgeben statt der echten Session
-  sessionStorage.removeItem("guestSession");
+  // Alte Gast-Session komplett löschen (localStorage + sessionStorage + E2E-Keys) —
+  // sonst wird requireAnySession fälschlicherweise die Gast-Session zurückgeben.
+  clearGuestSession();
 
   // ✅ HIER IST SCHRITT 2: deviceId erzwingen (SOFORT nach erfolgreichem Login)
   getDeviceId();
@@ -426,18 +435,27 @@ if (data.authenticated) {
     try {
       const guestInfo = JSON.parse(_pendingConvert);
       sessionStorage.removeItem("pendingGuestConvert");
-      sessionStorage.removeItem("guestSession");
+      // Gast-Session komplett aufräumen (localStorage + sessionStorage + Keys)
+      clearGuestSession();
 
       // Nachrichten des Gastes auf echten Account übertragen
-      await fetch(`${API}/invite/convert`, {
+      const convertRes = await fetch(`${API}/invite/convert`, {
         method:      "POST",
         credentials: "include",
         headers:     { "Content-Type": "application/json" },
         body:        JSON.stringify({ guestToken: guestInfo.token }),
       });
+      const convertData = await convertRes.json().catch(() => ({}));
 
-      // Nach Gast-Konvertierung → Inbox (nicht direkt in Chat)
-      window.location.replace("/");
+      if (convertData.ok && convertData.convoId) {
+        // Nach Konvertierung → direkt zum migrierten Chat
+        const target = convertData.convoType === "group"
+          ? convertData.convoId
+          : convertData.inviterHandle || convertData.convoId;
+        window.location.replace(`/chat/?with=${encodeURIComponent(target)}`);
+      } else {
+        window.location.replace("/");
+      }
       return;
     } catch (e) {
       console.warn("⚠️ Gast-Konvertierung fehlgeschlagen:", e);

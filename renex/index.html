@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-20-2" />
+  <meta name="renex-version" content="2026-04-21-3" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
@@ -469,9 +469,21 @@
 
   .contact-remove-btn:hover { color: var(--status-error); }
 
-  /* Mobile: always show remove btn (no hover on touch) */
-  @media (hover: none) {
-    .contact-remove-btn { opacity: 0.4; }
+  /* Mobile: pill-Button mit rotem Hintergrund, klar tappbar */
+  @media (hover: none), (pointer: coarse) {
+    .contact-remove-btn {
+      opacity: 1 !important;
+      color: #ef4444 !important;
+      background: rgba(239, 68, 68, 0.18) !important;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 14px;
+      min-width: 36px;
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
   }
 
   /* ═══════════════════════════════════════════
@@ -1285,6 +1297,32 @@
   .login-form button:active { transform: scale(0.98); }
   .login-form button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
+  /* ── Consent Checkbox ──────────────────── */
+  .login-consent {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    padding: 4px 2px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .login-consent input[type="checkbox"] {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    accent-color: var(--accent-voice);
+    cursor: pointer;
+  }
+  .login-consent a {
+    color: var(--accent-voice);
+    text-decoration: none;
+  }
+  .login-consent a:hover { text-decoration: underline; }
+
   #login-status {
     font-size: 13px;
     color: var(--status-error);
@@ -1947,8 +1985,8 @@
         <!-- Empty state -->
         <div class="voice-empty" id="voice-empty">
           <div class="voice-empty-icon">🎤</div>
-          <div class="voice-empty-title">Noch keine Anrufe</div>
-          <div class="voice-empty-hint">Öffne einen Chat und tippe oben auf 📞</div>
+          <div class="voice-empty-title" data-i18n="noCallsYet">No calls yet</div>
+          <div class="voice-empty-hint" data-i18n="openChatForCall">Open a chat and tap 📞 at the top</div>
         </div>
       </div>
     </div>
@@ -1961,7 +1999,7 @@
   <div class="panel-right" id="panel-right">
     <div class="empty-state" id="chat-empty-state">
       <div class="empty-state-icon">💬</div>
-      <div class="empty-state-text">Wähle einen Chat</div>
+      <div class="empty-state-text" data-i18n="selectChatHint">Select a chat</div>
     </div>
     <iframe id="chat-frame" src="" title="Chat" allow="clipboard-write"></iframe>
   </div>
@@ -2072,7 +2110,16 @@
           autocomplete="username"
           spellcheck="false"
         />
-        <button id="login-btn" data-i18n="loginBtn">Login mit Passkey</button>
+        <label class="login-consent" for="login-consent">
+          <input type="checkbox" id="login-consent" />
+          <span>
+            <span data-i18n="consentPrefix">Ich akzeptiere die</span>
+            <a href="/agb/" target="_blank" rel="noopener" id="login-consent-terms" data-i18n="consentTerms">AGB</a>
+            <span data-i18n="consentAnd">und</span>
+            <a href="/datenschutz/" target="_blank" rel="noopener" id="login-consent-privacy" data-i18n="consentPrivacy">Datenschutzerklärung</a><span data-i18n="consentSuffix">.</span>
+          </span>
+        </label>
+        <button id="login-btn" data-i18n="loginBtn" disabled>Login mit Passkey</button>
         <span id="login-status"></span>
       </div>
 
@@ -2206,6 +2253,7 @@
     <div class="landing-footer-links">
       <a href="/impressum/" data-i18n="footerImprint">Impressum</a>
       <a href="/datenschutz/" data-i18n="footerPrivacy" id="footer-privacy-link">Datenschutz</a>
+      <a href="/agb/" data-i18n="footerTerms" id="footer-terms-link">AGB</a>
       <a href="/feedback/" data-i18n="footerFeedback">Feedback</a>
     </div>
     <div class="landing-footer-copy">&copy; 2026 RENEX</div>
@@ -2474,10 +2522,27 @@ import lang, { applyI18n, getLang, setLang } from "./js/i18n.js";
 
 applyI18n();
 
-// Privacy link: language-dependent URL
+// Privacy + Terms links: language-dependent URLs
 if (getLang() !== 'de') {
   const pl = document.getElementById('footer-privacy-link');
   if (pl) pl.href = '/privacy/';
+  const tl = document.getElementById('footer-terms-link');
+  if (tl) tl.href = '/terms/';
+  // Auch die Consent-Links im Login-Modal anpassen
+  const ct = document.getElementById('login-consent-terms');
+  if (ct) ct.href = '/terms/';
+  const cp = document.getElementById('login-consent-privacy');
+  if (cp) cp.href = '/privacy/';
+}
+
+// Consent: Terms Version (muss mit AGB/Datenschutz-Gültigkeitsdatum übereinstimmen)
+const TERMS_VERSION = "2026-04-15";
+const consentBox = document.getElementById('login-consent');
+if (consentBox) {
+  consentBox.addEventListener('change', () => {
+    const lb = document.getElementById('login-btn');
+    if (lb) lb.disabled = !consentBox.checked;
+  });
 }
 
 const modal      = document.getElementById("login-modal");
@@ -2520,6 +2585,11 @@ if (localStorage.getItem("my_user")) {
 // Passkey gerade erstellt → Login-Hinweis im Status anzeigen
 if (new URLSearchParams(location.search).get("registered") === "1") {
   loginStatus.textContent = "✅ Passkey gespeichert – bitte einloggen";
+  // Consent wurde beim Registrieren schon akzeptiert → Checkbox auto-checken
+  if (consentBox) {
+    consentBox.checked = true;
+    consentBox.dispatchEvent(new Event("change"));
+  }
   history.replaceState(null, "", "/");
 }
 
@@ -2573,8 +2643,13 @@ if (new URLSearchParams(location.search).get("registered") === "1") {
 // Überlebt: nur Passkey-Credentials (OS-Level, nicht in Web-Storage).
 async function nukeLocalState(reason) {
   console.warn("🧹 Nuking local state:", reason);
+  // Invite-Daten preservieren (Gast-Konvertierung / Invite-Redirect)
+  const _preserveConvert  = sessionStorage.getItem("pendingGuestConvert");
+  const _preserveRedirect = sessionStorage.getItem("pendingInviteRedirect");
   try { localStorage.clear(); } catch {}
   try { sessionStorage.clear(); } catch {}
+  if (_preserveConvert)  sessionStorage.setItem("pendingGuestConvert",  _preserveConvert);
+  if (_preserveRedirect) sessionStorage.setItem("pendingInviteRedirect", _preserveRedirect);
   // IndexedDB leeren — typ. E2E-Keys / Peer-Device-Cache. Dürfen weg,
   // werden beim nächsten Login neu bootstrapped.
   try {

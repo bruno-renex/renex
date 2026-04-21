@@ -7,6 +7,36 @@
   <link rel="manifest" href="/manifest.json" />
   <title>RENEX – Invitation</title>
   <link rel="stylesheet" href="/colors.css" />
+  <!-- WICHTIG: Turnstile-Callback MUSS vor dem Turnstile-Script-Load
+       synchron global verfügbar sein. Sonst geht der Callback verloren
+       wenn Turnstile fertig ist bevor Module-Scripts laufen (deferred). -->
+  <script>
+    // Token-Holder der vom Modul-Script später gelesen wird
+    window.__cfToken    = null;
+    window.__consentOk  = false;
+    // Terms Version (synchron mit AGB/Datenschutz-Gültigkeitsdatum)
+    window.TERMS_VERSION = "2026-04-15";
+
+    // Zentrale Button-Enable-Logik: Turnstile UND Consent müssen erfüllt sein
+    window.__updateJoinBtn = function() {
+      var btn = document.getElementById("joinBtn");
+      if (!btn) return;
+      btn.disabled = !(window.__cfToken && window.__consentOk);
+    };
+
+    window.onTurnstileSolved = function(t) {
+      window.__cfToken = t;
+      window.__updateJoinBtn();
+    };
+    window.onTurnstileExpired = function() {
+      window.__cfToken = null;
+      window.__updateJoinBtn();
+    };
+    window.onTurnstileError = function() {
+      window.__cfToken = null;
+      window.__updateJoinBtn();
+    };
+  </script>
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -15,6 +45,7 @@
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       background: var(--bg-body, #07070A);
       color: var(--text-primary, #E6E6EB);
+      min-height: 100vh;   /* Fallback für alte Browser */
       min-height: 100dvh;
       display: flex;
       flex-direction: column;
@@ -106,6 +137,33 @@
       box-shadow: 0 0 24px var(--accent-voice-glow, rgba(56,189,248,0.45));
     }
 
+    /* ── Consent Checkbox ──────────────────── */
+    .join-consent {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-secondary, #9A9AA3);
+      line-height: 1.5;
+      padding: 4px 2px;
+      cursor: pointer;
+      user-select: none;
+      text-align: left;
+    }
+    .join-consent input[type="checkbox"] {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      margin-top: 2px;
+      accent-color: var(--accent-voice, #38BDF8);
+      cursor: pointer;
+    }
+    .join-consent a {
+      color: var(--accent-voice, #38BDF8);
+      text-decoration: none;
+    }
+    .join-consent a:hover { text-decoration: underline; }
+
     /* Ghost-Button: reiner Text-Link, kein Border */
     .btn-ghost {
       background: transparent;
@@ -187,10 +245,22 @@
        data-theme="dark"
        data-language="en"
        data-callback="onTurnstileSolved"
-       style="display:flex; justify-content:center;">
+       data-expired-callback="onTurnstileExpired"
+       data-error-callback="onTurnstileError"
+       style="display:flex; justify-content:center; margin-bottom:12px; position:relative; z-index:1;">
   </div>
 
-  <button class="btn btn-primary" id="joinBtn" onclick="joinAsGuest()" disabled>
+  <label class="join-consent" for="join-consent">
+    <input type="checkbox" id="join-consent" />
+    <span>
+      <span id="consent-prefix">Ich akzeptiere die</span>
+      <a href="/agb/" target="_blank" rel="noopener" id="consent-terms-link">AGB</a>
+      <span id="consent-and">und</span>
+      <a href="/datenschutz/" target="_blank" rel="noopener" id="consent-privacy-link">Datenschutzerklärung</a><span id="consent-suffix">.</span>
+    </span>
+  </label>
+
+  <button class="btn btn-primary" id="joinBtn" onclick="joinAsGuest()" disabled style="position:relative; z-index:2;">
     Join as guest
   </button>
 
@@ -214,6 +284,7 @@
 
 <script type="module">
   import lang from "/js/i18n.js";
+  import { setGuestSession, getGuestSession } from "/js/shared/guestStorage.js";
 
   const API = "https://api.renex.id";
   const token = new URLSearchParams(location.search).get("token");
@@ -228,44 +299,116 @@
   document.getElementById("info-messages").innerHTML = lang.maxMessages;
   document.getElementById("info-e2e").textContent    = lang.e2eEncrypted;
 
-  // Turnstile
-  let _cfToken = null;
-  window.onTurnstileSolved = function(t) {
-    _cfToken = t;
-    document.getElementById("joinBtn").disabled = false;
-  };
+  // ── Consent Checkbox: i18n + sprach-abhängige URLs ───
+  document.getElementById("consent-prefix").textContent  = lang.consentPrefix;
+  document.getElementById("consent-and").textContent     = lang.consentAnd;
+  document.getElementById("consent-terms-link").textContent   = lang.consentTerms;
+  document.getElementById("consent-privacy-link").textContent = lang.consentPrivacy;
+  document.getElementById("consent-suffix").textContent  = lang.consentSuffix;
+  const uiLang = localStorage.getItem("renex_lang") || "en";
+  if (uiLang !== "de") {
+    document.getElementById("consent-terms-link").href   = "/terms/";
+    document.getElementById("consent-privacy-link").href = "/privacy/";
+  }
+
+  // Consent Checkbox aktiviert/deaktiviert Button (zusammen mit Turnstile)
+  const consentCb = document.getElementById("join-consent");
+  if (consentCb) {
+    consentCb.addEventListener("change", () => {
+      window.__consentOk = consentCb.checked;
+      if (window.__updateJoinBtn) window.__updateJoinBtn();
+    });
+  }
+
+  // Turnstile-Callbacks sind bereits im inline <head>-Script definiert
+  // (damit der Callback-Race vermieden wird). Wir lesen hier nur den Token.
+  // Falls Turnstile bereits gelöst war bevor Module lief: button-state nachziehen
+  if (window.__updateJoinBtn) window.__updateJoinBtn();
 
   // ── Startup ───────────────────────────────────────────
   (async () => {
     if (!token) return showError(lang.invalidInviteTitle, lang.noTokenMsg);
+
+    // Helper: Redirect zum Chat mit der existierenden Guest-Session
+    const redirectToExistingChat = (existing) => {
+      let target;
+      if (existing.convoType === "group") {
+        target = existing.convoId;
+      } else {
+        // DM: convoId ist "alice:guest_xyz" → inviter ist der andere Teil
+        target = existing.inviterHandle
+              || (existing.convoId && existing.convoId.split(":").find(h => h !== existing.guestHandle))
+              || existing.convoId;
+      }
+      if (!target) return false;
+      console.log("[join] existing session gefunden → redirect zu chat:", target);
+      window.location.replace(`/chat/?with=${encodeURIComponent(target)}&guest=1`);
+      return true;
+    };
+
+    // ── Vor /invite/info: Haben wir bereits eine lokale Session für
+    // GENAU DIESEN Invite-Token? Kann passieren wenn Gast den Tab aus Versehen
+    // geschlossen hat. Der Invite-Token ist serverseitig "__used__", aber
+    // die Session-Cookie + localStorage sind noch gültig → direkt in den Chat.
+    let existingSession = null;
+    try {
+      existingSession = getGuestSession();
+      console.log("[join] existingSession:", !!existingSession, "| inviteToken match:",
+                  existingSession?.inviteToken === token, "| url token:", token?.slice(0, 12));
+      if (existingSession && existingSession.inviteToken === token && existingSession.convoId) {
+        if (redirectToExistingChat(existingSession)) return;
+      }
+    } catch (e) {
+      console.warn("guestSession check failed", e);
+    }
 
     try {
       const res  = await fetch(`${API}/invite/info?token=${encodeURIComponent(token)}`);
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok || !data.valid) {
+        const reason = data.reason || (res.status === 404 ? "not_found" : res.status === 410 ? "already_used" : null);
+
+        // Fallback: Server sagt "already_used" ABER wir haben eine gültige lokale
+        // Session — z.B. Session wurde VOR meinem inviteToken-Fix erstellt und hat
+        // daher keinen inviteToken-Eintrag zum Matchen. Besser: trotzdem redirecten
+        // als stale "already_used"-Fehler zeigen. Server-Cookie ist 24h gültig.
+        if (reason === "already_used" && existingSession && existingSession.convoId) {
+          console.log("[join] 'already_used' aber lokale Session vorhanden → trotzdem redirect");
+          if (redirectToExistingChat(existingSession)) return;
+        }
+
         const msgs = {
           expired:      lang.inviteExpiredReason,
           converted:    lang.inviteAlreadyUsed,
           already_used: lang.inviteAlreadyUsedDm,
           not_found:    lang.inviteNotFound,
         };
-        const reason = data.reason || (res.status === 404 ? "not_found" : res.status === 410 ? "already_used" : null);
         return showError(lang.invalidInviteTitle, msgs[reason] || lang.unknownError);
       }
 
       document.getElementById("chatName").textContent = data.displayName || "Chat";
       document.getElementById("invitedByText").innerHTML = lang.invitedByText(data.createdBy || "?");
 
-      // Eingeloggter User? → sofort beitreten, kein Klick nötig
+      // Eingeloggter User (ECHTER Account, kein Gast)? → sofort beitreten
+      // Guest-Handles (guest_xyz) werden von chat.js auch in my_user gesetzt,
+      // sind aber KEINE echten Logins → sonst würde joinAsLoggedInUser mit
+      // einem abgelaufenen Gast-Cookie fehlschlagen.
       const myUser = localStorage.getItem("my_user");
-      if (myUser) {
+      const isRealLogin = myUser && !myUser.startsWith("guest_");
+      if (isRealLogin) {
         hide("loadingCard");
         document.getElementById("loadingStatus").innerHTML =
           `<span class="spinner"></span> ${lang.joiningText}`;
         show("loadingCard");
         await joinAsLoggedInUser();
         return;
+      }
+
+      // Stale Guest-Handle in my_user entfernen — der User tritt jetzt
+      // einem NEUEN Invite bei, soll als frischer Gast durchlaufen.
+      if (myUser && myUser.startsWith("guest_")) {
+        try { localStorage.removeItem("my_user"); } catch {}
       }
 
       show("inviteCard");
@@ -295,14 +438,20 @@
       );
       const privJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
       publicKeyJwk  = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
-      sessionStorage.setItem("guest_e2e_priv_jwk", JSON.stringify(privJwk));
-      sessionStorage.setItem("guest_device_id", guestDeviceId);
+      // In localStorage speichern (persistent — überlebt Tab-Close).
+      // setGuestSession wird später nach erfolgreichem Join aufgerufen und
+      // persistiert Session + Priv-Key + Device-ID zusammen.
+      // Bis dahin als temporäre Vars in diesem Scope halten.
+      window.__pendingGuestPrivJwk = JSON.stringify(privJwk);
+      window.__pendingGuestDeviceId = guestDeviceId;
     } catch (e) {
       console.warn("⚠️ E2E Key-Generierung fehlgeschlagen:", e);
     }
     // ─────────────────────────────────────────────────────────────────
 
-    if (!_cfToken) {
+    // Turnstile-Token aus globalem Storage lesen (gesetzt vom inline Callback)
+    const cfToken = window.__cfToken;
+    if (!cfToken) {
       status.className = "status error";
       status.textContent = lang.captchaRequired;
       btn.disabled = false;
@@ -314,7 +463,7 @@
         method:      "POST",
         credentials: "include",
         headers:     { "Content-Type": "application/json" },
-        body:        JSON.stringify({ token, publicKeyJwk, guestDeviceId, cfTurnstileToken: _cfToken }),
+        body:        JSON.stringify({ token, publicKeyJwk, guestDeviceId, cfTurnstileToken: cfToken, termsVersion: window.TERMS_VERSION }),
       });
       const data = await res.json();
 
@@ -322,7 +471,7 @@
         status.className = "status error";
         status.textContent = lang.captchaFailed;
         btn.disabled = true;
-        _cfToken = null;
+        window.__cfToken = null;
         if (window.turnstile) window.turnstile.reset();
         return;
       }
@@ -334,7 +483,12 @@
         return;
       }
 
-      sessionStorage.setItem("guestSession", JSON.stringify({
+      // Gast-Session in localStorage persistieren (überlebt Tab-Close).
+      // Helper speichert Session + E2E-Priv-Key + Device-ID atomar.
+      // WICHTIG: inviteToken speichern damit beim Wieder-Öffnen des
+      // DM-Links (Tab war zu) die Session matched werden kann, obwohl
+      // der Invite-Token serverseitig als "__used__" markiert ist.
+      setGuestSession({
         guestHandle:   data.guestHandle,
         convoId:       data.convoId,
         convoType:     data.convoType,
@@ -344,7 +498,13 @@
         msgCount:      data.msgCount,
         deviceId:      guestDeviceId,
         token:         data.sessionToken,
-      }));
+        inviteToken:   token,   // ← NEU: URL-Token für Re-Open-Matching
+      }, {
+        privJwk:  window.__pendingGuestPrivJwk || null,
+        deviceId: window.__pendingGuestDeviceId || guestDeviceId,
+      });
+      delete window.__pendingGuestPrivJwk;
+      delete window.__pendingGuestDeviceId;
 
       status.className = "status ok";
       status.textContent = lang.successRedirecting;

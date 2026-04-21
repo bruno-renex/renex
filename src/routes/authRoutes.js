@@ -226,8 +226,21 @@ export async function handleAuthRoutes(request, env, path, params) {
           existing.push(newCred);
           await writeCredentials(env, handle, existing);
         } else {
-          // Neue Registrierung: Array mit erstem Credential erstellen
+          // Neue Registrierung: Terms-Version validieren
+          const ACCEPTED_TERMS_VERSIONS = ["2026-04-15"];
+          const termsVersion = typeof body.termsVersion === "string" ? body.termsVersion : null;
+          if (!termsVersion || !ACCEPTED_TERMS_VERSIONS.includes(termsVersion)) {
+            return json(request, { error: "Terms acceptance required" }, 400);
+          }
+
+          // Array mit erstem Credential erstellen
           await writeCredentials(env, handle, [newCred]);
+
+          // Terms-Zustimmung in KV speichern (Nachweis für DSG/DSGVO)
+          await env.RENEX_KV.put(
+            `user:terms:${handle}`,
+            JSON.stringify({ acceptedAt: Date.now(), version: termsVersion })
+          );
         }
 
         return json(request, { status: "ok" });
@@ -472,6 +485,9 @@ export async function handleAuthRoutes(request, env, path, params) {
           } catch {}
           await env.RENEX_KV.delete(`e2e:cmk:user-idx:${handle}`);
         }
+
+        // 6b. Terms-Zustimmung löschen (DSG/DSGVO Löschungsrecht)
+        await env.RENEX_KV.delete(`user:terms:${handle}`);
 
         // 7. Handle für 300 Tage sperren
         await env.RENEX_KV.put(

@@ -73,7 +73,7 @@ export default {
   guestConvertNotice:     "🔒 Nachrichten aus deiner Gast-Session können nach der Registrierung nicht mehr angezeigt werden",
   messageExpired:         "⏱ Nachricht automatisch gelöscht",
   deleteMessageTitle:     "Nachricht löschen",
-  confirmDeleteMessage:   "Nachricht für alle löschen?",
+  confirmDeleteMessage:   "Nachricht löschen?",
   statusDelivered:        "Zugestellt",
   statusSent:             "Gesendet",
   messageDeleted:         "🗑️ Nachricht gelöscht",
@@ -89,7 +89,16 @@ export default {
   // ── Footer ───────────────────────────────────────────
   footerImprint:              "Impressum",
   footerPrivacy:              "Datenschutz",
+  footerTerms:                "AGB",
   footerFeedback:             "Feedback",
+
+  // ── Terms Consent ─────────────────────────────────────
+  consentPrefix:              "Ich akzeptiere die",
+  consentAnd:                 "und",
+  consentTerms:               "AGB",
+  consentPrivacy:             "Datenschutzerklärung",
+  consentSuffix:              ".",
+  consentRequired:            "Bitte akzeptiere AGB und Datenschutzerklärung",
 
   // ── inbox.js (dynamic strings) ───────────────────────
   cryptoInitFailed:       "Kryptografie konnte nicht initialisiert werden",
@@ -256,6 +265,11 @@ export default {
   passkeyUnnamed:          "Unbenannt",
   passkeyLoadFailed:       "Passkeys konnten nicht geladen werden",
   passkeyNamePrompt:       "Name für diesen Passkey (optional):",
+
+  // ── Empty States ─────────────────────────────────────
+  selectChatHint:      "Wähle einen Chat",
+  noCallsYet:          "Noch keine Anrufe",
+  openChatForCall:     "Öffne einen Chat und tippe oben auf 📞",
 
   // ── Locale ───────────────────────────────────────────
   locale: "de-DE",

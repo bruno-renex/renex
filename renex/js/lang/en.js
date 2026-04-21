@@ -73,7 +73,7 @@ export default {
   guestConvertNotice:     "🔒 Messages from your guest session cannot be displayed after registration",
   messageExpired:         "⏱ Message automatically deleted",
   deleteMessageTitle:     "Delete message",
-  confirmDeleteMessage:   "Delete message for everyone?",
+  confirmDeleteMessage:   "Delete message?",
   statusDelivered:        "Delivered",
   statusSent:             "Sent",
   messageDeleted:         "🗑️ Message deleted",
@@ -89,7 +89,16 @@ export default {
   // ── Footer ───────────────────────────────────────────
   footerImprint:              "Imprint",
   footerPrivacy:              "Privacy Policy",
+  footerTerms:                "Terms",
   footerFeedback:             "Feedback",
+
+  // ── Terms Consent ─────────────────────────────────────
+  consentPrefix:              "I accept the",
+  consentAnd:                 "and",
+  consentTerms:               "Terms",
+  consentPrivacy:             "Privacy Policy",
+  consentSuffix:              ".",
+  consentRequired:            "Please accept the Terms and Privacy Policy",
 
   // ── inbox.js (dynamic strings) ───────────────────────
   cryptoInitFailed:       "Cryptography could not be initialized",
@@ -256,6 +265,11 @@ export default {
   passkeyUnnamed:          "Unnamed",
   passkeyLoadFailed:       "Could not load Passkeys",
   passkeyNamePrompt:       "Name for this Passkey (optional):",
+
+  // ── Empty States ─────────────────────────────────────
+  selectChatHint:      "Select a chat",
+  noCallsYet:          "No calls yet",
+  openChatForCall:     "Open a chat and tap 📞 at the top",
 
   // ── Locale ───────────────────────────────────────────
   locale: "en-GB",

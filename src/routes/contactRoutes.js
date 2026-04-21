@@ -315,6 +315,29 @@ export async function handleContactRoutes(request, env, path, params) {
           "UPDATE contacts SET status = 'removed', updated_at = ? WHERE user_handle = ? AND contact_handle = ?"
         ).bind(now, contact, me).run();
 
+        // ── Guest-Kontakt: Session invalidieren + aufräumen ──────────
+        if (contact.startsWith("guest_")) {
+          // Guest-Session expiren (alle Sessions mit diesem Handle)
+          await env.RENEX_DB.prepare(
+            "UPDATE guest_sessions SET expires_at = 0 WHERE guest_handle = ?"
+          ).bind(contact).run();
+          // KV-Cache invalidieren
+          const guestSessions = await env.RENEX_DB.prepare(
+            "SELECT token FROM guest_sessions WHERE guest_handle = ?"
+          ).bind(contact).all();
+          for (const gs of (guestSessions.results || [])) {
+            env.RENEX_KV.delete(`guest_session:${gs.token}`).catch(() => {});
+          }
+          // Guest aus conversation_members entfernen
+          await env.RENEX_DB.prepare(
+            "DELETE FROM conversation_members WHERE member_handle = ? AND role = 'guest'"
+          ).bind(contact).run();
+          // Unread-Counter löschen (beide Richtungen)
+          await env.RENEX_DB.prepare(
+            "DELETE FROM unread_counters WHERE (owner = ? AND sender = ?) OR (owner = ? AND sender = ?)"
+          ).bind(me, contact, contact, me).run();
+        }
+
         await bumpContactsVersion(env, me, contact);
         return json(request, { status: "removed", contact });
       }

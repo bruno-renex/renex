@@ -16,9 +16,10 @@ export const INBOX_KEY_TTL = 30_000;
 export const REACTION_EMOJIS = ["💀","🔥","🗿","😭","🫡","💯","🤝"];
 
 // Guest session (read-only, computed once)
-export const _guestData = (() => {
-  try { return JSON.parse(sessionStorage.getItem("guestSession") || "null"); } catch { return null; }
-})();
+// Persistent via localStorage — Gast kann Tab schliessen und wiederkommen,
+// solange die serverseitige TTL (24h) nicht abgelaufen ist.
+import { getGuestSession } from "./shared/guestStorage.js";
+export const _guestData = getGuestSession();
 export const _isGuestMode = !!(_guestData?.guestHandle && _guestData?.token);
 
 // Validation patterns

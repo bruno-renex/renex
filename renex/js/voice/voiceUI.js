@@ -21,7 +21,7 @@ import {
   fetchIceServers,
   newCallId,
 } from "./voiceSignaling.js";
-import { VoiceCall, CallState } from "./voiceClient.js";
+import { VoiceCall, CallState, getUserMediaWithFallback } from "./voiceClient.js";
 
 // ── Singleton-State ──────────────────────────────────────
 let _active   = null;              // VoiceCall | null
@@ -72,7 +72,10 @@ const T = {
   hold:       "Halten",
   busy:       "Besetzt",
   notContact: "Kein Kontakt",
-  micDenied:  "Kein Mikrofon-Zugriff",
+  micDenied:  "Kein Mikrofon-Zugriff — in den Browser-Einstellungen erlauben",
+  micNotFound: "Kein Mikrofon gefunden",
+  micInUse:    "Mikrofon wird bereits von anderer App genutzt",
+  micUnsupported: "Mikrofon wird nicht unterstützt",
   error:      "Fehler",
 };
 
@@ -159,6 +162,30 @@ export async function startOutgoingCall(to) {
   const peer = String(to || "").toLowerCase();
   if (!peer) return;
 
+  // ── SCHRITT 1: Mikro-Permission ZUERST — im User-Gesture-Kontext ──
+  // Gleiche Begründung wie bei acceptIncoming: alte Browser verlieren die
+  // User-Gesture nach async-awaits → Permission-Dialog erscheint nicht.
+  let micStream;
+  try {
+    micStream = await getUserMediaWithFallback();
+  } catch (e) {
+    console.warn("getUserMedia failed at outgoing", e?.name, e?.message);
+    let msg = T.error;
+    if (e?.name === "NotAllowedError" || e?.name === "SecurityError") {
+      msg = T.micDenied;
+    } else if (e?.name === "NotFoundError" || e?.name === "DevicesNotFoundError") {
+      msg = T.micNotFound || T.micDenied;
+    } else if (e?.name === "NotReadableError" || e?.name === "TrackStartError") {
+      msg = T.micInUse || T.micDenied;
+    } else if (e?.name === "OverconstrainedError" || e?.name === "ConstraintNotSatisfiedError") {
+      msg = T.micUnsupported || T.micDenied;
+    }
+    // Kein Call aktiv → Toast/Fehlermeldung via kurzzeitigen Placeholder
+    // (kein endLocal nötig, da noch kein Overlay aufgebaut wurde)
+    try { window.alert(msg); } catch {}
+    return;
+  }
+
   const callId = newCallId();
   let iceServers;
   try { iceServers = await getIceServers(); } catch { iceServers = undefined; }
@@ -173,10 +200,11 @@ export async function startOutgoingCall(to) {
 
   let offer;
   try {
-    offer = await call.createLocalOffer();
+    offer = await call.createLocalOffer(micStream);
   } catch (e) {
-    console.warn("getUserMedia/createOffer failed", e);
-    endLocal("error", e?.name === "NotAllowedError" ? T.micDenied : T.error);
+    console.warn("createLocalOffer failed", e);
+    try { micStream.getTracks().forEach(t => t.stop()); } catch {}
+    endLocal("error", T.error);
     return;
   }
 
@@ -451,15 +479,41 @@ async function acceptIncoming() {
   if (!_active || _active.direction !== "incoming") return;
   const call = _active;
 
+  // ── SCHRITT 1: Mikro-Permission ZUERST — im User-Gesture-Kontext ──
+  // Ältere Chromium-Versionen (z.B. Brave auf Huawei 2019) verlieren die
+  // User-Gesture-Freigabe nach async-awaits und zeigen dann GAR KEINEN
+  // Permission-Dialog mehr. Deshalb direkt im Click-Handler anfragen.
+  let micStream;
+  try {
+    micStream = await getUserMediaWithFallback();
+  } catch (e) {
+    console.warn("getUserMedia failed at accept", e?.name, e?.message);
+    let msg = T.error;
+    if (e?.name === "NotAllowedError" || e?.name === "SecurityError") {
+      msg = T.micDenied;
+    } else if (e?.name === "NotFoundError" || e?.name === "DevicesNotFoundError") {
+      msg = T.micNotFound || T.micDenied;
+    } else if (e?.name === "NotReadableError" || e?.name === "TrackStartError") {
+      msg = T.micInUse || T.micDenied;
+    } else if (e?.name === "OverconstrainedError" || e?.name === "ConstraintNotSatisfiedError") {
+      msg = T.micUnsupported || T.micDenied;
+    }
+    endLocal("error", msg);
+    return;
+  }
+
   call.markConnecting();
   updateOverlay();
   stopRingtone();
 
+  // ── SCHRITT 2: Answer erstellen mit dem bereits geholten Stream ──
   let answer;
   try {
-    answer = await call.createLocalAnswer();
+    answer = await call.createLocalAnswer(micStream);
   } catch (e) {
     console.warn("createLocalAnswer failed", e);
+    // Stream aufräumen falls answer fehlschlug
+    try { micStream.getTracks().forEach(t => t.stop()); } catch {}
     endLocal("error", e?.name === "NotAllowedError" ? T.micDenied : T.error);
     return;
   }

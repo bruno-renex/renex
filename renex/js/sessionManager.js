@@ -87,8 +87,12 @@ export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn)
 
   // Guard: nur 1x pro Session — wird bei Fehler zurückgesetzt
   const onceKey = `bootstrapped:${sid}`;
-  if (sessionStorage.getItem(onceKey)) return;
+  if (sessionStorage.getItem(onceKey)) {
+    console.warn("🔑 ensureBootstrapped: SKIP (already bootstrapped)", sid);
+    return;
+  }
   sessionStorage.setItem(onceKey, "1");
+  console.warn("🔑 ensureBootstrapped: START", { sid, me, peer });
 
   try {
 

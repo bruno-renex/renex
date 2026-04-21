@@ -4,6 +4,7 @@
 import { apiFetch } from "./api.js";
 import lang from "./i18n.js";
 import { REACTION_EMOJIS } from "./chatState.js";
+import { guestDisplayName } from "./shared/guestUtils.js";
 
 // Module-private state
 let _ctxMenu = null;
@@ -30,7 +31,8 @@ const replyBarCancel = document.getElementById("reply-bar-cancel");
 
 export function showReplyBar(id, from, plaintext) {
   _replyState = { id, from, plaintext };
-  if (replyBarFrom) replyBarFrom.textContent = from + ": ";
+  // Guest-Handle → lesbarer Display-Name (z.B. "Guest Silver Cobra")
+  if (replyBarFrom) replyBarFrom.textContent = guestDisplayName(from) + ": ";
   if (replyBarText) replyBarText.textContent = plaintext.slice(0, 80) + (plaintext.length > 80 ? "…" : "");
   replyBar?.classList.add("visible");
   document.getElementById("msg-input")?.focus();
@@ -93,7 +95,13 @@ export function closeContextMenu() {
   if (_ctxMenu) { _ctxMenu.remove(); _ctxMenu = null; }
 }
 
-document.addEventListener("click",  closeContextMenu);
+// Globale Close-Listener: nur schliessen wenn der Click AUSSERHALB des
+// Menüs stattfand. Ohne diesen Check konnte ein Tap auf ein Menü-Item
+// (z.B. "Löschen") das Menü entfernen BEVOR der Item-Handler ausgeführt
+// wurde — typisches iOS-PWA-Verhalten mit Pointer-Events.
+document.addEventListener("click", (e) => {
+  if (_ctxMenu && !_ctxMenu.contains(e.target)) closeContextMenu();
+});
 document.addEventListener("scroll", closeContextMenu, { passive: true });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeContextMenu(); });
 
@@ -110,24 +118,47 @@ export function showContextMenu(div, { id, from, textEl, ts }) {
   menu.id = "msg-context-menu";
   _ctxMenu = menu;
 
+  // Helper: attach tap/click to menu items. Mobile PWAs verschlucken manchmal
+  // normale click-Events wenn auf non-button Divs — daher pointerup als Primär-Trigger.
+  const attachTap = (el, handler) => {
+    let _handled = false;
+    const fire = (e) => {
+      if (_handled) return;
+      _handled = true;
+      e.preventDefault();
+      e.stopPropagation();
+      try { handler(e); } catch (err) { console.error("[ctx] handler error:", err); }
+    };
+    el.addEventListener("click", fire);
+    // Fallback für Mobile: pointerup feuert auch wenn click verschluckt wird
+    el.addEventListener("pointerup", (e) => {
+      // nur Primärtaste / Touch
+      if (e.button !== undefined && e.button !== 0) return;
+      fire(e);
+    });
+  };
+
   if (canReact) {
     const emojiRow = document.createElement("div");
     emojiRow.className = "ctx-emoji-row";
     const myReactions = (reactionsCache.get(id) || {});
     REACTION_EMOJIS.forEach(emoji => {
       const btn = document.createElement("button");
+      btn.type = "button";
       btn.className = "ctx-emoji-btn";
       const handles = myReactions[emoji] || [];
       if (handles.includes(_getMyUser())) btn.classList.add("active");
       btn.textContent = emoji;
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
+      attachTap(btn, async () => {
+        console.log("[ctx] emoji tap:", emoji, "for msg:", id);
         closeContextMenu();
-        const res = await apiFetch("/chat/react", {
-          method: "POST",
-          body: JSON.stringify({ messageId: id, emoji })
-        });
-        if (res.reactions) { reactionsCache.set(id, res.reactions); renderReactionBar(div, id); }
+        try {
+          const res = await apiFetch("/chat/react", {
+            method: "POST",
+            body: JSON.stringify({ messageId: id, emoji })
+          });
+          if (res?.reactions) { reactionsCache.set(id, res.reactions); renderReactionBar(div, id); }
+        } catch (err) { console.warn("React failed", err); }
       });
       emojiRow.appendChild(btn);
     });
@@ -137,9 +168,11 @@ export function showContextMenu(div, { id, from, textEl, ts }) {
   if (canReply) {
     const replyItem = document.createElement("div");
     replyItem.className = "ctx-item";
+    replyItem.setAttribute("role", "button");
+    replyItem.setAttribute("tabindex", "0");
     replyItem.innerHTML = '<span class="ctx-item-icon">↩️</span> Antworten';
-    replyItem.addEventListener("click", (e) => {
-      e.stopPropagation();
+    attachTap(replyItem, () => {
+      console.log("[ctx] reply tap for msg:", id);
       closeContextMenu();
       showReplyBar(id, from, textEl?.textContent || "");
     });
@@ -149,10 +182,16 @@ export function showContextMenu(div, { id, from, textEl, ts }) {
   if (canEdit) {
     const editItem = document.createElement("div");
     editItem.className = "ctx-item";
+    editItem.setAttribute("role", "button");
+    editItem.setAttribute("tabindex", "0");
     editItem.innerHTML = '<span class="ctx-item-icon">✏️</span> Bearbeiten';
-    editItem.addEventListener("click", (e) => {
-      e.stopPropagation();
+    attachTap(editItem, () => {
+      console.log("[ctx] edit tap for msg:", id);
       closeContextMenu();
+      if (typeof _startInlineEdit !== "function") {
+        console.error("[ctx] _startInlineEdit is not a function:", _startInlineEdit);
+        return;
+      }
       _startInlineEdit(div, id, textEl?.textContent || "");
     });
     menu.appendChild(editItem);
@@ -166,11 +205,18 @@ export function showContextMenu(div, { id, from, textEl, ts }) {
     }
     const delItem = document.createElement("div");
     delItem.className = "ctx-item danger";
+    delItem.setAttribute("role", "button");
+    delItem.setAttribute("tabindex", "0");
     delItem.innerHTML = '<span class="ctx-item-icon">🗑️</span> Löschen';
-    delItem.addEventListener("click", (e) => {
-      e.stopPropagation();
+    attachTap(delItem, () => {
+      console.log("[ctx] delete tap for msg:", id);
       closeContextMenu();
-      if (confirm(lang.confirmDeleteMessage)) _deleteMessage(id);
+      if (typeof _deleteMessage !== "function") {
+        console.error("[ctx] _deleteMessage is not a function:", _deleteMessage);
+        return;
+      }
+      const msg = lang.confirmDeleteMessage || "Delete this message?";
+      if (window.confirm(msg)) _deleteMessage(id);
     });
     menu.appendChild(delItem);
   }
@@ -199,14 +245,20 @@ function getLiveOpts(div, opts) {
 export function attachContextMenu(div, opts) {
   let longPressTimer = null;
   let _didScroll = false;
+  // Verhindert dass synthesized Click nach Long-Press das Menü nochmals öffnet
+  let _longPressOpened = false;
 
   div.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     if (e.pointerType === "mouse") return;
     _didScroll = false;
+    _longPressOpened = false;
     longPressTimer = setTimeout(() => {
       longPressTimer = null;
-      if (!_didScroll) showContextMenu(div, getLiveOpts(div, opts));
+      if (!_didScroll) {
+        _longPressOpened = true;
+        showContextMenu(div, getLiveOpts(div, opts));
+      }
     }, 500);
   }, { passive: true });
 
@@ -224,6 +276,14 @@ export function attachContextMenu(div, opts) {
     if (e.target.closest(".reaction-pill")) return;
     if (e.target.closest(".reply-quote")) return;
     if (e.target.closest(".reaction-bar")) return;
+    // Wenn Long-Press das Menü bereits geöffnet hat → diesen synthesized
+    // Click ignorieren (sonst würde das Menü geschlossen+neu geöffnet, was
+    // auf Mobile zu verlorenen Taps auf Menü-Items führen kann)
+    if (_longPressOpened) {
+      _longPressOpened = false;
+      e.stopPropagation();
+      return;
+    }
     e.stopPropagation();
     showContextMenu(div, getLiveOpts(div, opts));
   });

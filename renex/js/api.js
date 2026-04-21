@@ -7,16 +7,13 @@ if (globalThis.location?.hostname === "app.renex.id") {
   console.log = () => {};
 }
 
-// Gast-Token aus sessionStorage (gesetzt von /join/)
+import { getGuestSession, hasGuestSession } from "./shared/guestStorage.js";
+
+// Gast-Token aus Storage (gesetzt von /join/) — jetzt persistent via localStorage.
 // Wird als X-Guest-Token Header mitgeschickt wenn kein regulärer Cookie vorhanden
-// (Safari/ITP blockiert Cross-Origin Set-Cookie von api.renex.id)
+// (Safari/ITP blockiert Cross-Origin Set-Cookie von api.renex.id).
 function getGuestTokenFromStorage() {
-  try {
-    const raw = sessionStorage.getItem("guestSession");
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    return data?.token || null;
-  } catch { return null; }
+  return getGuestSession()?.token || null;
 }
 
 // Global backoff state: verhindert Request-Flood bei 429/Network-Error
@@ -32,11 +29,11 @@ export async function apiFetch(path, options = {}) {
   const guestToken = getGuestTokenFromStorage();
   const method = (options.method || "GET").toUpperCase();
 
-  // Content-Type nur bei Requests mit Body setzen (POST, PUT, PATCH).
-  // Bei GET-Requests ist Content-Type semantisch falsch (kein Body) und
-  // erzwingt einen CORS-Preflight mit zwei Custom-Headern, was zu
-  // Preflight-Cache-Problemen in Safari/Chrome führen kann.
-  const needsContentType = method !== "GET" && method !== "HEAD" && method !== "DELETE";
+  // Content-Type setzen wenn ein Body vorhanden ist (unabhängig von Methode).
+  // DELETE kann ebenfalls einen JSON-Body haben (z.B. /chat/message/delete),
+  // ohne Content-Type würde das Backend "Invalid JSON" zurückgeben.
+  // Bei GET/HEAD gibt es per Definition keinen Body → kein Content-Type → kein Preflight.
+  const needsContentType = !!options.body && method !== "GET" && method !== "HEAD";
 
   let res;
   try {
@@ -58,7 +55,7 @@ export async function apiFetch(path, options = {}) {
 
   if (res.status === 401) {
     // Gäste haben keine echte Session — kein Redirect, nur Error werfen
-    const isGuest = !!sessionStorage.getItem("guestSession");
+    const isGuest = hasGuestSession();
     if (!isGuest) {
       localStorage.removeItem("my_user");
       const onLoginPage = window.location.pathname === "/" || window.location.pathname.endsWith("index.html");

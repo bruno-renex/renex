@@ -33,6 +33,7 @@ import {
 import { apiFetch } from "./api.js";
 import lang from "./i18n.js";
 import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
+import { getGuestPrivJwk, getGuestDeviceId, clearGuestSession } from "./shared/guestStorage.js";
 import { formatTimestamp } from "./shared/timeFormat.js";
 import {
   encryptGroupMessage,
@@ -667,6 +668,17 @@ if (event?.type === "NEW_MESSAGE") {
   const isForThisChat = isGroupConversation(withUser)
     ? (msg.groupId === withUser || msg.sid === withUser)
     : ((msg.from === withUser && msg.to === me) || (msg.from === me && msg.to === withUser));
+
+  // Race-Fix: wenn diese Nachricht VON MIR kommt UND ich gerade eigene Messages
+  // flushe (pendingByTempId hat Einträge), SKIP die NEW_MESSAGE. Der fetch-
+  // Response von flushDeferredQueue adoptiert das pending-Bubble und vergibt
+  // die richtige ID. Ohne diesen Skip: Duplikat (pending-Bubble + neue Bubble).
+  if (isForThisChat && msg.from === me && pendingByTempId.size > 0
+      && msg.id && !renderedMessageIds.has(msg.id)) {
+    console.log("⏭️ NEW_MESSAGE von mir übersprungen — pending Flush läuft:", msg.id);
+    return;
+  }
+
   if (isForThisChat && e2eReady) {
     const wasAtBottom = isUserAtBottom();
     processMessage(msg).then(isNew => {
@@ -1457,12 +1469,24 @@ if (deferredQueue.length === 0) return;
 
       const saved = res?.message;
 
+      // WICHTIG: saved.id IMMER zu renderedMessageIds hinzufügen (unabhängig
+      // davon ob ein pending-Bubble gefunden wird). Sonst kann der
+      // nachfolgende loadMessages/Polling-Cycle eine DUPLIKAT-Bubble rendern.
+      if (saved?.id) renderedMessageIds.add(saved.id);
+
       if (item.tempId) {
         const div = pendingByTempId.get(item.tempId);
         if (div && saved?.id) {
           div.classList.remove("pending");
           div.dataset.id = saved.id;
-          renderedMessageIds.add(saved.id);
+          div.dataset.status = "sent";
+          // Timestamp mit Server-ts aktualisieren und "Sende…" entfernen
+          const timeEl = div.querySelector(".timestamp");
+          if (timeEl && saved.ts) {
+            let meta = formatTimestamp(saved.ts);
+            meta += " · " + (lang.statusSent || "Gesendet");
+            timeEl.textContent = meta;
+          }
         }
         pendingByTempId.delete(item.tempId);
       }
@@ -1744,6 +1768,26 @@ if (firstLoad) {
   // SEND BUTTON
   // =========================
   sendBtn.addEventListener("click", async () => {
+    // ── Edit-Modus: wenn eine Nachricht gerade bearbeitet wird,
+    // speichert der Send-Button die Änderung statt eine neue Nachricht zu senden.
+    // Intuitiver auf Mobile (Enter-Taste ist nicht immer "senden").
+    const editTa = document.querySelector(".edit-textarea");
+    if (editTa) {
+      const editDiv = editTa.closest(".me, .other");
+      const editMsgId = editDiv?.dataset.id;
+      const editTextEl = editDiv?.querySelector(".msg-text");
+      if (editMsgId && editDiv && editTextEl) {
+        const newEditText = editTa.value.trim();
+        const originalEditText = editTextEl.textContent || "";
+        if (newEditText && newEditText !== originalEditText) {
+          await editMessage(editMsgId, newEditText, editDiv, editTextEl, editTa);
+        } else {
+          cancelInlineEdit(editDiv, editTextEl, editTa);
+        }
+      }
+      return; // niemals normale Send-Logik ausführen während Edit offen ist
+    }
+
     const text = inputEl.textContent.trim();
 
     if (!text) return;
@@ -2895,11 +2939,22 @@ if (attachment) {
 
   if (attachment.type === "gif" && attachment.payload?.gifUrl) {
     // GIF: direkt anzeigen
+    const gifWrap = document.createElement("div");
+    gifWrap.style.cssText = "display:inline-block;position:relative;";
     const img = document.createElement("img");
     img.src = attachment.payload.gifUrl;
     img.style.cssText = "max-width:220px;max-height:180px;border-radius:8px;display:block;";
-    img.alt = "GIF";
-    attEl.appendChild(img);
+    img.alt = "GIF via GIPHY";
+    gifWrap.appendChild(img);
+    // GIPHY Attribution (Pflicht für Production-API-Key)
+    const attr = document.createElement("a");
+    attr.href = "https://giphy.com";
+    attr.target = "_blank";
+    attr.rel = "noopener noreferrer";
+    attr.textContent = "via GIPHY";
+    attr.style.cssText = "display:block;font-size:10px;line-height:1;color:var(--text-secondary,#8E8E93);text-decoration:none;margin-top:4px;letter-spacing:0.03em;opacity:0.75;user-select:none;";
+    gifWrap.appendChild(attr);
+    attEl.appendChild(gifWrap);
 
   } else if (attachment.type === "photo" && attachment.payload) {
     // Foto: Platzhalter mit Lade-Button
@@ -3011,7 +3066,8 @@ if (replyToId || (replyFrom && replyPlaintext)) { // Quote-Block immer zeigen we
   quote.dataset.replyToId = replyToId;
   const qFrom = document.createElement("div");
   qFrom.className = "reply-quote-from";
-  qFrom.textContent = replyFrom || "…";
+  // Guest-Handle (guest_xyz) → lesbarer Display-Name (z.B. "Guest Silver Cobra")
+  qFrom.textContent = replyFrom ? guestDisplayName(replyFrom) : "…";
   const qText = document.createElement("div");
   qText.className = "reply-quote-text";
   qText.textContent = replyPlaintext ? replyPlaintext.slice(0, 100) : "…";
@@ -3298,20 +3354,48 @@ async function processMessage(m) {
   const _reqGskTarget   = m.requestedFrom || m.message; // m.message = requestedFrom (D1-Fallback)
   const _myHandleForGsk = _isGuestMode ? _guestData?.guestHandle : getMyUser();
   if (m.type === "request_gsk" && _reqGskGroupId && _reqGskTarget === _myHandleForGsk && m.from) {
-    if (!renderedMessageIds.has(m.id)) {
+    // Rate-Limit pro Requester: max 1 Antwort alle 15s. Vorher nur einmal
+    // pro Message-ID → wenn alice31 die Antwort aus irgendeinem Grund
+    // nicht bekam, gab es keine Retry. Jetzt beantworten wir wiederholte
+    // request_gsks — mit Cooldown gegen Spam.
+    const gskResponseKey = `gsk_resp:${_reqGskGroupId}:${m.from}`;
+    const lastResponse = Number(sessionStorage.getItem(gskResponseKey) || 0);
+    if (Date.now() - lastResponse < 15_000) {
       renderedMessageIds.add(m.id);
-      (async () => {
-        try {
-          await getOrCreateGroupSK(_reqGskGroupId, _myHandleForGsk);
-          const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(m.from)}`);
-          const devs = Array.isArray(r.devices) ? r.devices : [];
-          if (devs.length) {
-            await distributeGroupSK(_reqGskGroupId, _myHandleForGsk,
-              devs.map(d => ({ ...d, memberHandle: m.from })), apiFetch);
-          }
-        } catch (e) { console.warn("⚠️ request_gsk (polling) response fehlgeschlagen:", e); }
-      })();
+      return false;
     }
+    renderedMessageIds.add(m.id);
+    sessionStorage.setItem(gskResponseKey, String(Date.now()));
+    (async () => {
+      try {
+        await getOrCreateGroupSK(_reqGskGroupId, _myHandleForGsk);
+        // Inbox-Cache IMMER invalidieren — stale empty cache verhindert sonst
+        // die Auflösung wenn alice31 ihre Keys gerade erst hochgeladen hat.
+        try { invalidateInboxKeyCache(m.from); } catch {}
+        const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(m.from)}`);
+        const devs = Array.isArray(r.devices) ? r.devices : [];
+        if (devs.length) {
+          await distributeGroupSK(_reqGskGroupId, _myHandleForGsk,
+            devs.map(d => ({ ...d, memberHandle: m.from })), apiFetch);
+          console.log("🔑 GSK an Requester verteilt:", m.from, "Devices:", devs.length);
+        } else {
+          // Race: alice31 hat ihre Keys noch nicht hochgeladen → nach 3s retry
+          console.warn("⏳ Keine Devices für Requester — Retry in 3s:", m.from);
+          setTimeout(async () => {
+            try {
+              invalidateInboxKeyCache(m.from);
+              const r2 = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(m.from)}`);
+              const devs2 = Array.isArray(r2.devices) ? r2.devices : [];
+              if (devs2.length) {
+                await distributeGroupSK(_reqGskGroupId, _myHandleForGsk,
+                  devs2.map(d => ({ ...d, memberHandle: m.from })), apiFetch);
+                console.log("🔑 GSK an Requester verteilt (Retry):", m.from);
+              }
+            } catch {}
+          }, 3000);
+        }
+      } catch (e) { console.warn("⚠️ request_gsk response fehlgeschlagen:", e); }
+    })();
     return false;
   }
   // ─────────────────────────────────────────────────────────────────────────
@@ -3825,33 +3909,62 @@ async function ensureGroupChatReady(groupId, myHandle) {
     console.warn("⚠️ ensureGroupChatReady: Mitgliederliste fehlgeschlagen", e);
   }
 
-  // Nur einmal pro Session distribuieren (verhindert Spam beim Tab-Reload)
-  const distKey = `gsk-dist:${groupId}`;
-  if (sessionStorage.getItem(distKey)) {
-    console.log("🔑 GSK bereits in dieser Session distribuiert:", groupId);
-    return;
-  }
-
   if (members.length === 0) {
     console.log("🏘️ Gruppe hat noch keine anderen Mitglieder:", groupId);
-    sessionStorage.setItem(distKey, "1");
     return;
   }
 
-  // Schritt 1: Eigenen GSK an alle Members parallel senden (Push) — kein Rate-Limit-Risiko
-  const distributeResults = await Promise.allSettled(members.map(async (member) => {
-    const devices = await fetchInboxKeys(member.member_handle);
-    if (!devices?.length) return { handle: member.member_handle, distributed: false };
-    const tagged = devices.map(d => ({ ...d, memberHandle: member.member_handle }));
-    await distributeGroupSK(groupId, myHandle, tagged, apiFetch);
-    return { handle: member.member_handle, distributed: true };
-  }));
+  // Helper: Verteile GSK an einen Member (mit Logging)
+  const distributeOne = async (memberHandle) => {
+    try {
+      try { invalidateInboxKeyCache(memberHandle); } catch {}
+      const devices = await fetchInboxKeys(memberHandle);
+      if (!devices?.length) {
+        console.warn(`⚠️ distribute: keine Devices für ${memberHandle}`);
+        return false;
+      }
+      const tagged = devices.map(d => ({ ...d, memberHandle }));
+      await distributeGroupSK(groupId, myHandle, tagged, apiFetch);
+      console.log(`🔑 GSK verteilt an ${memberHandle} (${devices.length} device(s))`);
+      return true;
+    } catch (e) {
+      console.warn(`⚠️ distribute zu ${memberHandle} fehlgeschlagen:`, e?.message || e);
+      return false;
+    }
+  };
 
-  const distributed = distributeResults.filter(r => r.status === "fulfilled" && r.value?.distributed).length;
-  const failed      = distributeResults.filter(r => r.status === "rejected").length;
-  if (failed > 0) console.warn("⚠️ GSK distribute fehlgeschlagen für", failed, "Members");
+  // Schritt 1: Eigenen GSK an alle Members parallel senden (erster Versuch)
+  const firstRound = await Promise.allSettled(
+    members.map(m => distributeOne(m.member_handle).then(ok => ({ handle: m.member_handle, ok })))
+  );
+  const failedMembers = new Set(
+    firstRound
+      .filter(r => r.status === "fulfilled" && !r.value.ok)
+      .map(r => r.value.handle)
+  );
 
-  // Schritt 2: Fehlende GSKs sequenziell anfordern (Pull) — 300ms Stagger verhindert 429
+  // Schritt 2: AGGRESSIVE RETRIES mit wachsendem Intervall (3s, 10s, 30s).
+  // Kritisch für Gast-Joins: wenn GSK nicht ankommt, können existierende Member
+  // NIE die Messages des neuen Gastes entschlüsseln. Mehrfach-Retries decken ab:
+  //  • Race mit Key-Upload-Propagation
+  //  • Kurzzeitige Network-/Rate-Limit-Errors
+  //  • Cache-Staleness
+  if (failedMembers.size > 0) {
+    console.warn(`⏳ GSK distribute fehlgeschlagen für ${failedMembers.size} Member(s) — Retries geplant`);
+    [3000, 10000, 30000].forEach((delay, idx) => {
+      setTimeout(async () => {
+        const stillFailed = Array.from(failedMembers);
+        if (stillFailed.length === 0) return;
+        console.log(`🔄 GSK Retry #${idx + 1} (nach ${delay}ms) für:`, stillFailed);
+        for (const handle of stillFailed) {
+          const ok = await distributeOne(handle);
+          if (ok) failedMembers.delete(handle);
+        }
+      }, delay);
+    });
+  }
+
+  // Schritt 3: Fehlende GSKs von Members sequenziell anfordern (Pull)
   let requested = 0;
   for (const member of members) {
     const existingGsk = await getGroupSK(groupId, member.member_handle);
@@ -3859,13 +3972,13 @@ async function ensureGroupChatReady(groupId, myHandle) {
       await requestGSKFrom(groupId, member.member_handle);
       requested++;
       if (requested < members.length) {
-        await new Promise(r => setTimeout(r, 300)); // 300ms zwischen Requests
+        await new Promise(r => setTimeout(r, 300));
       }
     }
   }
 
-  sessionStorage.setItem(distKey, "1");
-  console.log("✅ GSK distribuiert:", { groupId, members: members.length, distributed, requested, failed });
+  const distributedCount = firstRound.filter(r => r.status === "fulfilled" && r.value.ok).length;
+  console.log("✅ GSK Initial-Distribution:", { groupId, members: members.length, distributed: distributedCount, failed: failedMembers.size, requested });
 }
 
 // ======================================================
@@ -3911,10 +4024,11 @@ window.__chatStartupDone = true;
     const attachBar = document.getElementById("attach-bar");
     if (attachBar) attachBar.style.display = "none";
 
-    // Ephemeren Key aus sessionStorage laden und in IDB einspielen
-    // damit initE2EKeys() / loadPrivateKey() den gleichen Key findet
-    const guestDeviceId = _guestData.deviceId || sessionStorage.getItem("guest_device_id");
-    const privJwkRaw    = sessionStorage.getItem("guest_e2e_priv_jwk");
+    // Ephemeren Key aus localStorage laden und in IDB einspielen
+    // damit initE2EKeys() / loadPrivateKey() den gleichen Key findet.
+    // Persistent: überlebt Tab-Close (serverseitige TTL 24h ist das Limit).
+    const guestDeviceId = _guestData.deviceId || getGuestDeviceId();
+    const privJwkRaw    = getGuestPrivJwk();
     if (privJwkRaw && guestDeviceId) {
       try {
         const privJwk   = JSON.parse(privJwkRaw);
@@ -3962,15 +4076,29 @@ window.__chatStartupDone = true;
 
     // ── DM-Gast: CMK → SessionKey Bootstrap (wie reguläre User) ───
     const me = _guestData.guestHandle;
-    const peerOk = await fetchAndStorePeerPublicKey(withUser);
-    if (!peerOk) {
-      console.warn("⚠️ DM-Gast: Peer-Key nicht gefunden für", withUser);
-    }
+    console.warn("🔑 DM-Gast Bootstrap START:", { me, withUser });
 
-    const ok = await ensureConversationReady(me, withUser, fetchInboxKeys, apiFetch);
-    console.log("🧪 DM-Gast ensureConversationReady:", ok);
+    // Guard zurücksetzen — Gast-Join kann Bootstrap unterbrochen haben
+    const dmSid = `dm:${[me, withUser].sort().join(":")}`;
+    sessionStorage.removeItem(`bootstrapped:${dmSid}`);
+    sessionStorage.removeItem(`fallback_bootstrapped:${dmSid}`);
+    sessionStorage.removeItem(`cmk_req_sent:${dmSid}`);
+
+    const peerOk = await fetchAndStorePeerPublicKey(withUser);
+    console.warn("🔑 DM-Gast peerKey:", peerOk);
+
+    let ok;
+    try {
+      ok = await ensureConversationReady(me, withUser, fetchInboxKeys, apiFetch);
+    } catch (e) {
+      console.warn("🔑 DM-Gast ensureConversationReady ERROR:", e);
+      ok = false;
+    }
+    console.warn("🔑 DM-Gast ensureConversationReady:", ok);
 
     const entry = await bootConversation(me, withUser);
+    console.warn("🔑 DM-Gast bootConversation:", entry === null ? "null" : { ready: entry?.ready, hasSkBytes: !!entry?.skBytes, hasCmk: !!entry?.cmkBytes });
+
     if (entry?.ready && entry?.skBytes) {
       sessionKeyBytes = entry.skBytes;
       sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
@@ -3983,12 +4111,17 @@ window.__chatStartupDone = true;
 
     if (e2eReady) {
       try { await loadMessages(); } catch (e) { console.warn("Guest DM loadMessages failed:", e); }
+      // WICHTIG: flushDeferredQueue() für ausgehende Nachrichten die der Gast
+      // schon getippt hat bevor E2E ready war. Ohne das bleiben sie in
+      // "Sende..."-Status hängen bis der User manuell etwas Neues tippt.
+      await flushDeferredQueue();
       await flushDeferredInboundMessages();
       startTimeBasedRotation();
-      console.log("👤 DM-Gast gestartet (E2E bereit):", withUser, "als", me);
+      console.warn("✅ DM-Gast gestartet (E2E bereit):", withUser, "als", me);
     } else {
       // CMK noch nicht da → KV-Fetch + Fallback wie regulärer User
       const kvFetched = await fetchAndStoreCMK(me, withUser, apiFetch, fetchInboxKeys);
+      console.warn("🔑 DM-Gast KV-Fetch:", kvFetched);
       if (kvFetched) {
         const e = await bootConversation(me, withUser);
         if (e?.skBytes) {
@@ -3997,14 +4130,16 @@ window.__chatStartupDone = true;
           sessionRotationIndex = e.rotationIndex ?? 0;
           e2eReady = true;
           updateSendButton();
-          console.log("✅ DM-Gast: CMK aus KV geladen – E2E bereit");
+          console.warn("✅ DM-Gast: CMK aus KV geladen – E2E bereit");
           await loadMessages();
+          await flushDeferredQueue();
           await flushDeferredInboundMessages();
           startTimeBasedRotation();
         }
       }
       if (!e2eReady) {
         const fallbacked = await fallbackBootstrap(me, withUser, fetchInboxKeys, apiFetch);
+        console.warn("🔑 DM-Gast fallbackBootstrap:", fallbacked);
         if (fallbacked) {
           const e = await bootConversation(me, withUser);
           if (e?.skBytes) {
@@ -4013,8 +4148,9 @@ window.__chatStartupDone = true;
             sessionRotationIndex = e.rotationIndex ?? 0;
             e2eReady = true;
             updateSendButton();
-            console.log("✅ DM-Gast: Fallback Bootstrap – E2E bereit");
+            console.warn("✅ DM-Gast: Fallback Bootstrap – E2E bereit");
             await loadMessages();
+            await flushDeferredQueue();
             await flushDeferredInboundMessages();
             startTimeBasedRotation();
           }

@@ -13,6 +13,17 @@ import lang from "./i18n.js";
 const VERSION_KEY = "renex_app_version";
 const VERSION_URL = "/version.json";
 
+// Versions-spezifischer Dismiss: speichert die Version, für die der User "Nein"
+// gesagt hat. Banner wird nur unterdrückt wenn die Server-Version immer noch
+// diese gleiche Version ist. Neue Version → Banner erscheint wieder.
+// → Intuitiv: "Nein" gilt nur für die aktuelle Version, nicht für alle zukünftigen.
+const DISMISS_SESSION_KEY = "renex_banner_dismissed_version";
+
+// Tracking des letzten Reload-Versuchs (übersteht Page-Reload)
+// Verhindert Banner-Loop wenn iOS-PWA-Shell den Reload nicht wirklich ausgeführt hat.
+const LAST_RELOAD_ATTEMPT_KEY = "renex_last_reload_attempt";
+const RELOAD_COOLDOWN_MS = 300_000; // 5 min
+
 // Die HTML-Datei trägt die Version als <meta name="renex-version" content="...">.
 // Nur wenn HTML-Version === Server-Version ist, sind wir wirklich auf dem aktuellen
 // Build. Damit verhindern wir das iOS-PWA-Problem, dass ein fehlgeschlagener Reload
@@ -24,8 +35,24 @@ function getHtmlVersion() {
   } catch { return null; }
 }
 
-// Einmaliger Check beim App-Start
-export async function checkAppVersion() {
+// Check ob ein Reload-Versuch auf diese Version gerade erst stattfand.
+// Verhindert sofortiges Wiedererscheinen des Banners wenn iOS-PWA den
+// Reload nicht wirklich ausgeführt hat (HTML-Shell aus Cache geladen).
+function wasRecentlyAttempted(serverVersion) {
+  try {
+    const raw = localStorage.getItem(LAST_RELOAD_ATTEMPT_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    const age = Date.now() - Number(parsed?.ts || 0);
+    return parsed?.version === serverVersion && age < RELOAD_COOLDOWN_MS;
+  } catch { return false; }
+}
+
+// Version-Check. Zwei Modi:
+//  silent=true  → kein Banner, bei veralteter Version direkter Silent-Reload
+//                 (für App-Start und Return nach langer Pause >30min)
+//  silent=false → Banner zeigen (für aktive Session, User entscheidet)
+export async function checkAppVersion({ silent = false } = {}) {
   try {
     // Cache-Buster damit der Browser nicht stillschweigend cachet
     const res = await fetch(`${VERSION_URL}?t=${Date.now()}`, {
@@ -46,18 +73,61 @@ export async function checkAppVersion() {
       if (localVersion !== serverVersion) {
         localStorage.setItem(VERSION_KEY, serverVersion);
       }
+      // Cleanup: Dismiss-/Attempt-State löschen — wir sind aktuell
+      sessionStorage.removeItem(DISMISS_SESSION_KEY);
+      localStorage.removeItem(LAST_RELOAD_ATTEMPT_KEY);
       return;
     }
 
-    // Fall 2: altes HTML läuft noch → Banner zeigen (egal was localStorage sagt)
+    // Fall 1b: Kein HTML-Marker vorhanden (z.B. altes Deployment ohne Meta-Tag),
+    // aber localStorage ist bereits auf Server-Version. Kein Reload nötig —
+    // sonst Reload-Loop bei jedem App-Start, weil die alte HTML nie ein
+    // Meta-Tag bekommt. Wir sind effektiv aktuell.
+    if (!htmlVersion && localVersion && localVersion === serverVersion) {
+      sessionStorage.removeItem(DISMISS_SESSION_KEY);
+      localStorage.removeItem(LAST_RELOAD_ATTEMPT_KEY);
+      return;
+    }
+
+    // ── Veraltete Version erkannt — Entscheidung je nach Modus ──
+
+    // Cooldown-Schutz (auch für silent): falls letzter Reload-Versuch <5min
+    // her ist und dieselbe Version noch aktiv ist, NICHT erneut reloaden
+    // → verhindert iOS-PWA-Reload-Loop.
+    if (wasRecentlyAttempted(serverVersion)) {
+      console.warn(`🔄 Reload-Versuch für ${serverVersion} noch im Cooldown — übersprungen`);
+      return;
+    }
+
+    // SILENT MODE (App-Start / Return nach >30min): direkt reloaden, kein Banner
+    if (silent) {
+      if (htmlVersion) {
+        console.warn(`🔄 Silent auto-update: html=${htmlVersion} → server=${serverVersion}`);
+      } else {
+        console.warn(`🔄 Silent auto-update (fallback): local=${localVersion} → server=${serverVersion}`);
+      }
+      forceReload(serverVersion);
+      return;
+    }
+
+    // BANNER MODE (aktive Session <30min): User fragen
+
+    // User hat in dieser Session bereits "✕" für GENAU DIESE Version geklickt
+    // → kein Banner. Neue Server-Version → Banner erscheint wieder.
+    const dismissedVersion = sessionStorage.getItem(DISMISS_SESSION_KEY);
+    if (dismissedVersion && dismissedVersion === serverVersion) {
+      return;
+    }
+
+    // Fall 2: altes HTML läuft noch → Banner zeigen
     if (htmlVersion) {
       console.warn(`🔄 App-Version veraltet: html=${htmlVersion}, server=${serverVersion}`);
       showUpdateBanner(serverVersion);
       return;
     }
 
-    // Fall 3: kein HTML-Marker (z.B. ganz altes Deployment ohne Marker).
-    // Fallback auf localStorage-Vergleich wie früher.
+    // Fall 3: kein HTML-Marker (ganz altes Deployment ohne Marker).
+    // Fallback auf localStorage-Vergleich.
     if (!localVersion) {
       localStorage.setItem(VERSION_KEY, serverVersion);
       return;
@@ -114,7 +184,12 @@ function showUpdateBanner(newVersion) {
   dismissBtn.textContent = "✕";
   dismissBtn.title = lang?.dismissBtn || "Schliessen";
   dismissBtn.style.cssText = "padding:4px 8px;border-radius:6px;border:none;background:transparent;color:#07070A;font-size:16px;cursor:pointer;flex-shrink:0;opacity:0.7;";
-  dismissBtn.addEventListener("click", () => banner.remove());
+  dismissBtn.addEventListener("click", () => {
+    // Versions-spezifischer Dismiss: User sagt "Nein" zu DIESER Version.
+    // Kommt später eine neue Server-Version raus → Banner erscheint wieder.
+    try { sessionStorage.setItem(DISMISS_SESSION_KEY, newVersion); } catch {}
+    banner.remove();
+  });
 
   banner.append(text, btn, dismissBtn);
   document.body.appendChild(banner);
@@ -122,7 +197,21 @@ function showUpdateBanner(newVersion) {
 
 async function forceReload(newVersion) {
   try {
-    // WICHTIG: version NICHT hier in localStorage schreiben.
+    // Reload-Attempt tracken → verhindert Banner-Loop falls Reload fehlschlägt.
+    // checkAppVersion prüft diesen Eintrag und skippt den Banner 5 min lang
+    // wenn dieselbe Server-Version noch aktiv ist.
+    try {
+      localStorage.setItem(LAST_RELOAD_ATTEMPT_KEY, JSON.stringify({
+        version: newVersion,
+        ts: Date.now()
+      }));
+    } catch {}
+
+    // Auch Dismiss-Flag versions-spezifisch setzen für sofortigen Schutz —
+    // wird nach erfolgreichem Reload (Fall 1) wieder aufgeräumt.
+    try { sessionStorage.setItem(DISMISS_SESSION_KEY, newVersion); } catch {}
+
+    // WICHTIG: VERSION_KEY NICHT hier in localStorage schreiben.
     // Wenn der Reload auf iOS-PWA nicht wirklich greift (cached shell),
     // würde das den User dauerhaft ausschliessen vom Banner-System.
     // Das Speichern passiert nach dem Reload — wenn die HTML-Meta-Version

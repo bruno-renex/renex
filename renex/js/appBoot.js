@@ -1,14 +1,19 @@
 import { startGlobalControlPolling } from "./controlSocket.js";
 import { initServiceWorker, subscribeToPush, initInstallPrompt, isStandalone } from "./pushManager.js";
 import { checkAppVersion } from "./versionCheck.js";
+import { hasGuestSession } from "./shared/guestStorage.js";
 import { initVoiceUI } from "./voice/voiceUI.js";
 import { initVoiceButtons } from "./voice/voiceButtons.js";
 import { initVoiceList } from "./voice/voiceList.js";
 import { initVoiceRooms } from "./voice/voiceRooms.js";
 
+// Threshold für "lange Pause" — >30 min Inaktivität → Silent-Update statt Banner
+const LONG_PAUSE_MS = 30 * 60 * 1000;
+
 export function bootApp() {
-  // Version-Check zuerst (unabhängig von Login-Status) — erkennt veraltete PWA-Shells
-  checkAppVersion().catch(() => {});
+  // App-Start = Silent Mode: User hat die App gerade geöffnet, direkt auf
+  // aktuelle Version reloaden ist nicht störend.
+  checkAppVersion({ silent: true }).catch(() => {});
 
   // nur wenn eingeloggt
   const me = localStorage.getItem("my_user");
@@ -28,7 +33,7 @@ export function bootApp() {
 
   // Gäste nutzen Polling statt WebSocket — kein WS-Ticket für Guest-Sessions
   // (requireSession schlägt fehl → 401 → ungewollter Redirect zur Login-Seite)
-  const isGuest = !!sessionStorage.getItem("guestSession");
+  const isGuest = hasGuestSession();
   if (isGuest) return;
 
   // einmalig starten
@@ -43,12 +48,20 @@ export function bootApp() {
   try { initVoiceButtons(); } catch (e) { console.warn("initVoiceButtons failed", e); }
   try { initVoiceList();    } catch (e) { console.warn("initVoiceList failed", e); }
 
-  // Version-Check auch bei Tab-Wake-Up (PWA nach längerer Inaktivität)
+  // Version-Check bei Tab-Wake-Up (PWA nach längerer Inaktivität).
+  // Hybrid-Modus:
+  //  • Away >30min  → Silent Auto-Update (User war weg, kein Chat in Arbeit)
+  //  • Away <30min  → Banner (aktive Session, User entscheidet)
   if (!window.__versionVisibilityHandler) {
     window.__versionVisibilityHandler = true;
+    let _lastHiddenTs = 0;
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) {
-        checkAppVersion().catch(() => {});
+      if (document.hidden) {
+        _lastHiddenTs = Date.now();
+      } else {
+        const awayMs = _lastHiddenTs ? Date.now() - _lastHiddenTs : 0;
+        const silent = awayMs > LONG_PAUSE_MS;
+        checkAppVersion({ silent }).catch(() => {});
       }
     });
   }

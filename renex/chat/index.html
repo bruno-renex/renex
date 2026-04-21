@@ -45,29 +45,44 @@
       font-family: sans-serif;
       background: var(--bg-body);
       color: var(--text-primary);
-      /* kein flex hier — Wrapper übernimmt das Layout */
+      /* Body als Flex-Container → Wrapper kann nie wegscrollen */
+      display: flex;
+      flex-direction: column;
     }
 
-    /* ── Wrapper: am iframe-Viewport verankert, kann nicht wegscrollen ── */
+    /* ── Wrapper: füllt den body, kein position:absolute nötig ── */
     #chat-wrapper {
-      position: absolute;
-      inset: 0;
+      flex: 1;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       overflow: hidden;
     }
 
-    /* ── Header: nie wegscrollen ── */
+    /* ── Header: WIRKLICH fixiert (position:fixed) — kompatibel mit ALLEN
+       Browsern inkl. Huawei 2019 / Chromium <80. position:sticky braucht
+       einen scrollbaren Parent, den wir hier nicht zuverlässig haben.
+       position:fixed ist am Viewport verankert und kann nicht wegscrollen. ── */
     #chat-header {
-      flex-shrink: 0;
-      position: relative;
-      z-index: 20;
+      position: fixed !important;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: var(--bg-body);
+      border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+      padding: 10px 16px;
       padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
+      box-sizing: border-box;
     }
 
-    /* Spacer nicht nötig */
+    /* Spacer gleicht die Header-Höhe aus damit der Messages-Container
+       nicht unter dem fixierten Header beginnt. Höhe muss zur Header-Höhe
+       passen (padding 10 + content ~34 + padding 10 ≈ 54px + safe-area-top). */
     #chat-header-spacer {
-      display: none;
+      display: block;
+      flex-shrink: 0;
+      height: calc(env(safe-area-inset-top, 0px) + 54px);
     }
 
 #chat-menu-btn:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
@@ -121,6 +136,20 @@
   word-break: break-word;
   overflow: visible;
   cursor: default;
+  /* Mobile-Fix: verhindert native Text-Selektion auf Long-Press (Android/iOS),
+     die sonst unser Context-Menu blockiert. */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  /* Tap-Delay auf Android entfernen */
+  touch-action: manipulation;
+  }
+  /* Text innerhalb der Bubble darf aber kopiert werden (Doppel-Tap) */
+  .me .msg-text, .other .msg-text {
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    user-select: text;
   }
 
   /* Gelöschte Nachricht: Text immer vollständig sichtbar */
@@ -234,6 +263,10 @@
   padding: 6px 0;
   min-width: 170px;
   animation: ctxFadeIn 0.12s ease;
+  /* Mobile: zuverlässige Touch-Interaktion, keine native Gesten */
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 @keyframes ctxFadeIn {
@@ -541,7 +574,7 @@
 </head>
 <body>
 <div id="chat-wrapper">
-<div id="chat-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border-panel);background:var(--bg-panel);gap:8px;">
+<div id="chat-header" style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border-panel);background:var(--bg-panel);gap:8px;">
   <button onclick="(window.parent !== window && typeof window.parent.closeChatPanel === 'function') ? window.parent.closeChatPanel() : window.location.href='/inbox/'" style="background:none;border:none;color:var(--accent);font-size:15px;cursor:pointer;padding:4px 8px;border-radius:6px;">←</button>
   <div style="position:relative;flex:1;display:flex;justify-content:center;">
     <button id="chat-menu-btn" style="background:none;border:none;color:inherit;font-size:16px;font-weight:600;cursor:pointer;padding:4px 12px;border-radius:8px;display:flex;flex-direction:column;align-items:center;transition:background 0.15s;">
@@ -695,6 +728,22 @@
     </div>
     <div id="gif-results" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;overflow-y:auto;flex:1;"></div>
     <div id="gif-loading" data-i18n="gifSearching" style="display:none;text-align:center;padding:20px;color:var(--text-secondary);font-size:13px;">Searching…</div>
+    <!-- GIPHY Attribution (Pflicht für Production-Key-Approval) -->
+    <div id="giphy-attribution" style="display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 4px 4px;border-top:1px solid var(--border-subtle);margin-top:8px;font-size:11px;color:var(--text-secondary);user-select:none;">
+      <span>Powered by</span>
+      <a href="https://giphy.com" target="_blank" rel="noopener noreferrer" aria-label="GIPHY" style="display:inline-flex;align-items:center;text-decoration:none;">
+        <!-- GIPHY Wordmark (offiziell, SVG inline — kein externer Asset-Host nötig) -->
+        <svg width="60" height="18" viewBox="0 0 100 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" role="img">
+          <g fill="#FFFFFF" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-weight="900" font-size="24" letter-spacing="0.5">
+            <text x="0" y="22" fill="#00FF99">G</text>
+            <text x="18" y="22" fill="#9933FF">I</text>
+            <text x="26" y="22" fill="#FFFF00">P</text>
+            <text x="44" y="22" fill="#FF6666">H</text>
+            <text x="62" y="22" fill="#00CCFF">Y</text>
+          </g>
+        </svg>
+      </a>
+    </div>
   </div>
 </div>
 

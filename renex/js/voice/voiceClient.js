@@ -20,17 +20,42 @@ export const CallState = Object.freeze({
   ENDED:       "ended",
 });
 
-// Gamer-Tuning Defaults — können später in Settings wandern
+// Audio-Constraints: bevorzugte ("ideal") statt erzwungene ("exact") Werte.
+// Ältere Chromium-Versionen (z.B. Brave auf Huawei 2019 ≈ Chromium 75-80)
+// interpretieren rohe Zahlen als "exact" und werfen OverconstrainedError
+// OHNE vorher den Permission-Dialog zu zeigen → Mikro-Zugriff scheint blockiert.
 const AUDIO_CONSTRAINTS = {
   audio: {
     echoCancellation: true,
     noiseSuppression: true,
     autoGainControl:  false,   // Gaming-Headsets regeln selbst
-    channelCount:     1,
-    sampleRate:       48000,
+    channelCount:   { ideal: 1 },
+    sampleRate:     { ideal: 48000 },
   },
   video: false,
 };
+
+// Fallback-Constraints für sehr alte Browser: nur `audio: true`
+// Wenn auch das fehlschlägt, gibt es wirklich kein Mikro / keine Permission.
+const AUDIO_CONSTRAINTS_FALLBACK = { audio: true, video: false };
+
+// Helper: versucht zuerst die guten Constraints, fällt bei
+// OverconstrainedError auf die simplen zurück.
+// Exportiert damit UI-Code getUserMedia FRÜH im Click-Handler aufrufen kann
+// (User-Gesture bleibt erhalten — wichtig für alte Browser).
+export async function getUserMediaWithFallback() {
+  try {
+    return await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS);
+  } catch (e) {
+    // Nur bei Constraints-Problemen Fallback — NotAllowedError muss weiter oben
+    // als Permission-Fehler behandelt werden.
+    if (e?.name === "OverconstrainedError" || e?.name === "ConstraintNotSatisfiedError") {
+      console.warn("[voiceClient] Constraints zu strikt, nutze Fallback:", e.name);
+      return await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS_FALLBACK);
+    }
+    throw e;
+  }
+}
 
 // Opus-Parameter: FEC an, DTX aus, Stereo aus, max Bitrate
 // (DTX erzeugt beim Gaming hörbare Cuts, FEC rettet Packet-Loss)
@@ -139,12 +164,14 @@ export class VoiceCall extends EventTarget {
     return this.pc;
   }
 
-  async attachLocalAudio() {
+  async attachLocalAudio(externalStream = null) {
     if (this.localStream) return this.localStream;
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("getUserMedia not supported");
     }
-    this.localStream = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS);
+    // Externer Stream (z.B. bereits im Click-Handler geholt, damit
+    // User-Gesture nicht durch awaits verbraucht wird) hat Vorrang.
+    this.localStream = externalStream || await getUserMediaWithFallback();
     const pc = await this._ensurePC();
     for (const track of this.localStream.getAudioTracks()) {
       pc.addTrack(track, this.localStream);
@@ -238,8 +265,11 @@ export class VoiceCall extends EventTarget {
   }
 
   // ── Offer/Answer ───────────────────────────────────────
-  async createLocalOffer() {
-    await this.attachLocalAudio();
+  // `preAcquiredStream` (optional): MediaStream, der bereits im User-Gesture
+  // geholt wurde. Wichtig für ältere Browser, wo User-Gesture durch awaits
+  // verloren geht — dann zeigt getUserMedia keinen Permission-Dialog mehr.
+  async createLocalOffer(preAcquiredStream = null) {
+    await this.attachLocalAudio(preAcquiredStream);
     const pc = await this._ensurePC();
     const offer = await pc.createOffer({ offerToReceiveAudio: true });
     offer.sdp = this._munge(offer.sdp);
@@ -247,8 +277,8 @@ export class VoiceCall extends EventTarget {
     return { type: offer.type, sdp: offer.sdp };
   }
 
-  async createLocalAnswer() {
-    await this.attachLocalAudio();
+  async createLocalAnswer(preAcquiredStream = null) {
+    await this.attachLocalAudio(preAcquiredStream);
     const pc = await this._ensurePC();
     const answer = await pc.createAnswer();
     answer.sdp = this._munge(answer.sdp);

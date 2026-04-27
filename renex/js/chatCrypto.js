@@ -152,7 +152,9 @@ export async function uploadFile(file, attachmentType, { isGroupConversation, wi
   return { attachmentPayloadJson, r2Key, attachmentType };
 }
 
-// Upload public key to server
+// Upload public key to server (mit Retry-Backoff für Rate-Limits/Network-Hicks)
+const PUBKEY_UPLOAD_DELAYS_MS = [1000, 3000, 8000, 20000];
+
 export async function uploadMyPublicKeyIfNeeded(getDeviceId, loadPublicKey, apiFetch) {
   const deviceId = getDeviceId();
   const pub = await loadPublicKey();
@@ -161,12 +163,24 @@ export async function uploadMyPublicKeyIfNeeded(getDeviceId, loadPublicKey, apiF
     return false;
   }
   const jwk = await crypto.subtle.exportKey("jwk", pub);
-  await apiFetch("/chat/keys/upload", {
-    method: "POST",
-    body: JSON.stringify({ jwk, deviceId })
-  });
-  console.log("✅ Public Key hochgeladen:", deviceId);
-  return true;
+  const body = JSON.stringify({ jwk, deviceId });
+
+  for (let attempt = 0; attempt < PUBKEY_UPLOAD_DELAYS_MS.length; attempt++) {
+    try {
+      const res = await apiFetch("/chat/keys/upload", { method: "POST", body });
+      // apiFetch returnt { rateLimited: true } bei Backoff/429 statt zu werfen
+      if (!res?.rateLimited) {
+        console.log("✅ Public Key hochgeladen:", deviceId);
+        return true;
+      }
+      console.warn(`📮 Public-Key Versuch ${attempt + 1} rate-limited — retry in ${PUBKEY_UPLOAD_DELAYS_MS[attempt]}ms`);
+    } catch (e) {
+      console.warn(`📮 Public-Key Versuch ${attempt + 1} fehler:`, e?.message || e);
+    }
+    await new Promise(r => setTimeout(r, PUBKEY_UPLOAD_DELAYS_MS[attempt]));
+  }
+  console.warn("❌ Public Key Upload erschöpft (4 Versuche) — wird beim nächsten Chat-Open neu probiert");
+  return false;
 }
 
 // Text helpers

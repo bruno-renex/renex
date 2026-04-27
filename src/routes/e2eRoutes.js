@@ -437,6 +437,99 @@ export async function handleE2eRoutes(request, env, path, params) {
       break;
     }
 
+    // ======================================================
+    // Phase 5.3: GROUP-GSK STORE — eigener GSK in KV für eigene Devices
+    // ======================================================
+    case "/e2e/group-gsk/store": {
+      if (request.method === "POST") {
+        const session = await requireAnySession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+        const me = String(session.handle || "").toLowerCase();
+        const rl = await rateLimit(env, `group_gsk_store:${me}`, 60_000, 30);
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
+
+        const body = await readJson(request);
+        if (!body) return json(request, { error: "Invalid JSON" }, 400);
+
+        const { groupId, payloads } = body;
+        if (!groupId || typeof groupId !== "string" || groupId.length > 64) {
+          return json(request, { error: "Invalid groupId" }, 400);
+        }
+        if (!Array.isArray(payloads) || payloads.length === 0 || payloads.length > 20) {
+          return json(request, { error: "Invalid payloads" }, 400);
+        }
+
+        // Membership-Check: nur Mitglieder dürfen für ihre Gruppe Daten ablegen
+        const memberRow = await env.RENEX_DB.prepare(
+          "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ? LIMIT 1"
+        ).bind(groupId, me).first();
+        if (!memberRow) return json(request, { error: "Not a group member" }, 403);
+
+        const storedDeviceIds = [];
+        for (const p of payloads) {
+          if (
+            typeof p.deviceId !== "string" || p.deviceId.length < 8 || p.deviceId.length > 64 ||
+            typeof p.fromDeviceId !== "string" ||
+            typeof p.ivB64 !== "string" ||
+            typeof p.ctB64 !== "string"
+          ) continue;
+
+          await env.RENEX_KV.put(
+            `e2e:gsk:${groupId}:${me}:${p.deviceId}`,
+            JSON.stringify({ fromDeviceId: p.fromDeviceId, ivB64: p.ivB64, ctB64: p.ctB64 })
+          );
+          storedDeviceIds.push(p.deviceId);
+        }
+
+        // Index für späteres Cleanup (bei group-leave / user-delete)
+        const idxKey = `e2e:gsk:index:${groupId}:${me}`;
+        let idx = [];
+        const rawIdx = await env.RENEX_KV.get(idxKey);
+        if (rawIdx) { try { idx = JSON.parse(rawIdx); } catch {} }
+        for (const did of storedDeviceIds) {
+          if (!idx.includes(did)) idx.push(did);
+        }
+        await env.RENEX_KV.put(idxKey, JSON.stringify(idx));
+
+        return json(request, { ok: true });
+      }
+      break;
+    }
+
+    // ======================================================
+    // Phase 5.3: GROUP-GSK FETCH — neues Device holt eigenen GSK aus KV
+    // ======================================================
+    case "/e2e/group-gsk/fetch": {
+      if (request.method === "GET") {
+        const session = await requireAnySession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+        const me = String(session.handle || "").toLowerCase();
+        const rl = await rateLimit(env, `group_gsk_fetch:${me}`, 60_000, 60);
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
+
+        const groupId = (param(params, "groupId") || "").trim();
+        const deviceId = (param(params, "deviceId") || "").trim();
+        if (!groupId || groupId.length > 64) return json(request, { payload: null });
+        if (!deviceId || deviceId.length < 8 || deviceId.length > 64) return json(request, { payload: null });
+
+        // Membership-Check
+        const memberRow = await env.RENEX_DB.prepare(
+          "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ? LIMIT 1"
+        ).bind(groupId, me).first();
+        if (!memberRow) return json(request, { payload: null });
+
+        const raw = await env.RENEX_KV.get(`e2e:gsk:${groupId}:${me}:${deviceId}`);
+        if (!raw) return json(request, { payload: null });
+
+        let payload = null;
+        try { payload = JSON.parse(raw); } catch {}
+        return json(request, { payload });
+      }
+      break;
+    }
+
     default:
       break;
   }

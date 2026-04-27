@@ -384,6 +384,20 @@ export function dmSessionId(me, peer) {
   return a < b ? `dm:${a}:${b}` : `dm:${b}:${a}`;
 }
 
+// Extrahiert den Peer-Handle aus einer DM-SID (`dm:alice:bob` + me=alice → bob).
+// Wird für den SID-basierten CMK-Fallback nach Guest-Conversion verwendet:
+// Alte Nachrichten haben `dm:alice:guest_xxx` als SID, aktueller Peer ist aber `ret31`.
+export function peerFromDmSid(sid, me) {
+  if (typeof sid !== "string" || !sid.startsWith("dm:")) return null;
+  const parts = sid.slice(3).split(":");
+  if (parts.length !== 2) return null;
+  const meL = String(me || "").toLowerCase();
+  const [a, b] = parts;
+  if (a === meL) return b;
+  if (b === meL) return a;
+  return null;
+}
+
 // 🔐 HKDF: Session Key → Message Key (epoch-basiert)
 export async function deriveMessageKey(skBytes, sessionId, epoch) {
   const sk = await crypto.subtle.importKey(
@@ -489,6 +503,60 @@ export async function debugPrintMyPublicKey() {
 // ======================================================
 // 📮 INBOX KEY – GLOBAL & IDEMPOTENT
 // ======================================================
+// Retry-Backoff-Schedule für kritische Upload-Calls
+// Phase 2: vermeidet "Peer hat keine Inbox-Keys"-Sackgasse bei Rate-Limit oder Network-Hick.
+const UPLOAD_RETRY_DELAYS_MS = [1000, 3000, 8000, 20000]; // 4 Versuche, dann Hintergrund-Loop
+const UPLOAD_BG_RETRY_MS = 60_000;
+const _bgRetryActive = new Set();
+
+async function _uploadWithRetry(url, body) {
+  for (let attempt = 0; attempt < UPLOAD_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (res.ok) return true;
+      // 5xx oder 429 → retry. 4xx (außer 429) → kein Retry sinnvoll.
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        console.warn("📮 Upload: harter Fehler", res.status, "— kein Retry");
+        return false;
+      }
+      console.warn(`📮 Upload Versuch ${attempt + 1} fehlgeschlagen (${res.status}) — retry in ${UPLOAD_RETRY_DELAYS_MS[attempt]}ms`);
+    } catch (e) {
+      console.warn(`📮 Upload Versuch ${attempt + 1} — Network: ${e?.message || e}`);
+    }
+    await new Promise(r => setTimeout(r, UPLOAD_RETRY_DELAYS_MS[attempt]));
+  }
+  // Alle Versuche fehlgeschlagen → Hintergrund-Loop starten (1× pro URL)
+  if (!_bgRetryActive.has(url)) {
+    _bgRetryActive.add(url);
+    const bgStart = Date.now();
+    console.warn(`📮 Upload: Foreground-Retries erschöpft — starte Hintergrund-Retry alle ${UPLOAD_BG_RETRY_MS / 1000}s`);
+    (async function bgLoop() {
+      while (_bgRetryActive.has(url)) {
+        await new Promise(r => setTimeout(r, UPLOAD_BG_RETRY_MS));
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          if (res.ok) {
+            console.log("📮 Upload: Hintergrund-Retry erfolgreich nach", Math.round((Date.now() - bgStart) / 1000), "s");
+            _bgRetryActive.delete(url);
+            return;
+          }
+        } catch {}
+      }
+    })();
+  }
+  return false;
+}
+
 export async function uploadInboxKeyIfNeeded() {
   const deviceId = getDeviceId();
   if (!deviceId) {
@@ -505,13 +573,7 @@ export async function uploadInboxKeyIfNeeded() {
   const jwk    = await crypto.subtle.exportKey("jwk", pubKey);
   const sigPub = await getSigningPublicKeyJwk();
 
-  await fetch("https://api.renex.id/e2e/inbox/upload", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jwk, deviceId, sigPub })
-  });
-
+  await _uploadWithRetry("https://api.renex.id/e2e/inbox/upload", { jwk, deviceId, sigPub });
 }
 
 // ======================================================

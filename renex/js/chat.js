@@ -7,6 +7,9 @@ import {
   loadPublicKey,
   idbSet,
   dmSessionId,
+  peerFromDmSid,
+  getCMKIfExists,
+  deleteCMK,
   deriveMessageKey,
   deriveSessionKeyBytesForRotation,
   getLastRotationTime,
@@ -22,18 +25,22 @@ import {
 
 import {
   ensureConversationReady,
+  ensureBootstrapped,
   bootConversation,
   fetchAndStoreCMK,
   fallbackBootstrap,
   isAuthority,
   rotateEpoch,
-  rotateCMK
+  rotateCMK,
+  syncCMKToOwnDevices
 } from "./sessionManager.js";
 
 import { apiFetch } from "./api.js";
 import lang from "./i18n.js";
 import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
-import { getGuestPrivJwk, getGuestDeviceId, clearGuestSession } from "./shared/guestStorage.js";
+import { getDisplayName, prefetchProfiles } from "./profiles.js";
+import { e2eLog } from "./e2eLog.js";
+import { getGuestPrivJwk, getGuestDeviceId, clearGuestSession, setGuestSession } from "./shared/guestStorage.js";
 import { formatTimestamp } from "./shared/timeFormat.js";
 import {
   encryptGroupMessage,
@@ -42,14 +49,16 @@ import {
   getGroupSK,
   distributeGroupSK,
   receiveGroupSK,
-  rotateGroupSK
+  rotateGroupSK,
+  syncGroupSKToOwnDevices,
+  fetchOwnGroupSKFromKV
 } from "./groupSessionManager.js";
 
 // ── Extracted Modules ──────────────────────────────────────
 import {
   API, MAX_MESSAGE_LENGTH, SEND_COOLDOWN_MS, EPOCH_MS,
   ROTATION_THRESHOLD, ROTATION_INTERVAL_MS, MAX_DEFERRED_BACKOFF,
-  MAX_INBOUND_RETRIES, MAX_DECRYPT_CACHE, INBOX_KEY_TTL,
+  MAX_INBOUND_RETRIES, STALE_MESSAGE_MAX_AGE_MS, MAX_DECRYPT_CACHE, INBOX_KEY_TTL,
   REACTION_EMOJIS, _guestData, _isGuestMode,
   _VALID_HANDLE, _VALID_UUID, _VALID_DM_ID
 } from "./chatState.js";
@@ -154,19 +163,12 @@ function updateGuestBannerCount() {
   el.textContent = String(left);
   // Bei niedrigem Nachrichtenlimit: warnen
   if (left <= 5) el.style.color = "#ef4444";
-  // Limit erreicht → gleiche Anzeige wie bei Zeit-Ablauf
+  // Nachrichtenlimit erreicht → Full-Lock (Overlay + Polling-Stop + Passkey-CTA).
+  // Timer-Feld NICHT mehr fälschlich auf "expired" setzen — das war ein UI-Bug.
   if (left === 0) {
     el.textContent = "0";
     el.style.color = "#ef4444";
-    const timerEl = document.getElementById("guest-timer-display");
-    if (timerEl) {
-      timerEl.textContent = lang.expired;
-      timerEl.style.color = "#ef4444";
-    }
-    showSystemToast(lang.guestLimitReached, 10000);
-    // Eingabe sperren
-    if (inputEl) inputEl.contentEditable = "false";
-    updateSendButton();
+    lockGuestSession("limit");
   }
 }
 
@@ -193,16 +195,187 @@ function _startGuestCountdown() {
       // Interval stoppen — kein weiterer Tick nötig
       clearInterval(_guestCountdownTimer);
       _guestCountdownTimer = null;
-      showSystemToast(lang.guestExpired, 10000);
-      // Eingabe sperren
-      if (inputEl) inputEl.contentEditable = "false";
-      updateSendButton();
+      // Full-Lock: Polling stoppen, Overlay einblenden, Passkey-CTA zeigen
+      lockGuestSession("expired");
     }
   };
   tick();
   // Über 1h: alle 60s ticken reicht; unter 1h: jede Sekunde für Sekunden-Anzeige
   const intervalMs = (_guestData?.expiresAt && (_guestData.expiresAt - Date.now()) > 3_600_000) ? 60_000 : 1_000;
   _guestCountdownTimer = setInterval(tick, intervalMs);
+}
+
+// ─────────────────────────────────────────────────────────────
+// GUEST LOCK — sperrt Chat komplett (lesen + schreiben) und zeigt
+// Passkey-Login-Aufforderung. Wird bei "Message limit reached" (429)
+// oder "Session expired" (410) aufgerufen. Gilt für DM + Group gleich.
+// ─────────────────────────────────────────────────────────────
+let _guestLocked = false;
+function lockGuestSession(reason /* "limit" | "expired" */) {
+  if (_guestLocked) return;
+  _guestLocked = true;
+
+  // 1) Polling stoppen — kein weiteres Lesen
+  try { if (typeof stopPolling === "function") stopPolling(); } catch {}
+
+  // 2) WebSocket (falls offen) schliessen — kein Live-Empfang mehr
+  try {
+    if (window._renexWs && typeof window._renexWs.close === "function") {
+      window._renexWs.close();
+    }
+  } catch {}
+
+  // 3) Countdown anhalten
+  if (_guestCountdownTimer) { clearInterval(_guestCountdownTimer); _guestCountdownTimer = null; }
+
+  // 4) Input hart sperren
+  if (inputEl) {
+    inputEl.contentEditable = "false";
+    inputEl.blur();
+  }
+  if (sendBtn) sendBtn.disabled = true;
+
+  // 5) Send-Cooldown deaktivieren (Retry verhindern)
+  try { if (_guestData) _guestData.msgCount = _guestData.msgLimit || 20; } catch {}
+
+  // 6) Overlay einblenden
+  showGuestLockOverlay(reason);
+}
+
+function showGuestLockOverlay(reason) {
+  // Bereits vorhandenes Overlay nicht doppeln
+  if (document.getElementById("guest-lock-overlay")) return;
+
+  const wrapper = document.getElementById("chat-wrapper") || document.body;
+
+  const title = (reason === "expired")
+    ? (lang.guestExpiredTitle || "Guest access expired")
+    : (lang.guestLimitTitle   || "Message limit reached");
+  const desc  = (reason === "expired")
+    ? (lang.guestExpired  || "Your guest access has expired. Sign in with a Passkey to continue.")
+    : (lang.guestLimitReached || "Limit reached. Sign in with a Passkey to keep reading and writing.");
+  const btnText = lang.convertToPasskey || "Login with Passkey";
+
+  const overlay = document.createElement("div");
+  overlay.id = "guest-lock-overlay";
+  overlay.style.cssText = [
+    "position:absolute",
+    "inset:0",
+    "z-index:500",
+    "background:rgba(10,12,16,0.92)",
+    "backdrop-filter:blur(6px)",
+    "-webkit-backdrop-filter:blur(6px)",
+    "display:flex",
+    "flex-direction:column",
+    "align-items:center",
+    "justify-content:center",
+    "gap:16px",
+    "padding:24px",
+    "text-align:center",
+    "user-select:none",
+    "animation:guestLockIn .3s ease"
+  ].join(";");
+
+  // Styles einmalig injizieren
+  if (!document.getElementById("guest-lock-style")) {
+    const s = document.createElement("style");
+    s.id = "guest-lock-style";
+    s.textContent = `
+      @keyframes guestLockIn { from { opacity:0 } to { opacity:1 } }
+      #guest-lock-overlay .lock-icon { font-size:48px; line-height:1; }
+      #guest-lock-overlay .lock-title { font-size:18px; font-weight:700; color:var(--text-primary,#fff); max-width:320px; }
+      #guest-lock-overlay .lock-desc { font-size:13px; color:var(--text-secondary,#b3b3b3); max-width:320px; line-height:1.5; }
+      #guest-lock-overlay .lock-btn {
+        margin-top:8px; padding:12px 24px; border-radius:10px; border:none;
+        background:var(--accent-voice,#38bdf8); color:#fff; font-size:14px; font-weight:700;
+        cursor:pointer; box-shadow:0 4px 16px rgba(56,189,248,0.35);
+        transition:transform .12s ease, box-shadow .12s ease;
+      }
+      #guest-lock-overlay .lock-btn:hover { transform:translateY(-1px); box-shadow:0 6px 20px rgba(56,189,248,0.45); }
+      #guest-lock-overlay .lock-btn:active { transform:translateY(0); }
+    `;
+    document.head.appendChild(s);
+  }
+
+  const icon = document.createElement("div");
+  icon.className = "lock-icon";
+  icon.textContent = reason === "expired" ? "⏱️" : "🔒";
+
+  const h = document.createElement("div");
+  h.className = "lock-title";
+  h.textContent = title;
+
+  const p = document.createElement("div");
+  p.className = "lock-desc";
+  p.textContent = desc;
+
+  const btn = document.createElement("button");
+  btn.className = "lock-btn";
+  btn.type = "button";
+  btn.textContent = btnText;
+  btn.addEventListener("click", () => { try { convertGuest(); } catch {} });
+
+  overlay.appendChild(icon);
+  overlay.appendChild(h);
+  overlay.appendChild(p);
+  overlay.appendChild(btn);
+
+  // Sicherstellen dass wrapper positionierbar ist
+  const cs = getComputedStyle(wrapper);
+  if (cs.position === "static") wrapper.style.position = "relative";
+
+  wrapper.appendChild(overlay);
+}
+
+// ─────────────────────────────────────────────────────────────
+// GUEST STATE PERSISTENCE
+// _guestData ist nur In-Memory. Ohne Persistenz gehen Sends nach
+// einem Seiten-Reload (z. B. PDF/Attachment-Viewer auf iOS) verloren
+// → Zähler "springt" auf 20 zurück. Fix: nach jedem Send speichern
+// UND beim Load die authoritative Server-State via /invite/ping holen.
+// ─────────────────────────────────────────────────────────────
+function persistGuestData() {
+  if (!_guestData) return;
+  try { setGuestSession(_guestData); } catch {}
+}
+
+async function syncGuestStateFromServer() {
+  if (!_guestData?.token) return;
+  try {
+    const r = await fetch(`${API}/invite/ping`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "X-Guest-Token": _guestData.token },
+      body: "{}",
+    });
+    if (r.status === 410 || r.status === 401) { lockGuestSession("expired"); return; }
+    if (!r.ok) return;
+    const data = await r.json().catch(() => null);
+    if (!data?.ok) return;
+
+    // Server ist die Wahrheit — In-Memory + localStorage angleichen
+    _guestData.msgCount  = data.msgCount;
+    _guestData.msgLimit  = data.msgLimit;
+    _guestData.expiresAt = data.expiresAt;
+    persistGuestData();
+    updateGuestBannerCount();
+
+    if (data.expired) { lockGuestSession("expired"); return; }
+    if ((data.msgsLeft || 0) <= 0) { lockGuestSession("limit"); return; }
+  } catch { /* offline → nichts tun, UI behält letzten Stand */ }
+}
+
+// Tab kommt zurück (PDF-Viewer geschlossen, App-Switch, BFCache-Restore)
+// → Server-State nachladen, damit der Banner nicht stale ist.
+if (_guestData) {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !_guestLocked) syncGuestStateFromServer();
+  });
+  window.addEventListener("pageshow", (e) => {
+    if (!_guestLocked) syncGuestStateFromServer();
+  });
+  // Initial sync beim Laden — falls localStorage hinter Server zurückhängt
+  syncGuestStateFromServer();
 }
 
 // Gast-Nachricht als Klartext senden (kein E2E)
@@ -234,9 +407,13 @@ async function guestSendMessage(text) {
 
     if (res.status === 429 && data?.error === "Message limit reached") {
       if (pendingDiv) { pendingDiv.remove(); pendingByTempId.delete(tempId); }
-      showSystemToast(lang.guestMsgLimit, 8000);
-      const btn = document.getElementById("guest-convert-btn");
-      if (btn) { btn.style.animation = "pulse 0.6s ease 2"; btn.style.background = "#ef4444"; }
+      lockGuestSession("limit");
+      return;
+    }
+
+    if (res.status === 410) {
+      if (pendingDiv) { pendingDiv.remove(); pendingByTempId.delete(tempId); }
+      lockGuestSession("expired");
       return;
     }
 
@@ -255,8 +432,11 @@ async function guestSendMessage(text) {
       renderedMessageIds.add(data.message.id);
     }
 
-    // Lokalen msg_count hochzählen
-    if (_guestData) { _guestData.msgCount = (_guestData.msgCount || 0) + 1; }
+    // Lokalen msg_count hochzählen + persistieren (Reload-safe)
+    if (_guestData) {
+      _guestData.msgCount = (_guestData.msgCount || 0) + 1;
+      persistGuestData();
+    }
     updateGuestBannerCount();
 
   } catch (e) {
@@ -367,9 +547,108 @@ async function createInviteLink() {
   }
 }
 
+// ======================================================
+// 🔑 RESET CHAT KEYS — Manueller E2E-Reset für DMs
+// ======================================================
+// Wenn der Auto-Heal-Mechanismus versagt (z.B. weil der Peer offline war oder
+// seine Inbox-Keys in KV veraltet sind), kann der User manuell einen sauberen
+// Key-Austausch erzwingen. Schritt für Schritt:
+//   1) Confirm-Dialog
+//   2) `cmk_reset`-Control-Message an Peer senden (er löscht seinen lokalen CMK)
+//   3) Lokalen CMK löschen
+//   4) Bootstrap-Guards leeren
+//   5) ensureConversationReady → Authority generiert neuen CMK, Non-Authority requestet
+//   6) Kurz warten, Messages neu laden
+// ⚠️ Alte Nachrichten bleiben unentschlüsselbar — Preis für frischen Schlüssel.
+let _keyResetInProgress = false;
+async function resetChatKeys() {
+  if (_keyResetInProgress) return;
+  if (!withUser || isGroupConversation(withUser)) return; // nur DMs
+  if (!confirm(lang.resetKeysConfirm || "Reset encryption keys for this chat? Old messages will stay unreadable.")) return;
+
+  _keyResetInProgress = true;
+  const statusEl = document.getElementById("chat-key-reset-status");
+  if (statusEl) statusEl.textContent = "…";
+
+  const me  = getMyUser();
+  const peer = withUser;
+  const sid = dmSessionId(me, peer);
+
+  try {
+    // 1) Peer benachrichtigen (er räumt seinen lokalen CMK weg)
+    try {
+      await apiFetch("/chat/send", {
+        method: "POST",
+        body: JSON.stringify({
+          to: peer,
+          e2e: false,
+          v: 1,
+          type: "cmk_reset",
+          message: "__cmk_reset__",
+          sid
+        })
+      });
+    } catch (e) {
+      console.warn("cmk_reset send failed (non-fatal):", e);
+    }
+
+    // 2) Lokalen CMK + Bootstrap-Guard wegwerfen
+    try { await deleteCMK(peer); } catch {}
+    try { sessionStorage.removeItem(`bootstrapped:${sid}`); } catch {}
+    try { sessionStorage.removeItem(`cmk_req_sent:${sid}`); } catch {}
+    // RAM-Cache leeren
+    sessionKeyBytes = null;
+    sessionCmkBytes = null;
+    sessionRotationIndex = 0;
+    skCache.clear();
+    // Alle bisher-failed-Bubbles aus DOM + Tracking entfernen
+    // damit nach dem Re-Bootstrap neu gerendert werden kann
+    try {
+      for (const id of _decryptFailedRenderedIds) {
+        const el = messagesEl?.querySelector(`[data-id="${id}"]`);
+        if (el) el.remove();
+        renderedMessageIds.delete(id);
+        decryptedCache?.delete?.(id);
+      }
+      _decryptFailedRenderedIds.clear();
+    } catch {}
+
+    // 3) Bootstrap neu auslösen (Authority → sendet neuen CMK; sonst → cmk_req)
+    try {
+      await ensureConversationReady(me, peer, fetchInboxKeys, apiFetch);
+    } catch (e) {
+      console.warn("ensureConversationReady nach Reset fehlgeschlagen:", e);
+    }
+
+    // 4) Session frisch booten (setzt sessionKeyBytes etc.)
+    try {
+      const entry = await bootConversation(me, peer);
+      if (entry?.skBytes) {
+        sessionKeyBytes = entry.skBytes;
+        sessionRotationIndex = entry.rotationIndex ?? 0;
+        sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+      }
+    } catch {}
+
+    if (statusEl) statusEl.textContent = "";
+    showSystemToast(lang.resetKeysDone || "🔁 Keys reset — sending first message will re-establish encryption", 8000);
+
+    // 5) Nachrichten neu laden (nach kurzer Verzögerung — Zeit für Peer-Sync)
+    setTimeout(() => { loadMessages?.().catch(() => {}); }, 2000);
+    setTimeout(() => { loadMessages?.().catch(() => {}); }, 6000);
+  } catch (e) {
+    console.error("resetChatKeys failed:", e);
+    if (statusEl) statusEl.textContent = "";
+    showSystemToast(lang.resetKeysFailed || "⚠️ Could not reset keys — please try again", 5000);
+  } finally {
+    _keyResetInProgress = false;
+  }
+}
+
 // Globale Exports für HTML-onclick-Handler (ES-Module sind nicht global)
 window.convertGuest   = convertGuest;
 window.createInviteLink = createInviteLink;
+window.resetChatKeys  = resetChatKeys;
 
 // Guest display name & handle replacement → shared/guestUtils.js
 
@@ -457,6 +736,9 @@ const deferredInboundMessages = [];
 const deferredInboundIds = new Set();
 const pendingGskRequests = new Set();
 const gskRequestCooldown = new Map();
+// Phase 5.2: Exponential-Backoff-State für request_gsk-Retries
+const gskRetryTimers = new Map();    // key → setTimeout-Handle
+const gskAttemptCount = new Map();   // key → number of attempts so far
 const skCache = new Map();    // "sid:rotationIndex" → Uint8Array(32)
 let hasInboxKeys = false;
 
@@ -477,10 +759,12 @@ let deferredBackoff = 1000;          // Start 1s
 // FIX 3 — canSend ist REIN UI
 // ======================================================
 function canSend() {
-  // Gast: Nachrichtenlimit erreicht → Senden sperren
+  // Gast: Nachrichtenlimit erreicht ODER Session gesperrt → Senden sperren
   if (_guestData) {
+    if (_guestLocked) return false;
     const left = Math.max(0, (_guestData.msgLimit || 50) - (_guestData.msgCount || 0));
     if (left === 0) return false;
+    if (_guestData.expiresAt && Date.now() > _guestData.expiresAt) return false;
   }
   return true;
 }
@@ -545,6 +829,12 @@ try {
   const rawName = params.get("name");
   if (rawName) _initialGroupName = decodeURIComponent(rawName).slice(0, 64);
 } catch {}
+
+// Guest-Conversion-Grenze: Timestamp der "X is now Y" System-Nachricht, sofern
+// der aktuelle User selbst der konvertierte Teil ist. Alle regulären Messages
+// mit ts <= _convertBoundaryTs wurden in der Gast-Ära verschlüsselt und sind
+// mit den neuen Account-Keys nicht mehr entschlüsselbar — deshalb stumm ausblenden.
+let _convertBoundaryTs = 0;
 
 // Reply-Kontext aus Gruppen-Chat (persönliche Antwort per DM)
 let _initialReplyFrom = null;
@@ -764,6 +1054,20 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
+  // 🔑 DEVICE_ADDED_SELF (Gruppen): Eigenes neues Device → GSK für eigene Devices in KV syncen.
+  // Phase 5.3: Triggert syncGroupSKToOwnDevices, der den new-device-Erkenner nutzt
+  // und Throttle automatisch umgeht.
+  if (event?.type === "DEVICE_ADDED_SELF" && isGroupConversation(withUser)) {
+    console.log("🔑 DEVICE_ADDED_SELF (Group) → GSK für eigene neue Devices syncen");
+    syncGroupSKToOwnDevices(
+      withUser,
+      getMyUser(),
+      (h, opts) => fetchInboxKeys(h, { forceFresh: true, ...(opts || {}) }),
+      apiFetch
+    ).catch(e => console.warn("⚠️ syncGroupSKToOwnDevices nach DEVICE_ADDED_SELF failed", e));
+    return;
+  }
+
   // 🔑 DEVICE_ADDED_SELF: Eigenes neues Device → CMK für aktuelles Gespräch in KV ablegen
   if (event?.type === "DEVICE_ADDED_SELF") {
     if (!isAuthority(getMyUser(), withUser) || !e2eReady || !sessionCmkBytes) return;
@@ -807,6 +1111,12 @@ if (event?.type === "NEW_MESSAGE") {
   if (event?.type === "DEVICE_REMOVED" && event.peer === withUser) {
     console.log("🔑 DEVICE_REMOVED → CMK Rotation (Forward Secrecy):", event.peer);
     if (isAuthority(getMyUser(), withUser) && e2eReady) {
+      // Phase 4 #6: Während Recovery nicht rotieren — Race verhindern
+      if (isInRecovery(withUser)) {
+        _pendingRotation.add(String(withUser || "").toLowerCase());
+        console.log("⏸️ DEVICE_REMOVED-Rotation deferred — Recovery läuft");
+        return;
+      }
       const cooldownKey = `cmkRotateCooldown:${withUser}`;
       const lastRotate = Number(sessionStorage.getItem(cooldownKey) || 0);
       if (Date.now() - lastRotate < 10_000) {
@@ -836,8 +1146,17 @@ if (event?.type === "NEW_MESSAGE") {
   // 🔑 GSK_READY: Gruppen-Sender-Key empfangen → deferred Nachrichten entschlüsseln
   if (event?.type === "GSK_READY" && event.groupId === withUser) {
     console.log("🔑 GSK_READY → reload + flush deferred Gruppen-Nachrichten:", event.from);
+    // Phase 5.2: Retry-State für diesen Sender aufräumen (Backoff-Timer killen, Counter reset)
+    if (event.from) resetGskRequestState(withUser, event.from);
     // loadMessages holt evtl. verpasste Nachrichten aus DB; flush entschlüsselt Placeholder
     loadMessages().catch(() => {}).finally(() => flushDeferredInboundMessages().catch(() => {}));
+    // Bubble-State auf "success" setzen für sauberen Cooldown-Visual (Fix 2)
+    if (event.from) {
+      const stateKey = `decrypt_retry_state:${withUser}:${event.from}`;
+      const success = { phase: "success", ts: Date.now() };
+      try { sessionStorage.setItem(stateKey, JSON.stringify(success)); } catch {}
+      document.dispatchEvent(new CustomEvent("cmk-req-state-change", { detail: { peer: `${withUser}:${event.from}`, state: success } }));
+    }
     return;
   }
 
@@ -994,12 +1313,61 @@ if (event?.type === "NEW_MESSAGE") {
     return;
   }
 
+    // CMK_RESET: Peer hat die E2E-Schlüssel zurückgesetzt — lokale Session flushen
+    // damit die nächste Nachricht mit dem frischen CMK verschlüsselt wird.
+    if (e.data?.type === "CMK_RESET" && e.data.peer === withUser) {
+      console.warn("🔁 CMK_RESET von Peer empfangen — lokale Session verwerfen");
+      sessionKeyBytes = null;
+      sessionCmkBytes = null;
+      sessionRotationIndex = 0;
+      skCache.clear();
+      // Failed-Bubbles auch hier wegräumen — neue Chance mit neuem CMK
+      try {
+        for (const id of _decryptFailedRenderedIds) {
+          const el = messagesEl?.querySelector(`[data-id="${id}"]`);
+          if (el) el.remove();
+          renderedMessageIds.delete(id);
+          decryptedCache?.delete?.(id);
+        }
+        _decryptFailedRenderedIds.clear();
+      } catch {}
+      e2eReady = false;
+      updateSendButton();
+      showSystemToast(lang.resetKeysRemote || "🔁 Peer reset keys — re-establishing…", 6000);
+      // Bootstrap neu anstossen
+      try {
+        await ensureConversationReady(getMyUser(), withUser, fetchInboxKeys, apiFetch);
+      } catch {}
+      // Session frisch booten
+      try {
+        const entry = await bootConversation(getMyUser(), withUser);
+        if (entry?.skBytes) {
+          sessionKeyBytes = entry.skBytes;
+          sessionRotationIndex = entry.rotationIndex ?? 0;
+          sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+          e2eReady = true;
+          updateSendButton();
+        }
+      } catch {}
+      setTimeout(() => { loadMessages?.().catch(() => {}); }, 1500);
+      return;
+    }
+
     if (e.data?.type !== "CMK_READY") return;
     if (e.data.peer !== withUser) return;
 
     console.log("🔄 CMK_READY empfangen → SessionKey aktualisieren", { wasReady: e2eReady });
 
     try {
+
+      // Phase 4 #4: Recovery-Lock räumen — neuer CMK ist da, deferred Messages
+      // können jetzt mit frischem SessionKey verschickt werden.
+      const peerKey = String(withUser || "").toLowerCase();
+      const hadLock = _recoveryInProgress.has(peerKey);
+      if (hadLock) {
+        _recoveryInProgress.delete(peerKey);
+        console.log("🔓 CMK_READY: Recovery-Lock geräumt für", withUser);
+      }
 
       // Fallback-Flush-Timer canceln — Authority-CMK hat Vorrang (Fallback-Race-Fix)
       if (fallbackFlushTimer) {
@@ -1028,6 +1396,26 @@ if (event?.type === "NEW_MESSAGE") {
       e2eReady = true;
       updateSendButton();
 
+      // 🔓 Ein frischer CMK kam an → einmaliger Retry aller "decrypt-failed"-Bubbles.
+      // Nicht bei jedem Poll, sondern NUR einmalig hier (ereignis-getriggert) —
+      // sonst DOM-Thrashing. Nachrichten die immer noch failen, bleiben als
+      // Fail-Bubble stehen bis zum nächsten CMK_READY oder Seiten-Reload.
+      try {
+        if (_decryptFailedRenderedIds.size > 0 && messagesEl) {
+          const retryIds = Array.from(_decryptFailedRenderedIds);
+          for (const id of retryIds) {
+            const oldEl = messagesEl.querySelector(`[data-id="${id}"]`);
+            if (oldEl) oldEl.remove();
+            renderedMessageIds.delete(id);
+            renderedMessageStatus?.delete?.(id);
+            // decryptedCache leeren falls alter Fail-Wert drin ist
+            decryptedCache?.delete?.(id);
+          }
+          _decryptFailedRenderedIds.clear();
+          console.warn("🔓 CMK_READY: Retry von", retryIds.length, "fehlgeschlagenen Messages");
+        }
+      } catch (e) { console.warn("Retry-Cleanup fehlgeschlagen:", e); }
+
       if (!wasReady) {
         // Erstmals bereit: alles flushen
         await loadMessages();
@@ -1041,6 +1429,25 @@ if (event?.type === "NEW_MESSAGE") {
         await flushDeferredInboundMessages();
       }
 
+      // Phase 4 #6: Falls Rotation während Recovery deferred wurde, jetzt nachholen.
+      const pendingRotKey = String(withUser || "").toLowerCase();
+      if (_pendingRotation.has(pendingRotKey)) {
+        _pendingRotation.delete(pendingRotKey);
+        console.log("⏰ Post-CMK_READY: deferred Rotation wird ausgeführt");
+        doRotationAndRefresh().catch(e => console.warn("⚠️ Deferred Rotation fehlgeschlagen", e));
+      }
+
+      // Nach dem Reload explizit nach unten scrollen — falls der User während der
+      // Self-Healing-Phase nach oben gescrollt hatte, würde die wasAtBottom-Heuristik
+      // sonst nicht greifen und neue Messages wären unsichtbar. Zwei Rounds weil
+      // der zweite Poll (via Self-Heal-Timer nach 3s/8s) evtl. noch NEUE msgs bringt.
+      try {
+        if (typeof scrollToBottom === "function") scrollToBottom();
+        setTimeout(() => {
+          try { if (typeof scrollToBottom === "function") scrollToBottom(); } catch {}
+        }, 500);
+      } catch {}
+
     } catch (err) {
       console.error("CMK_READY handling failed", err);
     }
@@ -1048,11 +1455,22 @@ if (event?.type === "NEW_MESSAGE") {
 }
 
 const renderedMessageIds = new Set();   // echte Server-IDs
+// Messages die als "🔒 Decrypt-Failed"-Platzhalter-Bubble gerendert wurden.
+// Wenn die Message später wieder kommt und OK dekodiert (z.B. nach Self-Heal
+// oder Key-Reset), ersetzen wir die alte Bubble durch die echte.
+const _decryptFailedRenderedIds = new Set();
 
 // Reply Bar, Reactions, Context Menu → chatContextMenu.js
 const pendingByTempId = new Map();      // tempId -> div
 // 🔥 Status Tracking (verhindert verlorene Updates)
 const renderedMessageStatus = new Map(); // messageId -> status
+// ✏️ Zuletzt angewendeter edited_at pro Nachricht (Polling-Fallback für Gäste/WS-off)
+const renderedMessageEditedAt = new Map(); // messageId -> edited_at (Number)
+// 🔗 Original-SID pro Nachricht — für Edit-Decrypt Fallback nach Guest→Account-Conversion.
+// Edits haben keine eigene sid im Payload; wenn die aktuelle Session-SID nicht passt
+// (weil der Peer konvertiert wurde), retryen wir mit der gecachten Original-SID damit
+// FIX A (SID-Peer-Fallback in decryptMessageIfNeeded) greifen kann.
+const messageSidCache = new Map(); // messageId -> m.sid
 // 🗑️ Bereits gelöschte Nachrichten (verhindert Render nach Delete-Event)
 const deletedMessageIds = new Set();
 // 🔁 Retry-Zähler für deferred inbound Messages (GSK-Wartezeit)
@@ -1152,11 +1570,15 @@ export function invalidateInboxKeyCache(handle) {
 
 // Presence & Contacts → chatPresence.js
 
-async function fetchInboxKeys(peerHandle) {
-  // Cache-Hit?
-  const cached = inboxKeyCache.get(peerHandle);
-  if (cached && Date.now() < cached.expiresAt) {
-    return cached.devices;
+async function fetchInboxKeys(peerHandle, opts = {}) {
+  const { forceFresh = false } = opts;
+
+  // Cache-Hit? (skip bei forceFresh — Recovery braucht aktuelle Server-Daten)
+  if (!forceFresh) {
+    const cached = inboxKeyCache.get(peerHandle);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.devices;
+    }
   }
 
   try {
@@ -1171,13 +1593,452 @@ async function fetchInboxKeys(peerHandle) {
       return [];
     }
 
-    console.log("📮 Inbox-Keys geladen:", peerHandle, devices.length);
+    console.log("📮 Inbox-Keys geladen:", peerHandle, devices.length, forceFresh ? "(fresh)" : "(cached-ok)");
     return devices;
   } catch (e) {
     console.warn("Inbox-Key fetch failed", e);
-    // Bei Fehler: alten Cache zurückgeben falls vorhanden
-    return cached?.devices ?? [];
+    // Bei Fehler: alten Cache zurückgeben falls vorhanden (nicht bei forceFresh)
+    if (!forceFresh) return inboxKeyCache.get(peerHandle)?.devices ?? [];
+    return [];
   }
+}
+
+// Cache-Invalidation für Recovery-Szenarien (Peer hat sich neu registriert)
+async function invalidatePeerCache(peerHandle) {
+  inboxKeyCache.delete(peerHandle);
+  try { await idbSet(`peer-devices:${peerHandle}`, null); } catch {}
+  console.warn("🗑️ Peer-Cache invalidiert:", peerHandle);
+}
+
+// ======================================================
+// FIX B — SELF-HEALING für persistente Decrypt-Fehler (DMs)
+// Nach N Fails in Folge vom gleichen Peer → cmk_req forcieren
+// (umgeht den 30s-Cooldown aus sessionManager.js), max 1x pro 60s.
+// Wird zurückgesetzt sobald wieder erfolgreich entschlüsselt wird.
+// ======================================================
+const _decryptFailCounters = new Map(); // peer → { count, lastHealTs }
+const DECRYPT_FAIL_THRESHOLD      = 3;
+const DECRYPT_FAIL_RETRIGGER_MS   = 60_000;
+
+// ======================================================
+// Phase 4 #4 — Recovery-State-Tracking
+// User schreibt während Recovery → Nachricht würde mit altem CMK verschlüsselt.
+// Lösung: Während Recovery aktiv ist, in deferredQueue puffern; nach Recovery
+// flushen mit frischen Keys. Auch Rotation wird deferred (Phase 4 #6).
+// ======================================================
+const _recoveryInProgress = new Set(); // peer-handles, die gerade in Recovery sind
+const _pendingRotation = new Set(); // peers, deren Rotation während Recovery deferred wurde
+// Phase 5.5: Group-Rotation-Lock — während eigener GSK rotiert + neu verteilt wird,
+// dürfen Sends nicht raus (sonst encrypten sie mit altem oder neuem GSK je nach Timing).
+// Ähnlich zu _recoveryInProgress aber für Gruppen-spezifisches Eigen-Rotieren.
+const _groupRotationInProgress = new Set(); // groupIds, die gerade rotieren
+
+function isInRecovery(peer) {
+  return _recoveryInProgress.has(String(peer || "").toLowerCase());
+}
+
+// Phase 5.5: Group-Rotation-Lock — true wenn gerade eine GSK-Rotation für die
+// Gruppe läuft (lokaler GSK-Wechsel + Re-Distribution).
+function isGroupRotating(groupId) {
+  return _groupRotationInProgress.has(String(groupId || ""));
+}
+
+// Phase 5.5: GSK-Rotation mit Lock. Sends werden in deferredQueue gepuffert,
+// bis Distribution komplett ist. Danach Auto-Flush mit neuem GSK.
+async function withGroupRotationLock(groupId, fn) {
+  const key = String(groupId || "");
+  _groupRotationInProgress.add(key);
+  try {
+    return await fn();
+  } finally {
+    _groupRotationInProgress.delete(key);
+    // Aufgestaute Sends nach Rotation flushen (mit neuem GSK)
+    if (groupId === withUser && deferredQueue.length > 0) {
+      console.log(`📤 Post-Group-Rotation: ${deferredQueue.length} aufgestaute Nachrichten flushen`);
+      flushDeferredQueue().catch(e => console.warn("⚠️ Post-Group-Rotation flush fehlgeschlagen", e));
+    }
+  }
+}
+
+async function withRecoveryLock(peer, fn) {
+  const key = String(peer || "").toLowerCase();
+  _recoveryInProgress.add(key);
+  try {
+    return await fn();
+  } finally {
+    _recoveryInProgress.delete(key);
+    // Nach Recovery: Local State refreshen + deferredQueue flushen
+    try {
+      const me = getMyUser();
+      if (me && peer && peer === withUser) {
+        const entry = await bootConversation(me, peer);
+        if (entry?.skBytes) {
+          sessionKeyBytes = entry.skBytes;
+          sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
+          sessionRotationIndex = entry.rotationIndex ?? 0;
+          console.log("🔄 Post-Recovery: SessionKey refreshed");
+        }
+      }
+      // Deferred Rotation einlösen falls aufgestaut
+      if (_pendingRotation.has(key)) {
+        _pendingRotation.delete(key);
+        console.log("⏰ Post-Recovery: deferred Rotation wird ausgeführt");
+        doRotationAndRefresh().catch(e => console.warn("⚠️ Deferred Rotation fehlgeschlagen", e));
+      }
+      // Deferred Queue flushen mit neuem SessionKey
+      if (deferredQueue.length > 0) {
+        console.log(`📤 Post-Recovery: ${deferredQueue.length} aufgestaute Nachrichten flushen`);
+        flushDeferredQueue().catch(e => console.warn("⚠️ Post-Recovery flush fehlgeschlagen", e));
+      }
+    } catch (e) {
+      console.warn("⚠️ Post-Recovery refresh fehlgeschlagen", e);
+    }
+  }
+}
+
+async function sendCmkReqNow(peer) {
+  if (!peer) {
+    e2eLog("CMK_REQ", "skipped", { reason: "no_peer" }, "warn");
+    return false;
+  }
+  const me = getMyUser();
+  if (!me || peer === me) {
+    e2eLog("CMK_REQ", "skipped", { reason: "self_or_no_me", me, peer }, "warn");
+    return false;
+  }
+  const sid = dmSessionId(me, peer);
+  const amAuthority = isAuthority(me, peer);
+  e2eLog("CMK_REQ", "start", { peer, sid, authority: amAuthority });
+
+  // ── Asymmetrisches Self-Healing ────────────────────────────
+  // Nur die Authority (= alphabetisch kleinerer Handle) darf CMK versenden.
+  // Wenn ICH Authority bin: re-bootstrap → neue Inbox-Keys des Peers fetchen
+  // und meinen CMK erneut wrappen + senden. Das passt z.B. wenn der Peer
+  // sich auf neuem Device registriert hat → seine alten Inbox-Keys sind tot.
+  if (amAuthority) {
+    return withRecoveryLock(peer, async () => {
+      try {
+        // Recovery: Cache invalidieren (Peer hat evtl. neue Inbox-Keys),
+        // damit ensureBootstrapped frische Server-Daten holt.
+        await invalidatePeerCache(peer);
+        // `ensureBootstrapped` hat einen 1x-Guard — recoveryMode räumt den selbst weg.
+        // recoveryMode=true → alter CMK wird verworfen + frischer erzeugt
+        // (löst Divergenz wenn Peer mit eigenem lokalen CMK existiert).
+        await ensureBootstrapped(me, peer, (h, o) => fetchInboxKeys(h, { forceFresh: true, ...(o || {}) }), apiFetch, { recoveryMode: true });
+        e2eLog("CMK_REQ", "authority_reboot_ok", { peer, sid });
+        console.warn("🔁 Self-healing (Authority): CMK re-bootstrap an", peer);
+        return true;
+      } catch (e) {
+        e2eLog("CMK_REQ", "authority_reboot_failed", { peer, sid, err: String(e) }, "error");
+        console.warn("Self-healing bootstrap failed:", e);
+        return false;
+      }
+    });
+  }
+
+  // ── Non-Authority: CMK beim Peer anfordern ─────────────────
+  // Recovery-Lock: User-Sends während der Authority noch antwortet würden mit
+  // altem CMK verschlüsselt → für 10s in deferredQueue puffern.
+  // Lock wird in receiveCMK frühzeitig geräumt sobald neuer CMK ankommt.
+  const peerKey = String(peer || "").toLowerCase();
+  _recoveryInProgress.add(peerKey);
+  const recoveryTimeout = setTimeout(() => {
+    if (_recoveryInProgress.has(peerKey)) {
+      _recoveryInProgress.delete(peerKey);
+      console.log("⏱️ Recovery-Lock-Timeout (10s) für", peer, "— Queue wird unter altem CMK geflusht");
+      if (deferredQueue.length > 0) flushDeferredQueue().catch(() => {});
+    }
+  }, 10_000);
+
+  // Recovery: Cache invalidieren — der Peer hat evtl. neue Inbox-Keys, an die er
+  // den frischen CMK schicken muss. Ohne fresh-fetch könnte er stale Devices nutzen.
+  await invalidatePeerCache(peer);
+  // Cooldown-Guard aus sessionManager.js entfernen → sofortiger Re-Send erlaubt
+  try { sessionStorage.removeItem(`cmk_req_sent:${sid}`); } catch {}
+  try {
+    await apiFetch("/chat/send", {
+      method: "POST",
+      body: JSON.stringify({
+        to: peer,
+        e2e: false,
+        v: 1,
+        type: "cmk_req",
+        message: "__cmk_req__",
+        sid
+      })
+    });
+    sessionStorage.setItem(`cmk_req_sent:${sid}`, String(Date.now()));
+    e2eLog("CMK_REQ", "sent_to_peer", { peer, sid });
+    console.warn("🔁 Self-healing (Non-Authority): CMK_REQ gesendet an", peer);
+    return true;
+  } catch (e) {
+    clearTimeout(recoveryTimeout);
+    _recoveryInProgress.delete(peerKey);
+    e2eLog("CMK_REQ", "send_failed", { peer, sid, err: String(e) }, "error");
+    console.warn("Self-healing cmk_req failed:", e);
+    return false;
+  }
+}
+
+// Zählt NUR "frische" Decrypt-Failures (letzte 5 min) als Anlass für Self-Heal.
+// Alte, dauerhaft unentschlüsselbare Messages (Device-Wechsel vor Tagen) sollen
+// nicht mehr den Bootstrap-Mechanismus triggern — das hat zu Bootstrap-Stürmen geführt.
+const FRESH_FAIL_WINDOW_MS = 5 * 60_000;
+function bumpDecryptFailCounter(fromHandle, msgTs) {
+  if (!fromHandle) return;
+  if (fromHandle === getMyUser()) return;          // eigene Msgs → kein Self-Heal
+  if (isGroupConversation(withUser)) return;        // Gruppen haben eigenen GSK-Flow
+  // ⏱ Nur frische Messages zählen (alte sind dauerhaft verloren, kein Retry sinnvoll)
+  if (msgTs && (Date.now() - Number(msgTs)) > FRESH_FAIL_WINDOW_MS) return;
+  const now = Date.now();
+  const s = _decryptFailCounters.get(fromHandle) || { count: 0, lastHealTs: 0 };
+  s.count++;
+  if (s.count >= DECRYPT_FAIL_THRESHOLD &&
+      (now - (s.lastHealTs || 0)) > DECRYPT_FAIL_RETRIGGER_MS) {
+    s.lastHealTs = now;
+    s.count = 0;
+    (async () => {
+      // Cache invalidieren bevor wir Recovery starten — Peer hat sich evtl. neu
+      // registriert (neue Devices) oder hat divergenten CMK → frische Daten holen.
+      // sendCmkReqNow ruft das auch nochmal, aber hier doppelt sicher.
+      await invalidatePeerCache(fromHandle);
+      const ok = await sendCmkReqNow(fromHandle);
+      if (ok) {
+        // Nach 3s nochmal polling, dann 8s → ggf. sind neue Nachrichten da
+        // die jetzt mit dem frischen CMK dekodiert werden können.
+        setTimeout(() => { loadMessages?.().catch(() => {}); }, 3000);
+        setTimeout(() => { loadMessages?.().catch(() => {}); }, 8000);
+      }
+    })();
+  }
+  _decryptFailCounters.set(fromHandle, s);
+}
+
+function resetDecryptFailCounter(fromHandle) {
+  if (!fromHandle) return;
+  if (_decryptFailCounters.has(fromHandle)) _decryptFailCounters.delete(fromHandle);
+}
+
+// ======================================================
+// FIX C — UI: Bubble für unentschlüsselbare Nachrichten
+// Klickbarer "Neuen Schlüssel anfordern"-Button → triggert cmk_req
+// und lädt die Liste nach kurzer Verzögerung neu.
+// ======================================================
+function renderDecryptFailedBubble(m, opts = {}) {
+  if (!messagesEl || !m) return null;
+  const isGroup = !!opts.isGroup;
+  const groupId = opts.groupId || null;
+  const div = document.createElement("div");
+  const isOwn = m.from?.toLowerCase() === getMyUser()?.toLowerCase();
+  div.className = (isOwn ? "me" : "other") + " decrypt-failed";
+  if (m.id) div.dataset.id = m.id;
+  if (m.ts) div.dataset.ts = String(m.ts);
+
+  const box = document.createElement("div");
+  box.className = "msg-text";
+  box.style.cssText = "display:flex;flex-direction:column;gap:6px;max-width:320px;";
+
+  const title = document.createElement("div");
+  title.style.cssText = "font-weight:600;font-size:13px;color:var(--text-primary,#fff);";
+  title.textContent = isOwn
+    ? (lang.decryptFailedOwn || "🔒 You can no longer decrypt this message")
+    : (lang.decryptFailed || "🔒 Message could not be decrypted");
+
+  const hint = document.createElement("div");
+  hint.style.cssText = "font-size:12px;color:var(--text-secondary,#b3b3b3);line-height:1.35;";
+  // Phase 5.1: Group vs. DM unterschiedliche Hint-Texte
+  // - DM eigene: "Frage Schlüssel auf einer Nachricht von <withUser>"
+  // - Group eigene: "Dein Gruppen-Schlüssel ging verloren..." (kein peer-Verweis sinnvoll)
+  // - DM fremd: generic "Encryption key unavailable"
+  // - Group fremd: "Schlüssel von <sender> fehlt..."
+  if (isOwn) {
+    hint.textContent = isGroup
+      ? (lang.decryptFailedOwnGroupHint || "Your group key was lost. Older messages stay unreadable — new ones will work again.")
+      : (lang.decryptFailedOwnHint || "The key was lost. Request a new key on a message from {peer}.").replace(/\{peer\}/g, withUser || "");
+  } else {
+    hint.textContent = isGroup
+      ? (lang.decryptFailedGroupHint || "Key from {peer} is missing. Tap 'Request key' to fetch it.").replace(/\{peer\}/g, m.from || "")
+      : (lang.decryptFailedHint || "Encryption key unavailable.");
+  }
+
+  // Eigene Nachrichten: nur Text, kein Button (Recovery läuft über Peer-Bubble)
+  if (isOwn) {
+    box.append(title, hint);
+    div.append(box);
+    const timeElOwn = document.createElement("div");
+    timeElOwn.className = "timestamp";
+    timeElOwn.textContent = formatTimestamp(m.ts || Date.now());
+    div.append(timeElOwn);
+    messagesEl.appendChild(div);
+    return div;
+  }
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.style.cssText = "align-self:flex-start;margin-top:4px;padding:6px 10px;border-radius:8px;border:none;background:var(--accent-voice,#38bdf8);color:#fff;font-size:12px;font-weight:600;cursor:pointer;min-height:28px;transition:background 0.15s, opacity 0.15s;";
+
+  // ── Persistent button state (überlebt Re-Renders) ─────────────────────
+  // Wenn der User den Button bereits geklickt hat, zeigen wir das Ergebnis
+  // persistent — damit Re-Render durch loadMessages die UI nicht "zurücksetzt".
+  // Phase 5.1: für Gruppen ist peer = sender (m.from), state-key composite (groupId:sender),
+  // damit verschiedene Sender unabhängige Button-States haben.
+  const peer = isGroup ? m.from : (isOwn ? withUser : m.from);
+  const stateKey = isGroup ? `decrypt_retry_state:${groupId}:${peer}` : `decrypt_retry_state:${peer}`;
+  const savedRaw = (() => { try { return sessionStorage.getItem(stateKey); } catch { return null; } })();
+  const savedState = savedRaw ? (() => { try { return JSON.parse(savedRaw); } catch { return null; } })() : null;
+  const STATE_TTL_MS = 15 * 60_000; // 15 Min persistent state
+
+  function applyState(state) {
+    if (!state) {
+      btn.textContent = lang.decryptRetryBtn || "🔄 Request new key";
+      btn.disabled = false;
+      btn.style.opacity = "1";
+      btn.style.background = "var(--accent-voice,#38bdf8)";
+      // Phase 5.1: Group/DM-spezifischen Hint behalten (nicht mit generic überschreiben)
+      hint.textContent = isGroup
+        ? (lang.decryptFailedGroupHint || "Key from {peer} is missing. Tap 'Request key' to fetch it.").replace(/\{peer\}/g, m.from || "")
+        : (lang.decryptFailedHint || "Encryption key unavailable.");
+      return;
+    }
+    if (state.phase === "pending") {
+      btn.textContent = lang.decryptRetryPending || "⏳ Requesting…";
+      btn.disabled = true;
+      btn.style.opacity = "0.7";
+    } else if (state.phase === "success") {
+      const COOLDOWN_MS = 30_000;
+      const remaining = Math.max(0, COOLDOWN_MS - (Date.now() - (state.ts || 0)));
+      if (remaining > 0) {
+        btn.textContent = `${lang.decryptRetrySuccess || "✅ Key requested"} (${Math.ceil(remaining / 1000)}s)`;
+        btn.disabled = true;
+        btn.style.opacity = "0.7";
+        btn.style.background = "var(--status-speaking,#4ade80)";
+        setTimeout(() => applyState(state), 1000);
+      } else {
+        btn.textContent = lang.decryptRetryAgain || "🔄 Request again";
+        btn.disabled = false;
+        btn.style.opacity = "1";
+        btn.style.background = "var(--accent-voice,#38bdf8)";
+      }
+      hint.textContent = lang.decryptRetrySuccessHint || "Future messages will work. Older messages encrypted with lost keys cannot be recovered.";
+    } else if (state.phase === "error") {
+      btn.textContent = lang.decryptRetryErrorBtn || "↻ Try again";
+      btn.disabled = false;
+      btn.style.opacity = "1";
+      btn.style.background = "var(--status-error,#ef4444)";
+      hint.textContent = lang.decryptRetryErrorHint || "Key request failed. Check connection and try again.";
+    }
+  }
+
+  // Bei Re-Render: gespeicherten State wieder anwenden (falls nicht zu alt)
+  if (savedState && Date.now() - (savedState.ts || 0) < STATE_TTL_MS) {
+    applyState(savedState);
+  } else {
+    applyState(null);
+  }
+
+  // Sync zwischen mehreren Bubbles desselben Peers: CustomEvent hört auf State-Changes.
+  // Phase 5.1: bei Gruppen wird `eventPeerKey` (composite groupId:sender) verwendet,
+  // damit Bubbles verschiedener Sender in derselben Gruppe unabhängige States haben.
+  const eventPeerKey = isGroup ? `${groupId}:${peer}` : peer;
+  const onStateChange = (ev) => {
+    if (ev?.detail?.peer !== eventPeerKey) return;
+    if (!div.isConnected) {
+      document.removeEventListener("cmk-req-state-change", onStateChange);
+      return;
+    }
+    applyState(ev.detail.state);
+  };
+  document.addEventListener("cmk-req-state-change", onStateChange);
+
+  const broadcastState = (state) => {
+    document.dispatchEvent(new CustomEvent("cmk-req-state-change", { detail: { peer: eventPeerKey, state } }));
+  };
+
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    e2eLog("CMK_REQ", "button_click", { peer, msgId: m.id, isOwn, isGroup });
+    const pending = { phase: "pending", ts: Date.now() };
+    applyState(pending);
+    try { sessionStorage.setItem(stateKey, JSON.stringify(pending)); } catch {}
+    broadcastState(pending);
+
+    // Pre-Check: Ist der Peer/Sender gerade online? Presence-API ist genauer als
+    // Inbox-Keys (die persistent im KV bleiben — auch wenn iPhone offline).
+    // Inbox-Keys-Check als Fallback (wenn Presence-API failed oder kein Status).
+    let peerReachable = true;
+    try {
+      const presenceMap = await fetchPresence([peer]);
+      const peerPresence = presenceMap?.[peer?.toLowerCase()];
+      if (peerPresence && peerPresence.online === false) {
+        // Definitiv offline gemäß Presence
+        peerReachable = false;
+      } else if (!peerPresence) {
+        // Kein Presence-Status → fallback auf Inbox-Keys-Existenz
+        const peerDevices = await fetchInboxKeys(peer, { forceFresh: true });
+        peerReachable = Array.isArray(peerDevices) && peerDevices.length > 0;
+      }
+      // peerPresence.online === true → peerReachable bleibt true
+    } catch {
+      // Bei Fehler nicht blockieren — User soll's probieren können
+      peerReachable = true;
+    }
+
+    if (!peerReachable) {
+      const offlineState = { phase: "peer_offline", ts: Date.now() };
+      const peerOfflineHint = (lang.decryptRetryPeerOfflineHint
+        || "{peer} is currently unreachable. Ask {peer} to open the app, then try again.").replace(/\{peer\}/g, peer);
+      const peerOfflineToast = (lang.decryptRetryPeerOfflineToast
+        || "⚠️ {peer} unreachable").replace(/\{peer\}/g, peer);
+      btn.textContent = lang.decryptRetryErrorBtn || "↻ Try again";
+      btn.disabled = false;
+      btn.style.opacity = "1";
+      btn.style.background = "var(--status-error,#ef4444)";
+      hint.textContent = peerOfflineHint;
+      try { sessionStorage.setItem(stateKey, JSON.stringify(offlineState)); } catch {}
+      broadcastState(offlineState);
+      showSystemToast(peerOfflineToast, 4000);
+      return;
+    }
+
+    // Phase 5.1: Group → request_gsk an den Sender; DM → bestehender cmk_req-Pfad.
+    let ok;
+    if (isGroup) {
+      try {
+        await requestGSKFrom(groupId, peer);
+        ok = true;
+      } catch (e) {
+        console.warn("⚠️ requestGSKFrom failed", e);
+        ok = false;
+      }
+    } else {
+      ok = await sendCmkReqNow(peer);
+    }
+
+    const result = { phase: ok ? "success" : "error", ts: Date.now() };
+    applyState(result);
+    try { sessionStorage.setItem(stateKey, JSON.stringify(result)); } catch {}
+    broadcastState(result);
+
+    // Optional: kurzer Toast (falls chat-toast-container existiert)
+    showSystemToast(ok
+      ? (lang.decryptRetrySent || "🔁 New key requested")
+      : (lang.decryptRetryFailed || "⚠️ Request failed"),
+      3500
+    );
+    // Nach 2s loadMessages → neue Keys ggf. da
+    setTimeout(() => { loadMessages?.().catch(() => {}); }, 2000);
+  });
+
+  box.append(title, hint, btn);
+  div.append(box);
+
+  const timeEl = document.createElement("div");
+  timeEl.className = "timestamp";
+  timeEl.textContent = formatTimestamp(m.ts || Date.now());
+  div.append(timeEl);
+
+  messagesEl.appendChild(div);
+  return div;
 }
 
 // ======================================================
@@ -1332,10 +2193,11 @@ if (typeof decrypted === "string") {
     lruCacheSet(msg.id, finalText);
   }
 
-  console.log("🔐 MK-DECRYPT success", {
-    id: msg.id,
-    epoch: ep
+  e2eLog("DECRYPT", "ok", {
+    id: msg.id, peer: otherHandle, from: msg.from,
+    sid: sessionId, rot: msgRotationIndex, epoch: ep
   });
+  console.log("🔐 MK-DECRYPT success", { id: msg.id, epoch: ep });
 
   return finalText;   // "" ist hier erlaubt!
 }
@@ -1345,18 +2207,61 @@ if (typeof decrypted === "string") {
       }
     }
 
-    // Diagnose: mehr Kontext für Debugging
-    console.warn("❌ MK decrypt failed (all epochs)", msg.id, {
-      msgRotationIndex: typeof msg.rotationIndex === "number" ? msg.rotationIndex : 0,
-      sessionRotationIndex,
+    // ─── FIX A: SID-basierter CMK-Fallback (Guest-Conversion) ───
+    // Alte Nachrichten nach Guest→Real-Conversion haben msg.sid = `dm:me:guest_xxx`
+    // während der aktuelle Peer jetzt `ret31` ist. Die alte CMK liegt noch in IDB
+    // unter `cmk:me:guest_xxx` — wir probieren sie direkt für diese Message.
+    try {
+      const sidPeer = peerFromDmSid(msg.sid, getMyUser());
+      const currentPeerLc = String(otherHandle || "").toLowerCase();
+      if (sidPeer && sidPeer !== currentPeerLc) {
+        const oldCmk = await getCMKIfExists(sidPeer);
+        if (oldCmk instanceof Uint8Array) {
+          const fallbackSid = msg.sid;
+          const fallbackRot = typeof msg.rotationIndex === "number" ? msg.rotationIndex : 0;
+          const fallbackSk = await deriveSessionKeyBytesForRotation(oldCmk, fallbackSid, fallbackRot);
+          for (const ep of epochsToTry) {
+            try {
+              const mkFb = await deriveMessageKey(fallbackSk, fallbackSid, ep);
+              const decryptedFb = await e2eDecrypt(mkFb, msg.ivB64, msg.ctB64);
+              if (typeof decryptedFb === "string") {
+                e2eLog("DECRYPT", "sid_fallback_ok", {
+                  id: msg.id, peer: otherHandle, sidPeer, fallbackSid, epoch: ep
+                });
+                console.log("🔓 Decrypt via SID-Peer-Fallback erfolgreich:", { sidPeer, epoch: ep });
+                if (msg?.id) lruCacheSet(msg.id, decryptedFb);
+                return decryptedFb;
+              }
+            } catch { /* next epoch */ }
+          }
+        }
+      }
+    } catch (fbErr) {
+      console.warn("SID-Fallback Decrypt error:", fbErr);
+    }
+    // ─── /FIX A ────────────────────────────────────────────────
+
+    // Diagnose: strukturiertes Log + klassischer console.warn (ersteres landet im Ring-Buffer)
+    const failContext = {
+      id: msg.id,
+      peer: otherHandle,
+      from: msg.from,
+      msgRot: typeof msg.rotationIndex === "number" ? msg.rotationIndex : 0,
+      sessionRot: sessionRotationIndex,
       hasCmk: !!sessionCmkBytes,
       sid: msg.sid || "(keins)",
-      computedSid: dmSessionId(getMyUser(), otherHandle)
-    });
+      computedSid: dmSessionId(getMyUser(), otherHandle),
+      sidMismatch: msg.sid && msg.sid !== dmSessionId(getMyUser(), otherHandle),
+      msgAgeMin: msg.ts ? Math.round((Date.now() - msg.ts) / 60000) : null,
+      reason: "all_epochs_failed",
+    };
+    e2eLog("DECRYPT", "permanent_fail", failContext, "error");
+    console.warn("❌ MK decrypt failed (all epochs)", msg.id, failContext);
 
     return "__decrypt_failed__";  // 🔥 Sentinel: permanenter Fehler — NICHT deferred!
 
   } catch (e) {
+    e2eLog("DECRYPT", "crash", { id: msg.id, peer: otherHandle, err: String(e) }, "error");
     console.warn("❌ decrypt crash", e);
     return null;
   }
@@ -1557,11 +2462,36 @@ isFlushingDeferredInbound = true;
   );
 
   // Phase 2: Ergebnisse sequenziell verarbeiten (DOM-Reihenfolge + Re-Queue)
+  const nowFlush = Date.now();
   for (let i = 0; i < queue.length; i++) {
     const m = queue[i];
     const text = decrypted[i].status === "fulfilled" ? decrypted[i].value : "__decrypt_failed__";
 
     console.debug("[flush]", { from: m.from, ts: m.ts, result: text === null ? "null(deferred)" : text === "__decrypt_failed__" ? "FAILED" : text === "__control__" ? "control" : "OK:"+String(text).slice(0,20) });
+
+    // 🧹 Stale-Cleanup: Nachrichten älter als STALE_MESSAGE_MAX_AGE_MS (1h) und noch nicht
+    // entschlüsselbar → permanent als nicht-entschlüsselbar markieren (kein ewiges Retry)
+    const isStale = m.ts && (nowFlush - m.ts) > STALE_MESSAGE_MAX_AGE_MS;
+    if (isStale && (text === null || text === "__control__" || text === "__decrypt_failed__")) {
+      console.warn("🧹 Stale deferred message permanently failed", { id: m.id, ageMs: nowFlush - m.ts, from: m.from });
+      const el = document.querySelector(`[data-id="${m.id}"]`);
+      if (el) {
+        if (isAutoDeleted(m.ts)) {
+          const sysDiv = document.createElement("div");
+          sysDiv.className = "system";
+          sysDiv.textContent = lang.messageExpired || "⏱ Nachricht automatisch gelöscht";
+          el.replaceWith(sysDiv);
+        } else {
+          const textEl = el.querySelector(".msg-text") || el.querySelector("div:not(.sender-name):not(.timestamp)");
+          if (textEl) textEl.textContent = decryptFailedText(m.ts);
+        }
+      }
+      if (m?.id) {
+        deferredInboundIds.delete(m.id);
+        deferredInboundRetryCount.delete(m.id);
+      }
+      continue;
+    }
 
     if (text === null || text === "__control__") {
       // GSK noch nicht verfügbar → GSK aktiv anfordern + Retry-Zähler erhöhen
@@ -1684,19 +2614,28 @@ isFlushingDeferredInbound = true;
 // Sendet "request_gsk" Control-Message an den Sender (über Gruppen-Routing)
 // Der Sender antwortet mit distributeGroupSK() gezielt für unsere Devices
 // ======================================================
-async function requestGSKFrom(groupId, senderHandle) {
+async function requestGSKFrom(groupId, senderHandle, opts = {}) {
   // Eigene GSK kann man nicht anfordern
   const _self = _isGuestMode ? _guestData?.guestHandle : getMyUser();
   if (!senderHandle || senderHandle === _self) return;
 
   const key = `${groupId}:${senderHandle}`;
+  const isRetry = !!opts.isRetry;
 
   // Noch im Cooldown nach 429?
   const cooldownUntil = gskRequestCooldown.get(key);
   if (cooldownUntil && Date.now() < cooldownUntil) return;
 
-  if (pendingGskRequests.has(key)) return; // max 1 Request pro Sender pro Session
+  // Pending-Check nur für initialen Call (Retries dürfen durch — sind eigene Schedules)
+  if (!isRetry && pendingGskRequests.has(key)) return;
   pendingGskRequests.add(key);
+
+  // Phase 5.2: Cache-Invalidation für den Sender — sein iPhone hat evtl. neue
+  // Inbox-Keys nach Re-Login. Nur beim initialen Call (Retries würden Spam machen).
+  if (!isRetry) {
+    try { await invalidatePeerCache(senderHandle); } catch {}
+  }
+
   try {
     const result = await apiFetch("/chat/send", {
       method: "POST",
@@ -1708,7 +2647,6 @@ async function requestGSKFrom(groupId, senderHandle) {
       })
     });
     // apiFetch wirft kein Error bei 429 — gibt { rateLimited: true } zurück
-    // → 30s Cooldown setzen damit nicht sofort erneut versucht wird
     if (result?.rateLimited) {
       pendingGskRequests.delete(key);
       gskRequestCooldown.set(key, Date.now() + 30_000);
@@ -1716,14 +2654,50 @@ async function requestGSKFrom(groupId, senderHandle) {
       return;
     }
     gskRequestCooldown.delete(key);
-    // Nach 10s: pendingGskRequests freigeben damit Retry möglich falls keine Antwort kommt
+
+    // Phase 5.2: Exponential Backoff — wenn Sender offline war oder request verloren ging,
+    // automatisch erneut versuchen mit wachsenden Delays. GSK_READY-Handler räumt auf.
+    const RETRY_DELAYS = [3000, 8000, 20000]; // 3 weitere Versuche nach initialem
+    const attempts = gskAttemptCount.get(key) || 0;
+    if (attempts < RETRY_DELAYS.length) {
+      const delay = RETRY_DELAYS[attempts];
+      gskAttemptCount.set(key, attempts + 1);
+      // Vorigen Timer killen falls vorhanden (kein Doppel-Schedule)
+      const oldTimer = gskRetryTimers.get(key);
+      if (oldTimer) clearTimeout(oldTimer);
+      const timer = setTimeout(() => {
+        gskRetryTimers.delete(key);
+        // Falls inzwischen GSK angekommen ist, hat resetGskRequestState() den Counter geleert
+        if ((gskAttemptCount.get(key) || 0) === 0) return;
+        requestGSKFrom(groupId, senderHandle, { isRetry: true }).catch(() => {});
+      }, delay);
+      gskRetryTimers.set(key, timer);
+      console.log(`⏳ requestGSKFrom retry #${attempts + 1} für ${senderHandle} scheduled in ${delay}ms`);
+    } else {
+      console.log("⏸️ requestGSKFrom max retries erreicht — wartet auf weiteren Decrypt-Fail-Trigger");
+      gskAttemptCount.delete(key); // Reset → nächster Decrypt-Fail-Trigger startet wieder
+    }
+
+    // Pending-Slot nach 10s freigeben (für nächsten Decrypt-Fail-getriggerten Call)
     setTimeout(() => pendingGskRequests.delete(key), 10_000);
   } catch (e) {
     console.warn("⚠️ requestGSKFrom fehlgeschlagen:", e);
-    // 403 (nicht Mitglied) oder 400 (own GSK) → kein Retry
     const status = e?.status ?? e?.code;
     if (status === 403 || status === 400) return;
-    pendingGskRequests.delete(key); // Retry bei anderen Fehlern erlauben
+    pendingGskRequests.delete(key);
+  }
+}
+
+// Phase 5.2: Wenn GSK ankommt, allen Retry-State für diesen Sender aufräumen.
+function resetGskRequestState(groupId, senderHandle) {
+  const key = `${groupId}:${senderHandle}`;
+  pendingGskRequests.delete(key);
+  gskRequestCooldown.delete(key);
+  gskAttemptCount.delete(key);
+  const timer = gskRetryTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    gskRetryTimers.delete(key);
   }
 }
 
@@ -1759,7 +2733,17 @@ console.log("🔄 Chat UI State reset");
   if (sendBtn.dataset.bound === "1") return;
 sendBtn.dataset.bound = "1";
 
-  titleEl.textContent = _initialGroupName || (withUser?.startsWith("guest_") ? guestDisplayName(withUser) : withUser);
+  if (_initialGroupName) {
+    titleEl.textContent = _initialGroupName;
+  } else if (withUser?.startsWith("guest_")) {
+    titleEl.textContent = guestDisplayName(withUser);
+  } else if (withUser) {
+    const fallback = withUser;
+    titleEl.textContent = getDisplayName(withUser, fallback);
+    titleEl.dataset.profileHandle = withUser;
+    titleEl.dataset.profileFallback = fallback;
+    prefetchProfiles([withUser]).catch(() => {});
+  }
 if (firstLoad) {
   messagesEl.innerHTML = "";
 }
@@ -1792,12 +2776,28 @@ if (firstLoad) {
 
     if (!text) return;
 
+    // 🔒 GAST PRE-FLIGHT: Wenn Limit oder Zeit lokal schon erreicht → sofort sperren,
+    // keinen unnötigen Request mehr auslösen.
+    if (_guestData) {
+      if (_guestLocked) return;
+      const left = (_guestData.msgLimit || 20) - (_guestData.msgCount || 0);
+      if (left <= 0) { lockGuestSession("limit"); return; }
+      if (_guestData.expiresAt && Date.now() > _guestData.expiresAt) {
+        lockGuestSession("expired");
+        return;
+      }
+    }
+
     // Gäste nutzen jetzt den normalen E2E-Gruppen-Pfad (kein separater Guest-Send mehr)
 
 // ==========================================
 // E2E NOT READY → DEFERRED SEND
+// Phase 4 #4: DM-Recovery aktiv → puffern (CMK ändert sich gerade).
+// Phase 5.5: Group-Rotation aktiv → puffern (eigener GSK ändert sich + verteilt).
 // ==========================================
-if (!e2eReady) {
+if (!e2eReady
+    || (!isGroupConversation(withUser) && isInRecovery(withUser))
+    || (isGroupConversation(withUser) && isGroupRotating(withUser))) {
 
   const tempId = `bootstrap-${Date.now()}-${Math.random()
     .toString(16)
@@ -1819,7 +2819,9 @@ if (!e2eReady) {
   scrollToBottom();
   updateSendButton();
 
-  console.log("🟡 Nachricht deferred – E2E noch nicht bereit");
+  if (!e2eReady) console.log("🟡 Nachricht deferred – E2E noch nicht bereit");
+  else if (isGroupConversation(withUser) && isGroupRotating(withUser)) console.log("🟡 Nachricht deferred – Group-Rotation läuft, wird mit neuem GSK gesendet");
+  else console.log("🟡 Nachricht deferred – Recovery läuft, wird mit frischem CMK gesendet");
 
   return;
 }
@@ -1962,6 +2964,26 @@ if (isGroupConversation(withUser)) {
 
 }
 
+// 🔴 GAST: Nachrichtenlimit erreicht — permanent, KEIN Retry, KEIN pending
+if (res?.guestLimitReached) {
+  const div = pendingByTempId.get(tempId);
+  if (div) { div.remove(); pendingByTempId.delete(tempId); }
+  if (_guestData && res.msgLimit) {
+    _guestData.msgCount = res.msgLimit;
+    _guestData.msgLimit = res.msgLimit;
+  }
+  lockGuestSession("limit");
+  return;
+}
+
+// 🔴 GAST: Session abgelaufen — permanent, KEIN Retry
+if (res?.guestExpired) {
+  const div = pendingByTempId.get(tempId);
+  if (div) { div.remove(); pendingByTempId.delete(tempId); }
+  lockGuestSession("expired");
+  return;
+}
+
 // 🔧 FIX SCHRITT 3 — 429 = warten, NICHT fehlschlagen
 if (res?.rateLimited) {
   console.warn("⏸️ Rate-Limit aktiv – Nachricht bleibt pending");
@@ -1982,9 +3004,10 @@ if (res?.rateLimited) {
 // ✅ Erfolg
 const saved = res.message;
 
-// Gast-Nachrichtenzähler im Banner aktualisieren
+// Gast-Nachrichtenzähler im Banner aktualisieren + persistieren (Reload-safe)
 if (_guestData) {
   _guestData.msgCount = (_guestData.msgCount || 0) + 1;
+  persistGuestData();
   updateGuestBannerCount();
 }
 
@@ -2184,6 +3207,132 @@ function initAttachmentUI() {
     if (f) handleFileSelected(f, "file");
     fileInput.value = "";
   });
+
+  // ── Drag & Drop ─────────────────────────────────────────
+  initDragDropUpload();
+}
+
+// ======================================================
+// 🖱️ DRAG & DROP — Foto/PDF/Datei direkt in Chat ziehen
+// ======================================================
+const PHOTO_MIME_RE = /^image\/(jpeg|png|webp|heic|heif)$/i;
+const ALLOWED_FILE_EXT_RE = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip|ics|gif|txt)$/i;
+
+function classifyDroppedFile(file) {
+  if (!file) return null;
+  if (PHOTO_MIME_RE.test(file.type)) return "photo";
+  if (ALLOWED_FILE_EXT_RE.test(file.name || "")) return "file";
+  // HEIC/HEIF kommen in manchen Browsern ohne MIME-Type an → per Extension erkennen
+  if (/\.(heic|heif|jpg|jpeg|png|webp)$/i.test(file.name || "")) return "photo";
+  return null; // nicht unterstützt
+}
+
+function initDragDropUpload() {
+  const wrapper = document.getElementById("chat-wrapper");
+  if (!wrapper || wrapper.dataset.dropBound === "1") return;
+  wrapper.dataset.dropBound = "1";
+
+  // Overlay lazy erzeugen
+  let overlay = null;
+  function getOverlay() {
+    if (overlay) return overlay;
+    overlay = document.createElement("div");
+    overlay.id = "chat-dropzone-overlay";
+    overlay.style.cssText = [
+      "position:absolute","inset:0","z-index:400","pointer-events:none",
+      "display:none","align-items:center","justify-content:center",
+      "background:rgba(56,189,248,0.12)","border:3px dashed var(--accent-voice,#38bdf8)",
+      "border-radius:14px","backdrop-filter:blur(2px)",
+      "-webkit-backdrop-filter:blur(2px)","transition:opacity .12s ease"
+    ].join(";");
+    const box = document.createElement("div");
+    box.style.cssText = "padding:18px 26px;border-radius:12px;background:rgba(10,12,16,0.85);color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,0.4);";
+    box.textContent = "📎 " + (lang.dropToSend || "Drop file to send");
+    overlay.appendChild(box);
+
+    const cs = getComputedStyle(wrapper);
+    if (cs.position === "static") wrapper.style.position = "relative";
+    wrapper.appendChild(overlay);
+    return overlay;
+  }
+
+  let dragDepth = 0; // Counter gegen Flicker bei dragenter auf Kind-Elementen
+
+  function hasFilesPayload(e) {
+    const types = e.dataTransfer?.types;
+    if (!types) return false;
+    for (let i = 0; i < types.length; i++) {
+      if (types[i] === "Files") return true;
+    }
+    return false;
+  }
+
+  wrapper.addEventListener("dragenter", (e) => {
+    if (!hasFilesPayload(e)) return;
+    // Gast gesperrt? → Nicht reagieren (kein Hoffnungs-Overlay)
+    if (_guestData && (_guestLocked || !canSend())) return;
+    e.preventDefault();
+    dragDepth++;
+    const ov = getOverlay();
+    ov.style.display = "flex";
+  });
+
+  wrapper.addEventListener("dragover", (e) => {
+    if (!hasFilesPayload(e)) return;
+    if (_guestData && (_guestLocked || !canSend())) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+
+  wrapper.addEventListener("dragleave", (e) => {
+    if (!hasFilesPayload(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0 && overlay) overlay.style.display = "none";
+  });
+
+  wrapper.addEventListener("drop", async (e) => {
+    if (!hasFilesPayload(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    if (overlay) overlay.style.display = "none";
+
+    // Guard: Gast gesperrt oder Limit erreicht
+    if (_guestData && (_guestLocked || !canSend())) {
+      if (typeof lockGuestSession === "function" && _guestData) {
+        const left = (_guestData.msgLimit || 20) - (_guestData.msgCount || 0);
+        if (left <= 0) lockGuestSession("limit");
+        else if (_guestData.expiresAt && Date.now() > _guestData.expiresAt) lockGuestSession("expired");
+      }
+      return;
+    }
+
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length === 0) return;
+
+    // Sequentiell verarbeiten — gleicher Flow wie File-Picker.
+    // handleFileSelected enthält bereits Size-Check, Pending-Bubble, Upload, Send.
+    // WICHTIG: Backend hat 2s Hard-Rate-Limit pro Send → zwischen Files warten,
+    // sonst blockiert das zweite Attachment mit 429.
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const type = classifyDroppedFile(file);
+      if (!type) {
+        showSystemToast(lang.dropUnsupported || `⚠️ ${file.name}: Dateityp nicht unterstützt`, 5000);
+        continue;
+      }
+      // Server-Cooldown respektieren (SEND_COOLDOWN_MS = 2000)
+      if (i > 0) {
+        const wait = Math.max(0, SEND_COOLDOWN_MS - (Date.now() - lastSendTime));
+        if (wait > 0) await new Promise(r => setTimeout(r, wait));
+      }
+      try {
+        lastSendTime = Date.now();
+        await handleFileSelected(file, type);
+      } catch (err) {
+        console.error("[drop] upload failed:", err);
+      }
+    }
+  });
 }
 
 async function handleFileSelected(file, attachmentType) {
@@ -2274,6 +3423,35 @@ async function sendAttachmentMessage(attachmentPayloadJson, r2Key, attachmentTyp
       });
     }
 
+    // ── FEHLER-FLAGS zuerst behandeln (kein Throw → würde sonst stumm hängen) ──
+    if (res?.guestLimitReached) {
+      pendingDiv?.remove();
+      pendingByTempId.delete(tempId);
+      if (_guestData && res.msgLimit) {
+        _guestData.msgCount = res.msgLimit;
+        _guestData.msgLimit = res.msgLimit;
+        if (typeof persistGuestData === "function") persistGuestData();
+      }
+      lockGuestSession("limit");
+      return;
+    }
+    if (res?.guestExpired) {
+      pendingDiv?.remove();
+      pendingByTempId.delete(tempId);
+      lockGuestSession("expired");
+      return;
+    }
+    if (res?.rateLimited) {
+      // Server-Cooldown (2s) → Bubble als failed markieren statt ewig pending
+      if (pendingDiv) {
+        pendingDiv.classList.remove("pending");
+        pendingDiv.classList.add("failed");
+      }
+      pendingByTempId.delete(tempId);
+      showSystemToast("⏸️ " + (lang.sendCooldown || "Zu schnell gesendet — bitte erneut versuchen"), 4000);
+      return;
+    }
+
     // Pending-Bubble updaten mit echter ID + Attachment-Payload
     if (pendingDiv && res?.message?.id) {
       pendingDiv.dataset.id = res.message.id;
@@ -2308,6 +3486,14 @@ async function sendAttachmentMessage(attachmentPayloadJson, r2Key, attachmentTyp
       if (attachPreview) {
         savePreviewCache(previewConvoId(withUser), { text: attachPreview, ts: now, from: getMyUser() });
       }
+    } else {
+      // Server lieferte weder message.id noch bekanntes Fehler-Flag → Bubble nicht hängen lassen
+      if (pendingDiv) {
+        pendingDiv.classList.remove("pending");
+        pendingDiv.classList.add("failed");
+      }
+      pendingByTempId.delete(tempId);
+      showSystemToast("⚠️ Senden fehlgeschlagen");
     }
   } catch (e) {
     console.warn("Attachment send fehlgeschlagen:", e);
@@ -2319,6 +3505,7 @@ async function sendAttachmentMessage(attachmentPayloadJson, r2Key, attachmentTyp
 
 // ── GIF-Modal ──────────────────────────────────────────
 let _gifSearchTimer = null;
+let _gifSearchToken = 0;
 
 function openGifModal() {
   const modal = document.getElementById("gif-modal");
@@ -2334,11 +3521,14 @@ function openGifModal() {
     if (e.target === modal) modal.style.display = "none";
   }, { once: true });
 
-  // Debounced Suche
-  input?.addEventListener("input", () => {
-    clearTimeout(_gifSearchTimer);
-    _gifSearchTimer = setTimeout(() => searchGifs(input.value.trim()), 400);
-  });
+  // Debounced Suche — Listener nur einmal anhängen
+  if (input && !input.dataset.gifListenerAttached) {
+    input.addEventListener("input", () => {
+      clearTimeout(_gifSearchTimer);
+      _gifSearchTimer = setTimeout(() => searchGifs(input.value.trim()), 400);
+    });
+    input.dataset.gifListenerAttached = "1";
+  }
 
   // Trending GIFs beim Öffnen laden
   searchGifs("");
@@ -2349,13 +3539,18 @@ async function searchGifs(q) {
   const loadingEl = document.getElementById("gif-loading");
   if (!resultsEl) return;
 
-  resultsEl.innerHTML = "";
-  if (loadingEl) loadingEl.style.display = "block";
+  const myToken = ++_gifSearchToken;
+  if (loadingEl) { loadingEl.style.display = "block"; loadingEl.textContent = ""; }
+  resultsEl.style.opacity = "0.5";
+  resultsEl.style.transition = "opacity 120ms";
 
   try {
     const url = q ? `/gif/search?q=${encodeURIComponent(q)}` : `/gif/search`;
     const data = await apiFetch(url);
+    if (myToken !== _gifSearchToken) return; // veraltet — neuere Suche läuft
     if (loadingEl) loadingEl.style.display = "none";
+    resultsEl.innerHTML = "";
+    resultsEl.style.opacity = "1";
     for (const gif of (data.results || [])) {
       if (!gif.preview && !gif.url) continue;
       const img = document.createElement("img");
@@ -2366,6 +3561,8 @@ async function searchGifs(q) {
       resultsEl.appendChild(img);
     }
   } catch {
+    if (myToken !== _gifSearchToken) return;
+    resultsEl.style.opacity = "1";
     if (loadingEl) { loadingEl.style.display = "block"; loadingEl.textContent = "⚠️ Suche fehlgeschlagen"; }
   }
 }
@@ -2471,7 +3668,14 @@ async function initGroupMembersUI(groupId) {
         nameSpan.appendChild(dot);
 
         const nameText = document.createElement("span");
-        nameText.textContent = `${guestDisplayName(m.member_handle)}${isMe ? " (Du)" : ""}`;
+        const isGuest = (m.member_handle || "").startsWith("guest_");
+        const baseName = guestDisplayName(m.member_handle);
+        const shownName = isGuest ? baseName : getDisplayName(m.member_handle, baseName);
+        nameText.textContent = `${shownName}${isMe ? " (Du)" : ""}`;
+        if (!isGuest && !isMe) {
+          nameText.dataset.profileHandle = m.member_handle;
+          nameText.dataset.profileFallback = baseName;
+        }
         nameSpan.appendChild(nameText);
 
         if (isAdmin) {
@@ -2558,7 +3762,11 @@ async function initGroupMembersUI(groupId) {
                 })
               )).flat();
               if (allDevices.length) {
-                await rotateGroupSK(groupId, getMyUser(), allDevices, apiFetch);
+                // Phase 5.5: Send-Lock während Rotation — Sends während dieser Zeit
+                // werden in deferredQueue gepuffert + nach Lock-Release mit neuem GSK gesendet.
+                await withGroupRotationLock(groupId, async () => {
+                  await rotateGroupSK(groupId, getMyUser(), allDevices, apiFetch);
+                });
                 console.log("🔑 GSK rotiert nach Kick von", m.member_handle);
               }
 
@@ -2905,7 +4113,12 @@ div.className = isOwnMessage ? "me" : "other";
 if (!isOwnMessage && isGroupConversation(withUser) && from) {
   const senderEl = document.createElement("div");
   senderEl.className = "sender-name";
-  senderEl.textContent = guestDisplayName(from);
+  const senderBase = guestDisplayName(from);
+  senderEl.textContent = from.startsWith("guest_") ? senderBase : getDisplayName(from, senderBase);
+  if (!from.startsWith("guest_")) {
+    senderEl.dataset.profileHandle = from;
+    senderEl.dataset.profileFallback = senderBase;
+  }
   senderEl.style.cursor = "pointer";
   senderEl.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -3018,11 +4231,11 @@ let meta = formatTimestamp(ts);
 // Status nur für eigene Nachrichten anzeigen
 if (from === getMyUser()) {
   if (status === "delivered") {
-    meta += " · Zugestellt";
+    meta += " · " + lang.statusDelivered;
   } else if (status === "sent") {
-    meta += " · Gesendet";
+    meta += " · " + lang.statusSent;
   } else if (status === "pending") {
-    meta += " · Sende…";
+    meta += " · " + lang.statusSending;
   }
 }
 
@@ -3216,7 +4429,7 @@ function applyEditedBadge(div) {
   const timeEl = div.querySelector(".timestamp");
   const badge = document.createElement("span");
   badge.className = "edited-badge";
-  badge.textContent = "(bearbeitet)";
+  badge.textContent = lang.statusEdited;
   const wrap = document.createElement("span");
   wrap.className = "edited-badge-wrap";
   wrap.appendChild(badge);
@@ -3225,7 +4438,7 @@ function applyEditedBadge(div) {
 }
 
 async function handleMessageEdited(event) {
-  const { messageId, ciphertext, rotationIndex, from } = event;
+  const { messageId, ciphertext, rotationIndex, from, sid: eventSid } = event;
   if (!messageId || !ciphertext) return;
 
   const el = document.querySelector(`[data-id="${messageId}"]`);
@@ -3248,6 +4461,15 @@ async function handleMessageEdited(event) {
         id: null   // null → kein Cache-Hit, immer frisch entschlüsseln
       };
       plaintext = await decryptMessageIfNeeded(fakeMsg, withUser);
+      // Retry mit Original-SID (Event-Feld oder gecacht beim ersten Render) für
+      // Edits aus der Guest-Phase. Ohne diesen Retry schlägt der SID-Peer-Fallback
+      // in decryptMessageIfNeeded fehl, weil fakeMsg keine sid hat.
+      if (plaintext === "__decrypt_failed__") {
+        const origSid = eventSid || messageSidCache.get(messageId);
+        if (origSid) {
+          plaintext = await decryptMessageIfNeeded({ ...fakeMsg, sid: origSid }, withUser);
+        }
+      }
     }
     if (!plaintext || plaintext === "__decrypt_failed__") return;
 
@@ -3289,13 +4511,21 @@ function markMessageDeleted(messageId) {
 
 async function deleteMessage(messageId) {
   try {
-    await apiFetch("/chat/message/delete", {
+    const res = await apiFetch("/chat/message/delete", {
       method: "DELETE",
       body: JSON.stringify({ id: messageId })
     });
+    // apiFetch gibt bei 429/Netzwerk-Fehlern { rateLimited: true } zurück statt zu werfen
+    // → ohne diese Prüfung würden wir die Nachricht lokal als gelöscht markieren,
+    //   obwohl der Server sie nie empfangen hat (sie taucht beim nächsten Poll wieder auf).
+    if (res && res.rateLimited) {
+      alert(lang.deleteFailed + (res.error || ""));
+      return;
+    }
     markMessageDeleted(messageId);
   } catch (e) {
-    console.warn("⚠️ Nachricht konnte nicht gelöscht werden", e);
+    console.warn("⚠️ Delete failed", e);
+    alert(lang.deleteFailed + (e?.message || e));
   }
 }
 
@@ -3308,6 +4538,18 @@ async function deleteMessage(messageId) {
 // ======================================================
 async function processMessage(m) {
   if (!m?.id || !m?.from) return false;
+
+  // Original-SID cachen (für Edit-Decrypt Fallback nach Guest→Account-Conversion).
+  if (m.sid) messageSidCache.set(m.id, m.sid);
+
+  // ── Guest-Conversion-Boundary (WebSocket-Nachzügler) ─────────────────────
+  // Reguläre Messages aus der Gast-Ära still verwerfen, wenn der aktuelle User
+  // selbst konvertiert wurde. System-Messages + Control-Types immer durchlassen.
+  if (_convertBoundaryTs > 0 &&
+      m.type !== "system" &&
+      (m.ts || 0) <= _convertBoundaryTs) {
+    return false;
+  }
 
   // ── GSK empfangen (Polling-Fallback für Gäste ohne WebSocket) ────────────
   // gsk-Nachrichten werden in D1 gespeichert damit Gäste sie via /chat/list erhalten.
@@ -3460,12 +4702,33 @@ async function processMessage(m) {
 
   const messageId = m.id;
 
-  // Bereits gerendert → nur Status updaten
+  // Bereits gerendert → Status + Edit (Polling-Fallback) updaten
   if (renderedMessageIds.has(messageId)) {
     const prevStatus = renderedMessageStatus.get(messageId);
     if (m.status && m.status !== prevStatus) {
       updateRenderedMessageStatus(messageId, m.status);
       renderedMessageStatus.set(messageId, m.status);
+    }
+    // Edit-Update via Polling: Gäste (und WS-off) empfangen message_edited
+    // NICHT über WebSocket → auf edited_at-Änderung reagieren.
+    if (m.edited_at && m.edited_message) {
+      const prevEditedAt = renderedMessageEditedAt.get(messageId) || 0;
+      if (Number(m.edited_at) > prevEditedAt) {
+        renderedMessageEditedAt.set(messageId, Number(m.edited_at));
+        let editRotIdx = m.rotationIndex;
+        try {
+          const parsedEdit = JSON.parse(m.edited_message);
+          if (parsedEdit?.rotationIndex != null) editRotIdx = parsedEdit.rotationIndex;
+        } catch {}
+        handleMessageEdited({
+          messageId,
+          ciphertext:    m.edited_message,
+          rotationIndex: editRotIdx,
+          from:          m.from,
+          ts:            m.edited_at,
+          sid:           m.sid, // Original-SID für Guest-Conversion-Fallback beim Edit-Decrypt
+        }).catch(() => {});
+      }
     }
     return false;
   }
@@ -3500,44 +4763,74 @@ async function processMessage(m) {
       renderedMessageIds.add(messageId);
       return false; // System-/Control-Message ohne Payload still skippen
     }
+    // 🧹 Stale: Nachricht älter als 1h und immer noch kein Key → nicht mehr deferren
+    if (m.ts && (Date.now() - m.ts) > STALE_MESSAGE_MAX_AGE_MS) {
+      console.warn("🧹 Stale msg — skip deferred queue", { id: messageId, ageMs: Date.now() - m.ts });
+      renderedMessageIds.add(messageId);
+      if (isAutoDeleted(m.ts)) {
+        showSystemMessage(lang.messageExpired || "⏱ Nachricht automatisch gelöscht");
+      } else {
+        renderMessage({ id: messageId, from: m.from, message: decryptFailedText(m.ts), ts: m.ts });
+      }
+      return true;
+    }
     deferredInboundMessages.push(m);
     deferredInboundIds.add(messageId);
-    renderMessage({
-      id: messageId,
-      from: m.from,
-      message: lang.decryptPending,
-      ts: m.ts
-    });
-    renderedMessageIds.add(messageId);
-    // Gruppen-GSK fehlt → beim Sender anfordern (Pull-Mechanismus)
+    // Phase 5.1: Für Gruppen die Bubble mit Button rendern (statt nur Pending-Text),
+    // damit User auch bei "GSK fehlt"-Fall den manuellen Recovery-Button sieht.
     if (isGroupConversation(withUser) && m.from && m.from !== getMyUser()) {
+      renderDecryptFailedBubble(m, { isGroup: true, groupId: withUser });
+      _decryptFailedRenderedIds.add(messageId);
+      // Auto-Trigger im Hintergrund (parallel zum Bubble-Button)
       requestGSKFrom(withUser, m.from).catch(() => {});
+    } else {
+      renderMessage({
+        id: messageId,
+        from: m.from,
+        message: lang.decryptPending,
+        ts: m.ts
+      });
     }
+    renderedMessageIds.add(messageId);
     return false;
   }
 
   // Decrypt-Fehler: Gruppen → GSK anfordern + in Deferred-Queue (Retry nach GSK_READY)
-  //                 DMs     → permanent (falscher CMK / anderes Gerät)
+  //                 DMs     → Self-Healing (cmk_req) + UI mit Retry-Button
   if (text === "__decrypt_failed__") {
     console.debug("[processMsg] DECRYPT_FAILED", { from: m.from, ts: m.ts, id: messageId });
-    if (isGroupConversation(withUser) && m.from && m.from !== getMyUser()) {
+    // 🧹 Stale: älter als 1h → kein Retry, direkt als permanent-failed rendern
+    const isStale = m.ts && (Date.now() - m.ts) > STALE_MESSAGE_MAX_AGE_MS;
+    if (isGroupConversation(withUser) && m.from && m.from !== getMyUser() && !isStale) {
       const retries = deferredInboundRetryCount.get(messageId) || 0;
       if (retries < MAX_INBOUND_RETRIES) {
         deferredInboundRetryCount.set(messageId, retries + 1);
         deferredInboundMessages.push(m);
         deferredInboundIds.add(messageId);
         renderedMessageIds.add(messageId); // Verhindert Re-Render durch processMessage
+        // Auto-Trigger im Hintergrund (parallel zum Bubble-Button)
         requestGSKFrom(withUser, m.from).catch(() => {});
-        // Platzhalter rendern (wird durch flush-Update ersetzt)
-        renderMessage({ id: messageId, from: m.from, message: "🔒 Schlüssel wird angefordert…", ts: m.ts });
+        // Phase 5.1: Bubble mit Button rendern (analog DM-Fix 1+2)
+        renderDecryptFailedBubble(m, { isGroup: true, groupId: withUser });
+        _decryptFailedRenderedIds.add(messageId);
         return false;
       }
     }
     renderedMessageIds.add(messageId);
     if (isAutoDeleted(m.ts)) {
       showSystemMessage(lang.messageExpired || "⏱ Nachricht automatisch gelöscht");
+    } else if (!isGroupConversation(withUser)) {
+      // DM: Self-Healing Counter bumpen — NUR bei frischen Msgs (< 5min)
+      // Alte Messages triggern kein Bootstrap mehr (Bootstrap-Storm-Fix)
+      bumpDecryptFailCounter(m.from, m.ts);
+      // UI: spezielle Bubble mit Retry-Button statt generischem Text
+      renderDecryptFailedBubble(m);
+      _decryptFailedRenderedIds.add(messageId);
     } else {
-      renderMessage({ id: messageId, from: m.from, message: decryptFailedText(m.ts), ts: m.ts });
+      // Gruppen: nach MAX_INBOUND_RETRIES erschöpft oder stale → Bubble mit Button.
+      // Eigene Group-Nachrichten landen hier, falls Decrypt fehlschlägt → kein Button (Fix 1).
+      renderDecryptFailedBubble(m, { isGroup: true, groupId: withUser });
+      _decryptFailedRenderedIds.add(messageId);
     }
     return true;
   }
@@ -3570,12 +4863,20 @@ async function processMessage(m) {
           id: null
         };
         editedPlain = await decryptMessageIfNeeded(fakeMsg, withUser);
+        // Retry mit Original-SID für Edits aus der Guest-Phase: aktuelle SID passt
+        // nicht (Peer ist jetzt konvertiert), aber mit m.sid greift der SID-Peer-
+        // Fallback (FIX A) in decryptMessageIfNeeded und lädt den alten Guest-CMK.
+        if (editedPlain === "__decrypt_failed__" && m.sid) {
+          editedPlain = await decryptMessageIfNeeded({ ...fakeMsg, sid: m.sid }, withUser);
+        }
       }
       if (editedPlain && editedPlain !== "__decrypt_failed__") displayText = editedPlain;
     } catch {}
   }
 
   console.debug("[processMsg] OK", { from: m.from, ts: m.ts, preview: String(displayText).slice(0,20) });
+  // Erfolgreicher Decrypt → Self-Healing-Counter für diesen Peer zurücksetzen
+  if (!isGroupConversation(withUser)) resetDecryptFailCounter(m.from);
   renderedMessageIds.add(messageId);
   deferredInboundIds.delete(messageId);
   // Reply-Preview entschlüsseln (wenn vorhanden)
@@ -3625,7 +4926,10 @@ async function processMessage(m) {
     attachment: incomingAttachment
   });
   // (bearbeitet) Badge wenn Nachricht schon editiert wurde
-  if (m.edited_at && renderedDiv) applyEditedBadge(renderedDiv);
+  if (m.edited_at && renderedDiv) {
+    applyEditedBadge(renderedDiv);
+    renderedMessageEditedAt.set(messageId, Number(m.edited_at));
+  }
   // Attachment-Nachrichten: lesbarer Preview statt Raw-JSON
   const previewText = incomingAttachment
     ? (incomingAttachment.type === "photo" ? lang.photoLabel
@@ -3643,12 +4947,91 @@ async function processMessage(m) {
   return true;
 }
 
+// ──────────────────────────────────────────────────────────────────
+// loadMessages() — Promise-Coalescing + 200ms Trailing Cooldown
+//
+// Warum: 22 Call-Sites (WS-Events, Polling, Visibility-Change, Init-Pfade,
+// Self-Healing) feuern `loadMessages` teilweise parallel. Nur der Polling-
+// Guard `isLoadingMessages` schützt einen Teil. Event-getriggerte Calls
+// laufen gleichzeitig → bis zu 5 parallele /chat/list-Requests in ~1s.
+//
+// Lösung:
+//   1) Läuft bereits ein Fetch? → denselben Promise zurückgeben (Coalescing).
+//   2) Letzter Fetch < 200ms her? → stumm skippen (Trailing Debounce).
+//
+// Unproblematisch weil: neue Nachrichten kommen per WebSocket via
+// `processMessage` sofort an. `loadMessages` ist Sync-Fallback, nicht
+// Real-Time-Kanal. 200ms Cooldown sind nicht spürbar.
+// ──────────────────────────────────────────────────────────────────
+let _loadMessagesInflight = null;
+let _loadMessagesCoolUntil = 0;
+
 async function loadMessages() {
+  if (_loadMessagesInflight) return _loadMessagesInflight;
+  if (Date.now() < _loadMessagesCoolUntil) return;
+  _loadMessagesInflight = _doLoadMessages()
+    .finally(() => {
+      _loadMessagesInflight = null;
+      _loadMessagesCoolUntil = Date.now() + 200;
+    });
+  return _loadMessagesInflight;
+}
+
+async function _doLoadMessages() {
   try {
     const url = "/chat/list?with=" + withUser;
-    const { messages = [], reactions: msgReactions = {} } = await apiFetch(url);
-    // Reaktionen in Cache laden
-    Object.entries(msgReactions).forEach(([msgId, data]) => reactionsCache.set(msgId, data));
+    const res = await apiFetch(url);
+
+    // 🔴 Gast-Session abgelaufen oder Limit — sofort Full-Lock (kein weiteres Lesen)
+    if (res?.guestExpired) { lockGuestSession("expired"); return; }
+    if (res?.guestLimitReached) { lockGuestSession("limit"); return; }
+
+    // ⚠️ Rate-Limit / Network-Error: apiFetch gibt { rateLimited: true } zurück
+    // statt zu werfen. Ohne diesen Guard würde DELETE-DETEKTION unten mit einer
+    // leeren `messages`-Liste laufen und ALLE gerenderten Bubbles fälschlich als
+    // "gelöscht" markieren (kompletter Chatverlauf weg auf beiden Seiten,
+    // typischerweise durch Request-Flut beim Member-Hinzufügen ausgelöst).
+    if (res?.rateLimited) return;
+
+    const { messages: rawMessages = [], reactions: msgReactions = {} } = res || {};
+
+    // ── Guest-Conversion-Boundary ─────────────────────────────────────────
+    // Wenn ich selbst (bertha) gerade aus einer Gast-Session konvertiert wurde,
+    // finde die "guest_x is now bertha" System-Message → alle Gast-Messages vor
+    // diesem Zeitpunkt filtern. Der Inviter sieht alles normal (hat passende Keys).
+    // Banner "🔒 Nachrichten aus deiner Gast-Session..." kommt via __guest_convert_notice__.
+    const myHandleLc = (getMyUser() || "").toLowerCase();
+    let boundaryTs = 0;
+    for (const m of rawMessages) {
+      if (m.type !== "system") continue;
+      const txt = (m.message || m.text || "").trim();
+      const match = txt.match(/^(\S+) is now (\S+)$/);
+      if (match && myHandleLc && match[2].toLowerCase() === myHandleLc) {
+        boundaryTs = m.ts || 0;
+        break;
+      }
+    }
+    _convertBoundaryTs = boundaryTs;
+
+    const messages = boundaryTs > 0
+      ? rawMessages.filter(m => m.type === "system" || (m.ts || 0) > boundaryTs)
+      : rawMessages;
+
+    // Reaktionen in Cache laden UND UI aktualisieren.
+    // WICHTIG: Server liefert nur Einträge für Nachrichten MIT Reaktionen.
+    // Für Nachrichten im aktuellen Response-Fenster, die nicht in msgReactions
+    // stehen, müssen wir eine evtl. alte Cache-Entry bereinigen — sonst bleibt
+    // eine entfernte Reaktion sichtbar (Gäste/WS-off empfangen reaction_updated
+    // nicht über WebSocket, sind also auf diesen Polling-Sync angewiesen).
+    for (const m of messages) {
+      if (!m?.id) continue;
+      const fresh = msgReactions[m.id] || {};
+      const hasFresh = Object.keys(fresh).length > 0;
+      if (hasFresh) reactionsCache.set(m.id, fresh);
+      else reactionsCache.delete(m.id);
+      const el = document.querySelector(`[data-id="${m.id}"]`);
+      if (el) renderReactionBar(el, m.id);
+    }
     console.warn("📥 SERVER MESSAGES:", messages.length, "withUser:", withUser);
 
     // 📌 Für Gruppen: "letzte gelesene ts" in localStorage UND Backend speichern
@@ -3682,6 +5065,40 @@ async function loadMessages() {
         added = true;
         if (m.from === withUser && !wasAtBottom) unreadCount++;
       }
+    }
+
+    // ==================================================
+    // 🗑️ DELETE-DETEKTION via Polling (Gäste / WS-off)
+    // Nachrichten die zuvor gerendert waren, aber jetzt nicht mehr im
+    // Server-Response auftauchen (und innerhalb des zurückgegebenen
+    // Fensters liegen), wurden gelöscht → Bubble als gelöscht markieren.
+    // LIMIT=30 entspricht dem Server-Default in /chat/list.
+    //
+    // Safety-Net: Bei komplett leerem `messages` (keine einzige Nachricht
+    // zurückgeliefert) NICHT als Delete-Signal werten. Legitime leere Gruppen
+    // haben keine gerenderten Bubbles, also kostet dieser Guard nichts — er
+    // verhindert aber Data-Loss-Cascades bei stale/unvollständigen Responses.
+    // ==================================================
+    if (messages.length > 0) {
+      const CHAT_LIST_LIMIT = 30;
+      const returnedIds = new Set(messages.map(m => m.id).filter(Boolean));
+      const tsValues = messages.map(m => Number(m.ts) || 0).filter(Boolean);
+      const windowMinTs = tsValues.length ? Math.min(...tsValues) : 0;
+      // Wenn Response weniger als Limit enthält, deckt sie die gesamte Historie ab
+      // → alle gerenderten Bubbles müssen darin vorkommen.
+      const coversAll = messages.length < CHAT_LIST_LIMIT;
+      const bubbles = messagesEl ? messagesEl.querySelectorAll("[data-id][data-ts]") : [];
+      bubbles.forEach(el => {
+        const id = el.dataset.id;
+        const ts = Number(el.dataset.ts || 0);
+        if (!id) return;
+        if (el.dataset.deleted === "1") return;
+        if (deletedMessageIds.has(id)) return;
+        if (returnedIds.has(id)) return;
+        // Außerhalb des Response-Fensters → Löschung nicht sicher feststellbar
+        if (!coversAll && ts < windowMinTs) return;
+        markMessageDeleted(id);
+      });
     }
 
     // ==================================================
@@ -3762,6 +5179,13 @@ async function startTimeBasedRotation() {
     if (!e2eReady || !sessionCmkBytes) return;
     const last = await getLastRotationTime(sid);
     if (Date.now() - last < ROTATION_INTERVAL_MS) return;
+    // Phase 4 #6: Rotation NICHT während aktiver Recovery — sonst Race zwischen
+    // CMK-Wechsel und Rotation. withRecoveryLock holt's nach Recovery nach.
+    if (isInRecovery(withUser)) {
+      _pendingRotation.add(String(withUser || "").toLowerCase());
+      console.log("⏸️ Rotation deferred — Recovery läuft, wird nach Recovery nachgeholt");
+      return;
+    }
     console.log("⏰ Zeitbasierte Rotation ausgelöst");
     doRotationAndRefresh().catch(e => console.warn("⚠️ Zeitbasierte Rotation fehlgeschlagen", e));
   }, 60 * 60 * 1000); // stündlich prüfen ob 24h vergangen
@@ -3951,7 +5375,8 @@ async function ensureGroupChatReady(groupId, myHandle) {
   //  • Cache-Staleness
   if (failedMembers.size > 0) {
     console.warn(`⏳ GSK distribute fehlgeschlagen für ${failedMembers.size} Member(s) — Retries geplant`);
-    [3000, 10000, 30000].forEach((delay, idx) => {
+    const RETRY_DELAYS = [3000, 10000, 30000];
+    RETRY_DELAYS.forEach((delay, idx) => {
       setTimeout(async () => {
         const stillFailed = Array.from(failedMembers);
         if (stillFailed.length === 0) return;
@@ -3959,6 +5384,20 @@ async function ensureGroupChatReady(groupId, myHandle) {
         for (const handle of stillFailed) {
           const ok = await distributeOne(handle);
           if (ok) failedMembers.delete(handle);
+        }
+        // Phase 5.4: Nach LETZTEM Retry — wenn immer noch Members übrig, UX-Hint zeigen
+        const isLastRetry = idx === RETRY_DELAYS.length - 1;
+        if (isLastRetry && failedMembers.size > 0) {
+          const hintKey = `group_offline_hint:${groupId}`;
+          // 1x pro Chat-Open zeigen (sessionStorage, wird bei Reload genullt)
+          if (!sessionStorage.getItem(hintKey)) {
+            const hint = (lang.groupMembersOfflineHint
+              || "ℹ️ {count} member(s) currently unreachable. Your messages will be delivered when they're back online.")
+              .replace("{count}", String(failedMembers.size));
+            try { showSystemMessage(hint); } catch {}
+            try { sessionStorage.setItem(hintKey, "1"); } catch {}
+            console.warn(`ℹ️ Group: ${failedMembers.size} unerreichbare Member(s) — UX-Hint angezeigt`);
+          }
         }
       }, delay);
     });
@@ -4194,11 +5633,42 @@ window.__chatStartupDone = true;
     // Auto-Delete zuerst laden — damit isAutoDeleted() bei loadMessages() korrekt arbeitet
     await initAutoDeleteUI().catch(() => {});
 
+    // Phase 5.3: Multi-Device — wenn lokal kein eigener GSK, aus KV holen
+    // (eigenes anderes Device hat ihn evtl. dort abgelegt via syncGroupSKToOwnDevices).
+    // Fire-and-forget: blockiert loadMessages nicht; greift wenn KV-Payload da ist.
+    const myHandleForGroup = getMyUser();
+    if (myHandleForGroup) {
+      const localGsk = await getGroupSK(withUser, myHandleForGroup);
+      if (!localGsk) {
+        // Findfn: erst IDB, dann Inbox-API als Fallback (analog DM-Flow)
+        const findSenderJwk = async (fromHandle, deviceId) => {
+          try {
+            const inboxDevices = await fetchInboxKeys(fromHandle, { forceFresh: true });
+            const d = (inboxDevices || []).find(d => d.deviceId === deviceId);
+            return d?.jwk || null;
+          } catch { return null; }
+        };
+        fetchOwnGroupSKFromKV(withUser, apiFetch, findSenderJwk)
+          .catch(e => console.warn("⚠️ fetchOwnGroupSKFromKV failed", e));
+      }
+    }
+
     try { await loadMessages(); } catch (e) { console.warn("Group loadMessages failed", e); }
 
     // GSK im Hintergrund distribuieren (non-blocking)
     ensureGroupChatReady(withUser, getMyUser())
       .catch(e => console.warn("⚠️ ensureGroupChatReady failed", e));
+
+    // Phase 5.3: Eigener GSK an andere eigene Devices syncen (für Multi-Device).
+    // Throttle in syncGroupSKToOwnDevices verhindert Spam.
+    if (myHandleForGroup) {
+      syncGroupSKToOwnDevices(
+        withUser,
+        myHandleForGroup,
+        (h, opts) => fetchInboxKeys(h, opts),
+        apiFetch
+      ).catch(e => console.warn("⚠️ syncGroupSKToOwnDevices failed", e));
+    }
 
     // Gruppe als gesehen markieren → Badge auf Inbox-Seite verschwindet
     try {
@@ -4245,6 +5715,17 @@ if (entry && entry.ready) {
   sessionCmkBytes = entry.cmkBytes ?? sessionCmkBytes;
   sessionRotationIndex = entry.rotationIndex ?? 0;
   e2eReady = true;
+
+  // Phase 2 #1: Multi-Device-Sync — eigene Geräte (z.B. neu hinzugefügtes iPad)
+  // bekommen via KV den CMK. Fire-and-forget, blockiert Chat-Start nicht.
+  // Throttle in syncCMKToOwnDevices verhindert Spam (5 Min pro sid).
+  // forceFresh, damit ein eben erst hinzugefügtes Device nicht durch 30s-Cache verpasst wird.
+  syncCMKToOwnDevices(
+    localStorage.getItem("my_user"),
+    withUser,
+    (h) => fetchInboxKeys(h, { forceFresh: true }),
+    apiFetch
+  ).catch(e => console.warn("⚠️ syncCMKToOwnDevices failed:", e));
 }
 
 // 5️⃣ UI starten
@@ -4349,6 +5830,39 @@ if (e2eReady) {
         apiFetch
       );
     }, 30_000);
+  }
+
+  // Phase 3 #2: Background-Retry für Local-Only-Fallback (Authority offline/gelöscht).
+  // Wenn fallbackBootstrap im Local-Only-Modus gelaufen ist, läuft hier alle 60s eine
+  // Prüfung: kommen die Inbox-Keys der Authority zurück, wird ein Full-Fallback ausgelöst,
+  // der den CMK via KV an die Authority weitergibt.
+  const sid = `dm:${[localStorage.getItem("my_user"), withUser].sort().join(":")}`;
+  if (sessionStorage.getItem(`fallback_local_only:${sid}`)) {
+    console.log("🔁 Local-Only-Fallback erkannt — starte Authority-Recovery-Retry alle 60s");
+    // UX-Hint: User informieren, dass Authority offline ist
+    const authorityOfflineHint = (lang.authorityOfflineHint
+      || "⚠️ {peer} is currently unreachable. Your messages will be delivered when {peer} comes back online.").replace(/\{peer\}/g, withUser);
+    showSystemMessage(authorityOfflineHint);
+    const localOnlyRetryInterval = setInterval(async () => {
+      // Stoppen wenn Flag weg (anderer Code hat es geräumt — z.B. Authority-CMK angekommen)
+      if (!sessionStorage.getItem(`fallback_local_only:${sid}`)) {
+        clearInterval(localOnlyRetryInterval);
+        console.log("✅ Local-Only-Retry beendet — Authority erreichbar oder Chat geschlossen");
+        return;
+      }
+      const me = localStorage.getItem("my_user");
+      try {
+        const peerDevs = await fetchInboxKeys(withUser, { forceFresh: true });
+        if (Array.isArray(peerDevs) && peerDevs.length > 0) {
+          console.log("🔄 Authority wieder erreichbar — Full-Fallback wird ausgelöst");
+          // Throttle räumen, damit fallbackBootstrap durchläuft
+          sessionStorage.removeItem(`fallback_bootstrapped:${sid}`);
+          await fallbackBootstrap(me, withUser, (h, o) => fetchInboxKeys(h, { forceFresh: true, ...(o || {}) }), apiFetch);
+        }
+      } catch (e) {
+        console.warn("⚠️ Local-Only-Retry-Versuch fehlgeschlagen (non-fatal)", e);
+      }
+    }, 60_000);
   }
 }
 

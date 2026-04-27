@@ -15,7 +15,9 @@ import {
   findSenderDeviceJwk,
   getRotationMap,
   appendToRotationMap,
-  createAndStoreCMK
+  createAndStoreCMK,
+  deleteCMK,
+  idbSet
 } from "./e2e.js";
 
 const sessionCache = new Map(); // sid -> { cmkBytes, skBytes, ready }
@@ -82,24 +84,32 @@ export async function getSession(me, peer) {
 /**
  * Leader: erstellt/holt CMK und bootstrappt an peer inbox devices
  */
-export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn) {
+export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn, opts = {}) {
+  const { recoveryMode = false } = opts;
   const sid = dmSessionId(me, peer);
 
-  // Guard: nur 1x pro Session — wird bei Fehler zurückgesetzt
+  // Guard: nur 1x pro Session — wird bei Fehler zurückgesetzt.
+  // Recovery-Mode räumt den Guard explizit weg (Caller hat Cache invalidiert).
   const onceKey = `bootstrapped:${sid}`;
-  if (sessionStorage.getItem(onceKey)) {
+  if (recoveryMode) {
+    sessionStorage.removeItem(onceKey);
+  } else if (sessionStorage.getItem(onceKey)) {
     console.warn("🔑 ensureBootstrapped: SKIP (already bootstrapped)", sid);
     return;
   }
   sessionStorage.setItem(onceKey, "1");
-  console.warn("🔑 ensureBootstrapped: START", { sid, me, peer });
+  console.warn("🔑 ensureBootstrapped: START", { sid, me, peer, recoveryMode });
 
   try {
 
     // 🔑 ZUERST: IDB prüfen — Authority ist Source of Truth
     // Wenn CMK bereits in IDB → direkt senden, KV-Import überspringen
     // (verhindert dass Fallback-CMK von Non-Authority den richtigen CMK überschreibt)
-    const existingLocalCmk = await getCMKIfExists(peer);
+    //
+    // 🚨 Recovery-Mode: existierender CMK wird IGNORIERT, damit ein FRISCHER
+    // CMK erzeugt wird. Notwendig wenn Peer divergent ist (z.B. neu registriert
+    // mit eigenem lokalen CMK) — alter CMK auf unsere Seite schicken bringt nichts.
+    const existingLocalCmk = recoveryMode ? null : await getCMKIfExists(peer);
     if (existingLocalCmk) {
       const inboxDevices = await fetchInboxKeysFn(peer);
       if (Array.isArray(inboxDevices) && inboxDevices.length > 0) {
@@ -134,12 +144,24 @@ export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn)
 
     // 🔑 Kein CMK in IDB: Hat ein anderes Device den CMK in KV hinterlegt?
     // Retry-Loop: bestehendes Device braucht ~2s für device_added_self → re-wrap → KV
+    //
+    // Phase 2 #1: Wenn weitere eigene Geräte existieren (Multi-Device-Setup),
+    // länger pollen. Sie könnten gerade erst aufwachen + syncCMKToOwnDevices laufen.
+    // Sonst würde Authority unnötig einen NEUEN CMK erzeugen → Divergenz mit Mac.
+    let extendedPolling = false;
+    try {
+      const myDevs = await fetchInboxKeysFn(me);
+      extendedPolling = Array.isArray(myDevs) && myDevs.length > 1;
+    } catch {}
+    const maxAttempts = extendedPolling ? 12 : 4; // 24s vs 8s
+    if (extendedPolling) console.log("⏳ Authority: Multi-Device erkannt — extended KV-Polling (24s)");
+
     try {
       const myDeviceId = getDeviceId();
       let res = null;
-      for (let attempt = 0; attempt < 4; attempt++) {
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
         if (attempt > 0) {
-          console.log(`⏳ Authority: Warte auf CMK in KV (Versuch ${attempt}/3)...`);
+          console.log(`⏳ Authority: Warte auf CMK in KV (Versuch ${attempt}/${maxAttempts - 1})...`);
           await new Promise(r => setTimeout(r, 2000));
         }
         res = await apiFetchFn(`/e2e/cmk/fetch?from=${peer}&deviceId=${myDeviceId}`);
@@ -175,13 +197,26 @@ export async function ensureBootstrapped(me, peer, fetchInboxKeysFn, apiFetchFn)
             return;
           }
         } else if (res?.payload) {
-          console.warn("⚠️ Authority: KV-Payload gefunden aber Import fehlgeschlagen — kein neuer CMK erstellt");
-          sessionStorage.removeItem(onceKey);
-          return;
+          console.warn("⚠️ Authority: KV-Payload Import fehlgeschlagen (stale?) — fahre fort mit getOrCreateCMK");
+          // Kein return → fall through zu getOrCreateCMK, sonst blockiert eine
+          // stale KV-Payload (z.B. von altem Peer-Device) jede Recovery permanent.
         }
       }
     } catch (e) {
       console.warn("⚠️ Authority KV-Check fehlgeschlagen (non-fatal)", e);
+    }
+
+    // Recovery-Mode: alten CMK + Rotation-Map weg, damit getOrCreateCMK frischen erzeugt.
+    // Notwendig wenn Peer divergent ist (z.B. neu registriert mit eigenem CMK).
+    if (recoveryMode) {
+      try {
+        await deleteCMK(peer);
+        await idbSet(`cmk:rotation-map:${sid}`, null);
+        sessionCache.delete(sid);
+        console.warn("🔄 Recovery-Mode: alter CMK + Rotation-Map gelöscht — frischer wird erzeugt");
+      } catch (e) {
+        console.warn("⚠️ Recovery-Cleanup fehlgeschlagen (non-fatal)", e);
+      }
     }
 
     const cmk = await getOrCreateCMK(peer); // Leader erzeugt falls nicht existiert
@@ -318,17 +353,82 @@ try {
 
 const cmkBytes = new Uint8Array(cmkBuf);
 
-  await importAndStoreCMKFromPeer(from, cmkBytes);
-
-  // Cache aktualisieren (rotation-aware)
+  // Phase 3 #7: Race-Condition-Guard — wenn der incoming CMK identisch zum
+  // aktuellen sessionCache-CMK ist (z.B. doppelt empfangen via WebSocket + KV-Fetch),
+  // skip alle weiteren Operationen (idempotent).
   const me = localStorage.getItem("my_user");
   const sid = dmSessionId(me, from);
+  const cached = sessionCache.get(sid);
+  if (cached?.cmkBytes && cached.cmkBytes.length === cmkBytes.length) {
+    let identical = true;
+    for (let i = 0; i < cmkBytes.length; i++) {
+      if (cached.cmkBytes[i] !== cmkBytes[i]) { identical = false; break; }
+    }
+    if (identical) {
+      console.log("⏭️ receiveCMK: identisch zum aktuellen CMK — no-op");
+      return true;
+    }
+  }
+
+  await importAndStoreCMKFromPeer(from, cmkBytes);
+
   const rotationIndex = await getRotationIndex(sid);
+
+  // Rotation-Map synchronisieren — sonst schlägt Decrypt mit all_epochs_failed fehl
+  const existingMap = await getRotationMap(sid);
+  if (existingMap.length === 0 || !existingMap.some(e => e.fromIndex === rotationIndex)) {
+    await appendToRotationMap(sid, rotationIndex, cmkBytes);
+  }
+
   const skBytes = await deriveSessionKeyBytesForRotation(cmkBytes, sid, rotationIndex);
   sessionCache.set(sid, { ready: true, cmkBytes, skBytes, rotationIndex });
 
   return true;
 }
+
+// ======================================================
+// Phase 2 #1: Multi-Device — CMK für eigene Geräte in KV synchronisieren.
+// Wird bei jedem Chat-Open aufgerufen (unabhängig vom bootstrapped-Guard),
+// damit ein neu hinzugefügtes Gerät über KV-Fetch den CMK bekommt.
+// Im Gegensatz zu ensureBootstrapped: blockiert nichts, läuft im Hintergrund.
+// Dedup: max. 1x pro 5 Min pro sid (sessionStorage-Throttle).
+// ======================================================
+const SELF_SYNC_TTL_MS = 5 * 60_000;
+
+export async function syncCMKToOwnDevices(me, peer, fetchInboxKeysFn, apiFetchFn) {
+  const sid = dmSessionId(me, peer);
+  const throttleKey = `self_sync:${sid}`;
+  try {
+    const last = Number(sessionStorage.getItem(throttleKey) || "0");
+    if (Date.now() - last < SELF_SYNC_TTL_MS) return;
+    sessionStorage.setItem(throttleKey, String(Date.now()));
+  } catch {}
+
+  const cmk = await getCMKIfExists(peer);
+  if (!cmk) return;  // Kein eigener CMK → nichts zu synchronisieren
+
+  let myInboxDevices;
+  try {
+    myInboxDevices = await fetchInboxKeysFn(me);
+  } catch { return; }
+  if (!Array.isArray(myInboxDevices) || myInboxDevices.length <= 1) return;
+  // length === 1 wäre nur das eigene Gerät → nichts zu sync. >=2 = andere Devices vorhanden.
+
+  try {
+    const myPayloads = await wrapCMKForInboxDevices(myInboxDevices.slice(-10), cmk);
+    if (!myPayloads || myPayloads.length === 0) return;
+    await apiFetchFn("/e2e/cmk/store", {
+      method: "POST",
+      body: JSON.stringify({ to: peer, payloads: myPayloads })
+    });
+    console.log(`🔁 Self-Sync: CMK für ${myPayloads.length} eigene Devices in KV abgelegt`);
+  } catch (e) {
+    console.warn("⚠️ Self-Sync fehlgeschlagen (non-fatal)", e);
+    // Throttle resetten damit nächster Versuch früher kommt
+    try { sessionStorage.removeItem(throttleKey); } catch {}
+  }
+}
+
 export async function ensureConversationReady(me, peer, fetchInboxKeysFn, apiFetchFn) {
   console.log("🧠 ensureConversationReady CALLED", { me, peer });
 
@@ -433,11 +533,37 @@ export async function fallbackBootstrap(me, peer, fetchInboxKeysFn, apiFetchFn) 
   try {
     // Inbox-Keys der Authority holen
     const inboxDevices = await fetchInboxKeysFn(peer);
-    if (!Array.isArray(inboxDevices) || inboxDevices.length === 0) {
-      console.warn("⚠️ Fallback Bootstrap: keine Inbox-Keys für", peer);
+    const peerHasInboxKeys = Array.isArray(inboxDevices) && inboxDevices.length > 0;
+
+    if (!peerHasInboxKeys) {
+      // Phase 3 #2: Authority hat keine Inbox-Keys (gelöscht oder noch nie eingeloggt)
+      // → Local-Only-CMK erstellen, KV-Store überspringen.
+      // Ich kann mit dem CMK lokal Nachrichten ent-/verschlüsseln; die Authority
+      // bekommt sie eh nicht (offline/gelöscht). Wenn sie zurückkommt, holt sie
+      // sich den CMK via späterem Fallback-Retry oder Sync-Mechanismen.
+      console.warn("⚠️ Fallback Bootstrap (Local-Only): keine Inbox-Keys für", peer, "— Authority offline/gelöscht");
+      const cmkLocal = await getOrCreateCMK(peer);
+      const rotationIndex = await getRotationIndex(sid);
+      const skBytes = await deriveSessionKeyBytesForRotation(cmkLocal, sid, rotationIndex);
+
+      // Race-Guard wie unten
+      if (sessionCache.get(sid)?.ready) {
+        console.log("⏭️ Fallback (Local-Only): echter CMK bereits angekommen — verworfen");
+        return false;
+      }
+
+      sessionCache.set(sid, { ready: true, cmkBytes: cmkLocal, skBytes, rotationIndex });
+      // Throttle entfernen → Background-Retry kann später nochmal mit echten Inbox-Keys versuchen
       sessionStorage.removeItem(onceKey);
-      return false;
+      // Flag setzen → chat.js startet Background-Retry-Loop
+      try { sessionStorage.setItem(`fallback_local_only:${sid}`, "1"); } catch {}
+      console.log("✅ Fallback (Local-Only) abgeschlossen — bereit für offline-Authority-Recovery später");
+      return true;
     }
+
+    // Wenn wir hier ankommen, haben wir gerade einen Full-Fallback (mit Inbox-Keys) gemacht
+    // → Local-Only-Flag entfernen falls vorher gesetzt
+    try { sessionStorage.removeItem(`fallback_local_only:${sid}`); } catch {}
 
     // CMK erstellen (oder vorhandenen nutzen)
     const cmk = await getOrCreateCMK(peer);

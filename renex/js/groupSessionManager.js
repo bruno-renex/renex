@@ -87,8 +87,23 @@ export async function getOrCreateGroupSK(groupId, myHandle) {
 /**
  * Empfangenen GSK eines anderen Mitglieds speichern.
  * Wird aufgerufen nach erfolgreichem "gsk" Control-Message.
+ *
+ * Phase 5.4: Race-Guard — wenn der incoming GSK identisch zum gespeicherten ist
+ * (z.B. doppelt empfangen via WebSocket + KV oder durch Re-Distribution), als
+ * no-op behandeln. Verhindert Cache-Thrashing + bewahrt Chain-State.
  */
 export async function storeReceivedGroupSK(groupId, senderHandle, keyBytes) {
+  const existing = await idbGet(gskKey(groupId, senderHandle));
+  if (existing instanceof Uint8Array && existing.length === keyBytes.length) {
+    let identical = true;
+    for (let i = 0; i < keyBytes.length; i++) {
+      if (existing[i] !== keyBytes[i]) { identical = false; break; }
+    }
+    if (identical) {
+      console.log("⏭️ storeReceivedGroupSK: identisch zum gespeicherten — no-op", { groupId, senderHandle });
+      return;
+    }
+  }
   await idbSet(gskKey(groupId, senderHandle), keyBytes);
 }
 
@@ -231,7 +246,12 @@ export async function distributeGroupSK(groupId, myHandle, allDevices, apiFetch)
   const skBytes = await getOrCreateGroupSK(groupId, myHandle);
 
   if (allDevices.length === 0) {
-    console.warn("distributeGroupSK: keine Empfänger-Devices");
+    // Phase 5.4: Local-Only-Modus — kein Empfänger-Device verfügbar (alle Members
+    // offline / haben keine Inbox-Keys). Eigener GSK existiert lokal, Nachrichten
+    // können verschlüsselt + auf Server gespeichert werden. Members holen GSK via
+    // request_gsk wenn sie wieder online sind. Caller behandelt den false-Return
+    // typischerweise mit UX-Hint (siehe ensureGroupChatReady).
+    console.warn("⚠️ distributeGroupSK (Local-Only): keine Empfänger-Devices — eigener GSK lokal verfügbar, Members holen ihn später");
     return false;
   }
 
@@ -356,6 +376,109 @@ export async function rewrapGroupSKForNewDevice(groupId, myHandle, newDevices, a
   });
 
   return true;
+}
+
+// ======================================================
+// Phase 5.3: MULTI-DEVICE GSK-SYNC via KV
+// ======================================================
+// Eigener GSK wird für andere eigene Geräte (Mac+iPad+Phone) in KV abgelegt,
+// damit ein neu hinzugefügtes Gerät den GSK fetchen kann ohne dass das alte
+// Gerät online sein muss.
+// Throttle: 5 Min pro Gruppe (verhindert Spam bei häufigem Chat-Wechsel).
+// ======================================================
+const SELF_GSK_SYNC_TTL_MS = 5 * 60_000;
+
+export async function syncGroupSKToOwnDevices(groupId, myHandle, fetchInboxKeysFn, apiFetchFn) {
+  const throttleKey = `group_gsk_sync:${groupId}`;
+  const syncedDevicesKey = `group_gsk_synced_devs:${groupId}`;
+
+  const skBytes = await getGroupSK(groupId, myHandle);
+  if (!skBytes) return;
+
+  let myInboxDevices;
+  try {
+    myInboxDevices = await fetchInboxKeysFn(myHandle, { forceFresh: true });
+  } catch { return; }
+  if (!Array.isArray(myInboxDevices) || myInboxDevices.length <= 1) return;
+
+  const myDeviceId = getDeviceId();
+  const otherDevices = myInboxDevices.filter(d => d?.deviceId && d.deviceId !== myDeviceId);
+  if (otherDevices.length === 0) return;
+
+  const otherDeviceIds = otherDevices.map(d => d.deviceId).sort();
+  const otherDevicesKey = otherDeviceIds.join(",");
+
+  // Throttle UMGEHEN, wenn ein neues Device aufgetaucht ist (gegenüber letztem Sync).
+  // Sonst klassischer 5-Min-Throttle gegen Spam.
+  let lastSyncedKey = "";
+  try { lastSyncedKey = sessionStorage.getItem(syncedDevicesKey) || ""; } catch {}
+  const hasNewDevice = lastSyncedKey !== otherDevicesKey;
+
+  if (!hasNewDevice) {
+    try {
+      const last = Number(sessionStorage.getItem(throttleKey) || "0");
+      if (Date.now() - last < SELF_GSK_SYNC_TTL_MS) return;
+    } catch {}
+  } else {
+    console.log("🆕 Neues eigenes Device erkannt — Sync-Throttle übergehen");
+  }
+
+  try {
+    const payloads = await wrapCMKForInboxDevices(otherDevices.slice(-9), skBytes);
+    if (!payloads || payloads.length === 0) return;
+    await apiFetchFn("/e2e/group-gsk/store", {
+      method: "POST",
+      body: JSON.stringify({ groupId, payloads })
+    });
+    try { sessionStorage.setItem(throttleKey, String(Date.now())); } catch {}
+    try { sessionStorage.setItem(syncedDevicesKey, otherDevicesKey); } catch {}
+    console.log(`🔁 Self-Sync (Group): GSK für ${payloads.length} eigene Devices in KV abgelegt`);
+  } catch (e) {
+    console.warn("⚠️ syncGroupSKToOwnDevices fehlgeschlagen", e);
+  }
+}
+
+// Phase 5.3: Beim Chat-Open auf neuem Device — eigenen GSK aus KV holen.
+// Wird aufgerufen WENN local kein GSK vorhanden (frisches Gerät) ODER manuell
+// nach device_added-Event. Versucht mehrfach (extended polling) damit bestehendes
+// Device Zeit hat, syncGroupSKToOwnDevices auszuführen.
+export async function fetchOwnGroupSKFromKV(groupId, apiFetchFn, findSenderDeviceJwkFn) {
+  const myDeviceId = getDeviceId();
+  const myHandle = (localStorage.getItem("my_user") || "").toLowerCase();
+  if (!myHandle || !myDeviceId) return false;
+
+  // Falls schon vorhanden, nicht erneut holen
+  const existing = await getGroupSK(groupId, myHandle);
+  if (existing instanceof Uint8Array && existing.length === 32) return true;
+
+  const POLL_DELAYS = [0, 2000, 4000, 8000, 16000]; // 30s gesamt
+  for (let i = 0; i < POLL_DELAYS.length; i++) {
+    if (POLL_DELAYS[i] > 0) {
+      console.log(`⏳ Multi-Device GSK-Polling Versuch ${i}/${POLL_DELAYS.length - 1}...`);
+      await new Promise(r => setTimeout(r, POLL_DELAYS[i]));
+    }
+    try {
+      const res = await apiFetchFn(`/e2e/group-gsk/fetch?groupId=${encodeURIComponent(groupId)}&deviceId=${encodeURIComponent(myDeviceId)}`);
+      if (!res?.payload) continue;
+
+      const { fromDeviceId, ivB64, ctB64 } = res.payload;
+      const ok = await receiveGroupSK({
+        from: myHandle,
+        groupId,
+        myDeviceId,
+        payloads: [{ deviceId: myDeviceId, fromDeviceId, ivB64, ctB64 }],
+        findSenderDeviceJwkFn
+      });
+      if (ok) {
+        console.log("✅ Eigener GSK aus KV importiert (Multi-Device)");
+        return true;
+      }
+    } catch (e) {
+      console.warn(`⚠️ fetchOwnGroupSKFromKV Versuch ${i} fehlgeschlagen`, e);
+    }
+  }
+  console.log("⏸️ Multi-Device GSK-Polling erschöpft — neuer GSK wird beim ersten Send erzeugt");
+  return false;
 }
 
 // ======================================================

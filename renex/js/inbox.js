@@ -2,7 +2,7 @@ import {
   initE2EKeys,
   uploadInboxKeyIfNeeded
 } from "./e2e.js";
-import { addPasskey } from "./auth.js?v=2026-04-27-1"; // Cache-Buster: bei Änderungen in auth.js bumpen
+import { addPasskey } from "./auth.js?v=2026-04-27-8"; // Cache-Buster: bei Änderungen in auth.js bumpen
 import lang, { getLang, setLang } from "./i18n.js";
 import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
 import { formatTime } from "./shared/timeFormat.js";
@@ -539,7 +539,7 @@ if (dropdownHandle && accountSubmenu) {
 if (dropdownLogout) {
   dropdownLogout.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const { logout } = await import("./auth.js?v=2026-04-27-1"); // Cache-Buster: bei Änderungen in auth.js bumpen
+    const { logout } = await import("./auth.js?v=2026-04-27-8"); // Cache-Buster: bei Änderungen in auth.js bumpen
     await logout();
   });
 }
@@ -1047,6 +1047,312 @@ if (langBtn && langSubmenu) {
   // Letzten Tab wiederherstellen (contacts-Tab existiert nicht mehr → chats)
   const savedTab = localStorage.getItem("inbox_tab");
   switchTab(savedTab === "groups" ? "groups" : "chats");
+}
+
+// ================================================================
+// DEBUG / DIAGNOSE OVERLAY (MODULE-LEVEL — läuft IMMER, auch ohne Login)
+// Wichtig: dieser Block MUSS außerhalb von runInboxInit() bleiben,
+// damit der Debug-Button auch verfügbar ist wenn der User auf der
+// Login-Seite ist oder seine Session abgelaufen ist.
+// ================================================================
+{
+  const dropdownDebug = document.getElementById("dropdown-debug");
+  const debugOverlay = document.getElementById("debug-overlay");
+  const btnCloseDebug = document.getElementById("btn-close-debug");
+  const btnDebugRefresh = document.getElementById("btn-debug-refresh");
+  const btnDebugTestPush = document.getElementById("btn-debug-test-push");
+  const btnDebugCopy = document.getElementById("btn-debug-copy");
+  const btnDebugResub = document.getElementById("btn-debug-resub");
+  const _debugSnapshot = {};
+
+  function _setVal(id, value, cls) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = String(value ?? "—");
+    if (cls) {
+      el.classList.remove("ok", "warn", "error");
+      el.classList.add(cls);
+    }
+    _debugSnapshot[id] = value;
+  }
+
+  function _setOutput(id, obj) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const text = (typeof obj === "string") ? obj : JSON.stringify(obj, null, 2);
+    el.textContent = text;
+    _debugSnapshot[id] = obj;
+  }
+
+  async function refreshDebugInfo() {
+    const perm = (typeof Notification !== "undefined") ? Notification.permission : "unavailable";
+    const permClass = perm === "granted" ? "ok" : (perm === "denied" ? "error" : "warn");
+    _setVal("dbg-notif-perm", perm, permClass);
+
+    let swState = "not-supported";
+    let swCls = "error";
+    try {
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration("/");
+        if (reg) {
+          const active = reg.active ? "active" : (reg.installing ? "installing" : "waiting");
+          swState = `${active} (scope=${reg.scope})`;
+          swCls = reg.active ? "ok" : "warn";
+        } else {
+          swState = "no-registration";
+          swCls = "error";
+        }
+      }
+    } catch (e) {
+      swState = "error: " + e.message;
+      swCls = "error";
+    }
+    _setVal("dbg-sw-state", swState, swCls);
+
+    let pushSub = "(none)";
+    let pushCls = "warn";
+    try {
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration("/");
+        if (reg) {
+          const s = await reg.pushManager.getSubscription();
+          if (s) {
+            const j = s.toJSON();
+            pushSub = `endpoint=${(j.endpoint || "").slice(0, 50)}…`;
+            pushCls = "ok";
+          }
+        }
+      }
+    } catch (e) {
+      pushSub = "error: " + e.message;
+      pushCls = "error";
+    }
+    _setVal("dbg-push-sub", pushSub, pushCls);
+
+    const hasBadge = typeof navigator.setAppBadge === "function";
+    _setVal("dbg-badge-api", hasBadge ? "supported" : "not-supported", hasBadge ? "ok" : "warn");
+
+    _setVal("dbg-user-handle", localStorage.getItem("my_user") || "(not logged in)");
+    _setVal("dbg-device-id", localStorage.getItem("renex_device_id") || "(none)");
+
+    const appVersion = document.querySelector('meta[name="renex-version"]')?.content || "(unknown)";
+    _setVal("dbg-app-version", appVersion);
+
+    const isPwa = window.matchMedia("(display-mode: standalone)").matches
+                || window.navigator.standalone === true;
+    _setVal("dbg-pwa-mode", isPwa ? "PWA (standalone)" : "Browser-Tab", isPwa ? "ok" : "warn");
+
+    _setVal("dbg-user-agent", navigator.userAgent);
+    _setVal("dbg-local-time", new Date().toISOString() + " (" + Intl.DateTimeFormat().resolvedOptions().timeZone + ")");
+
+    try {
+      const r = await fetch(`${API}/push/status`, { credentials: "include" });
+      if (!r.ok) {
+        _setOutput("dbg-push-status", `HTTP ${r.status} ${r.statusText}`);
+      } else {
+        const d = await r.json();
+        _setOutput("dbg-push-status", d);
+      }
+    } catch (e) {
+      _setOutput("dbg-push-status", "Fetch error: " + e.message);
+    }
+  }
+
+  // Force-Re-Subscribe: bewusst OHNE silent-catch, jeder Fehler wird im UI angezeigt.
+  // Dies ist das Diagnose-Tool für "Permission granted aber keine Subscription"-Bug auf iOS PWA.
+  async function forceResubscribe() {
+    if (!btnDebugResub) return;
+    btnDebugResub.disabled = true;
+    const origLabel = btnDebugResub.textContent;
+    btnDebugResub.textContent = "⏳ …";
+    const log = [];
+    const step = (msg, val) => {
+      log.push(`[${new Date().toISOString().slice(11, 19)}] ${msg}` + (val !== undefined ? ": " + JSON.stringify(val) : ""));
+      _setOutput("dbg-resub-result", log.join("\n"));
+    };
+
+    try {
+      // Schritt 1: Service Worker bereit?
+      step("1. SW: navigator.serviceWorker.ready");
+      if (!("serviceWorker" in navigator)) throw new Error("Service Worker not supported");
+      const reg = await navigator.serviceWorker.ready;
+      step("   → SW scope", reg.scope);
+
+      // Schritt 2: Permission state
+      step("2. Notification.permission", Notification.permission);
+      if (Notification.permission !== "granted") {
+        throw new Error("Notification permission not granted (current: " + Notification.permission + "). Erlaube zuerst Notifications.");
+      }
+
+      // Schritt 3: Bestehende Subscription prüfen
+      step("3. existing subscription check");
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) {
+        step("   → existing subscription found, unsubscribing first");
+        await existing.unsubscribe();
+        step("   → unsubscribed OK");
+      } else {
+        step("   → no existing subscription");
+      }
+
+      // Schritt 4: VAPID-Key vom Backend holen
+      step("4. fetch /push/vapid-key");
+      const vRes = await fetch(`${API}/push/vapid-key`);
+      step("   → status", vRes.status);
+      if (!vRes.ok) throw new Error("VAPID-Key fetch failed: HTTP " + vRes.status);
+      const vData = await vRes.json();
+      if (!vData.publicKey) throw new Error("VAPID response missing publicKey");
+      step("   → publicKey length", vData.publicKey.length);
+
+      // Schritt 5: Key dekodieren
+      step("5. decode VAPID base64url → Uint8Array");
+      const k = vData.publicKey;
+      const padding = "=".repeat((4 - (k.length % 4)) % 4);
+      const base64 = (k + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      step("   → bytes length", bytes.length);
+
+      // Schritt 6: pushManager.subscribe — DIESER CALL kann auf iOS scheitern
+      step("6. pushManager.subscribe({userVisibleOnly:true, applicationServerKey})");
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: bytes,
+      });
+      step("   → SUBSCRIBE OK");
+      const subJson = sub.toJSON();
+      step("   → endpoint", (subJson.endpoint || "").slice(0, 60) + "…");
+      step("   → keys.p256dh present", !!subJson.keys?.p256dh);
+      step("   → keys.auth present", !!subJson.keys?.auth);
+
+      // Schritt 7: An Backend senden
+      step("7. POST /push/subscribe");
+      const sRes = await fetch(`${API}/push/subscribe`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint: subJson.endpoint,
+          keys: subJson.keys,
+          transport_type: "web_push",
+        }),
+      });
+      step("   → status", sRes.status);
+      if (!sRes.ok) {
+        const err = await sRes.text();
+        throw new Error("Backend subscribe failed: " + sRes.status + " " + err);
+      }
+
+      step("✅ ERFOLG — Subscription registriert");
+      btnDebugResub.textContent = "✅ Erfolgreich!";
+    } catch (e) {
+      step("❌ FEHLER", { name: e.name, message: e.message });
+      btnDebugResub.textContent = "❌ Fehler — siehe Output";
+    } finally {
+      setTimeout(() => {
+        btnDebugResub.textContent = origLabel;
+        btnDebugResub.disabled = false;
+      }, 4000);
+    }
+  }
+
+  async function sendTestPush() {
+    if (!btnDebugTestPush) return;
+    btnDebugTestPush.disabled = true;
+    const orig = btnDebugTestPush.textContent;
+    btnDebugTestPush.textContent = "⏳ Sende…";
+    _setOutput("dbg-test-result", "Wird gesendet…");
+    try {
+      const r = await fetch(`${API}/push/test`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      const d = await r.json();
+      _setOutput("dbg-test-result", d);
+      btnDebugTestPush.textContent = d.ok ? "✅ Gesendet!" : "⚠️ Fehler — siehe Resultat";
+      setTimeout(() => {
+        btnDebugTestPush.textContent = orig;
+        btnDebugTestPush.disabled = false;
+      }, 3000);
+    } catch (e) {
+      _setOutput("dbg-test-result", "Fetch error: " + e.message);
+      btnDebugTestPush.textContent = orig;
+      btnDebugTestPush.disabled = false;
+    }
+  }
+
+  async function copyDebugSnapshot() {
+    const lines = [
+      "RENEX Debug Snapshot",
+      "Generated: " + new Date().toISOString(),
+      "─────────────────────────────",
+      "",
+      "Notifications & Service Worker:",
+      `  Notification.permission: ${_debugSnapshot["dbg-notif-perm"]}`,
+      `  Service Worker:          ${_debugSnapshot["dbg-sw-state"]}`,
+      `  Push Subscription:       ${_debugSnapshot["dbg-push-sub"]}`,
+      `  setAppBadge API:         ${_debugSnapshot["dbg-badge-api"]}`,
+      "",
+      "User & Device:",
+      `  my_user:        ${_debugSnapshot["dbg-user-handle"]}`,
+      `  deviceId:       ${_debugSnapshot["dbg-device-id"]}`,
+      `  App-Version:    ${_debugSnapshot["dbg-app-version"]}`,
+      `  PWA-Mode:       ${_debugSnapshot["dbg-pwa-mode"]}`,
+      `  Lokalzeit:      ${_debugSnapshot["dbg-local-time"]}`,
+      `  User-Agent:     ${_debugSnapshot["dbg-user-agent"]}`,
+      "",
+      "Backend /push/status:",
+      "  " + JSON.stringify(_debugSnapshot["dbg-push-status"], null, 2).split("\n").join("\n  "),
+      "",
+      "Re-Subscribe-Resultat:",
+      "  " + (typeof _debugSnapshot["dbg-resub-result"] === "string"
+              ? _debugSnapshot["dbg-resub-result"].split("\n").join("\n  ")
+              : "(nicht ausgeführt)"),
+      "",
+      "Test-Push-Resultat:",
+      "  " + JSON.stringify(_debugSnapshot["dbg-test-result"] || "(nicht ausgeführt)", null, 2).split("\n").join("\n  "),
+    ];
+    const text = lines.join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;opacity:0;";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { document.execCommand("copy"); } catch {}
+      document.body.removeChild(ta);
+    }
+    if (btnDebugCopy) {
+      const orig = btnDebugCopy.textContent;
+      btnDebugCopy.textContent = "✅ Kopiert!";
+      setTimeout(() => { btnDebugCopy.textContent = orig; }, 2000);
+    }
+  }
+
+  if (dropdownDebug && debugOverlay) {
+    dropdownDebug.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.getElementById("profile-dropdown")?.classList.remove("show");
+      debugOverlay.classList.add("show");
+      refreshDebugInfo();
+    });
+  }
+  if (btnCloseDebug) btnCloseDebug.addEventListener("click", () => debugOverlay?.classList.remove("show"));
+  if (debugOverlay) {
+    debugOverlay.addEventListener("click", (e) => {
+      if (e.target === debugOverlay) debugOverlay.classList.remove("show");
+    });
+  }
+  if (btnDebugRefresh) btnDebugRefresh.addEventListener("click", refreshDebugInfo);
+  if (btnDebugResub) btnDebugResub.addEventListener("click", forceResubscribe);
+  if (btnDebugTestPush) btnDebugTestPush.addEventListener("click", sendTestPush);
+  if (btnDebugCopy) btnDebugCopy.addEventListener("click", copyDebugSnapshot);
+
+  window.__renexDebug = { refresh: refreshDebugInfo, resub: forceResubscribe, test: sendTestPush, copy: copyDebugSnapshot };
 }
 
 // Gate: Init nur laufen lassen, wenn `my_user` bereits da ist.

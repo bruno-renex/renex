@@ -1,5 +1,18 @@
 {
+  "name": "renex-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui"
+  },
   "dependencies": {
-    "@block65/webcrypto-web-push": "^1.0.2"
+    "@block65/webcrypto-web-push": "^1.0.2",
+    "toucan-js": "^4.1.1"
+  },
+  "devDependencies": {
+    "@vitest/ui": "^1.6.0",
+    "vitest": "^1.6.0"
   }
 }

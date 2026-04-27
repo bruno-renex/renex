@@ -336,6 +336,11 @@ export default {
   pushBannerActivating: "Wird aktiviert…",
   pushBannerBlocked:    "Benachrichtigungen blockiert",
 
+  // ── Debug / Diagnose ────────────────────────────────
+  debugLabel:  "Debug / Diagnose",
+  debugTitle:  "Debug / Diagnose",
+  debugHint:   "Tipp: Sperre dein Telefon nach \"Test-Push senden\" und warte 5-10 Sekunden. Wenn du eine Push-Notification siehst → Notifications funktionieren. Wenn nicht: Status oben prüfen + Resultat in Zwischenablage kopieren.",
+
   // ── Version-Update-Banner ───────────────────────────
   newVersionAvailable: "Neue Version verfügbar",
   reloadNow:           "Jetzt aktualisieren",

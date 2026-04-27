@@ -15,11 +15,37 @@ import { handlePushRoutes } from './src/routes/pushRoutes.js';
 import { handleFeedbackRoutes } from './src/routes/feedbackRoutes.js';
 import { handleVoiceRoutes } from './src/routes/voiceRoutes.js';
 import { scheduled } from './src/cron.js';
+import { Toucan } from 'toucan-js';
 
 // Cloudflare Durable Object binding requirement — must be re-exported from entry point
 export { UserSessionDO } from './src/auth.js';
 
-async function fetch(request, env) {
+// ── SENTRY (Error-Tracking) ──────────────────────────────
+// DSN als Wrangler-Secret setzen: npx wrangler secret put SENTRY_DSN
+// Wenn nicht gesetzt → no-op (kein Fehler, nur kein Tracking).
+function makeSentry(request, env, ctx) {
+  if (!env.SENTRY_DSN) return null;
+  try {
+    return new Toucan({
+      dsn: env.SENTRY_DSN,
+      context: ctx,
+      request,
+      environment: env.ENVIRONMENT || 'production',
+      release: env.APP_VERSION || 'unknown',
+      // Sample-Rate: 100% Errors, 10% Performance (Cost-Optimierung)
+      tracesSampleRate: 0.1,
+      // PII-Schutz: keine User-Daten leaken
+      requestDataOptions: {
+        allowedHeaders: ['user-agent', 'cf-ray'],
+        allowedSearchParams: ['handle'],
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function fetch(request, env, ctx) {
   // PRE-FLIGHT
   if (request.method === "OPTIONS") {
     return new Response(null, {
@@ -27,6 +53,8 @@ async function fetch(request, env) {
       headers: corsHeaders(request),
     });
   }
+
+  const sentry = makeSentry(request, env, ctx);
 
   try {
     const url = new URL(request.url);
@@ -78,10 +106,17 @@ async function fetch(request, env) {
     if (path.startsWith('/voice/')) {
       return await handleVoiceRoutes(request, env, path, params);
     }
+    // Sentry-Config (publik — DSN ist Public-Token, kein Secret)
+    if (path === '/sentry-config') {
+      return json(request, { dsn: env.SENTRY_DSN_FRONTEND || null });
+    }
     return json(request, { error: 'Not found' }, 404);
 
   } catch (e) {
     console.error("WORKER CRASH", e);
+    if (sentry) {
+      try { sentry.captureException(e); } catch {}
+    }
     return json(request, { error: "Internal server error" }, 500);
   }
 }

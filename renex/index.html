@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-27-1" />
+  <meta name="renex-version" content="2026-04-27-8" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
@@ -41,6 +41,15 @@
   </script>
   <!-- ⚡ Früh-Check: App sofort sichtbar wenn User gecacht → kein Flash -->
   <script>if(localStorage.getItem("my_user"))document.documentElement.classList.add("has-user");</script>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       SENTRY — Frontend Error-Tracking
+       Lazy-Loaded: nur wenn DSN konfiguriert ist (window.SENTRY_DSN
+       oder build-injected). User-Privacy: KEINE PII gesendet.
+       Init in /js/sentryInit.js — siehe dort für Konfiguration.
+  ═══════════════════════════════════════════════════════════ -->
+  <script type="module" src="/js/sentryInit.js?v=2026-04-27-1"></script>
+
   <link rel="stylesheet" href="/colors.css" />
 <style>
 
@@ -1128,6 +1137,137 @@
   }
 
   /* ═══════════════════════════════════════════
+     DEBUG OVERLAY (Diagnose-Modal für Push/SW/Network)
+  ═══════════════════════════════════════════ */
+  #debug-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 1200;
+    align-items: center;
+    justify-content: center;
+  }
+  #debug-overlay.show { display: flex; }
+
+  #debug-dialog {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-panel);
+    border-radius: 14px;
+    padding: 20px;
+    width: 560px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 48px);
+    max-height: calc(100dvh - 48px);
+    overflow-y: auto;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.7);
+  }
+
+  .debug-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .debug-header h3 {
+    margin: 0;
+    font-size: 16px;
+    color: var(--text-primary);
+  }
+
+  .debug-section {
+    margin-bottom: 14px;
+  }
+  .debug-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent-voice);
+    margin-bottom: 6px;
+  }
+
+  .debug-status-grid {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 4px 10px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .debug-status-grid .label {
+    color: var(--text-muted);
+  }
+  .debug-status-grid .value {
+    color: var(--text-primary);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    word-break: break-all;
+  }
+  .debug-status-grid .value.ok    { color: #10b981; }
+  .debug-status-grid .value.warn  { color: #f59e0b; }
+  .debug-status-grid .value.error { color: #ef4444; }
+
+  .debug-output {
+    background: #0a0a0d;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .debug-output:empty::before {
+    content: "(noch keine Daten)";
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  .debug-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+  }
+  .debug-btn {
+    flex: 1 1 auto;
+    min-width: 120px;
+    padding: 10px 12px;
+    background: var(--bg-panel-alt);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .debug-btn:hover { background: rgba(56,189,248,0.1); border-color: var(--accent-voice); }
+  .debug-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .debug-btn.primary {
+    background: var(--accent-voice);
+    color: #07070a;
+    border-color: var(--accent-voice);
+  }
+  .debug-btn.primary:hover { background: #0ea5e9; }
+
+  .debug-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: rgba(56,189,248,0.06);
+    border-left: 2px solid var(--accent-voice);
+    border-radius: 4px;
+  }
+
+  /* ═══════════════════════════════════════════
      REQUESTS MODAL
   ═══════════════════════════════════════════ */
   #requests-modal {
@@ -2143,6 +2283,7 @@
           <div class="dropdown-divider"></div>
           <div id="dropdown-display-name" class="dropdown-item" data-i18n="displayNameMenuLabel">Anzeigename</div>
           <div id="dropdown-passkeys" class="dropdown-item" data-i18n="passkeysLabel">Passkeys</div>
+          <div id="dropdown-debug" class="dropdown-item">🛠️ <span data-i18n="debugLabel">Debug / Diagnose</span></div>
           <div class="dropdown-divider"></div>
           <div id="dropdown-lang" class="dropdown-item has-sub">
             <span data-i18n="langToggleLabel">Sprache</span>
@@ -2574,6 +2715,66 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════
+     DEBUG / DIAGNOSE OVERLAY
+═══════════════════════════════════════════ -->
+<div id="debug-overlay">
+  <div id="debug-dialog">
+    <div class="debug-header">
+      <h3>🛠️ <span data-i18n="debugTitle">Debug / Diagnose</span></h3>
+      <button id="btn-close-debug" class="passkeys-close-btn">&times;</button>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-section-title">Notifications & Service Worker</div>
+      <div class="debug-status-grid" id="debug-grid-notif">
+        <div class="label">Notification.permission</div><div class="value" id="dbg-notif-perm">…</div>
+        <div class="label">Service Worker</div><div class="value" id="dbg-sw-state">…</div>
+        <div class="label">Push Subscription</div><div class="value" id="dbg-push-sub">…</div>
+        <div class="label">setAppBadge API</div><div class="value" id="dbg-badge-api">…</div>
+      </div>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-section-title">Backend — /push/status</div>
+      <div class="debug-output" id="dbg-push-status"></div>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-section-title">User & Device</div>
+      <div class="debug-status-grid" id="debug-grid-user">
+        <div class="label">my_user</div><div class="value" id="dbg-user-handle">…</div>
+        <div class="label">deviceId (lokal)</div><div class="value" id="dbg-device-id">…</div>
+        <div class="label">App-Version</div><div class="value" id="dbg-app-version">…</div>
+        <div class="label">PWA-Modus</div><div class="value" id="dbg-pwa-mode">…</div>
+        <div class="label">User-Agent</div><div class="value" id="dbg-user-agent">…</div>
+        <div class="label">Lokalzeit</div><div class="value" id="dbg-local-time">…</div>
+      </div>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-section-title">Re-Subscribe-Resultat</div>
+      <div class="debug-output" id="dbg-resub-result"></div>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-section-title">Test-Push-Resultat</div>
+      <div class="debug-output" id="dbg-test-result"></div>
+    </div>
+
+    <div class="debug-actions">
+      <button class="debug-btn" id="btn-debug-refresh">🔄 Refresh</button>
+      <button class="debug-btn primary" id="btn-debug-resub">🔁 Re-Subscribe Now</button>
+      <button class="debug-btn primary" id="btn-debug-test-push">🔔 Test-Push senden</button>
+      <button class="debug-btn" id="btn-debug-copy">📋 Alles kopieren</button>
+    </div>
+
+    <div class="debug-hint" data-i18n="debugHint">
+      Tipp: Sperre dein Telefon nach &quot;Test-Push senden&quot; und warte 5-10 Sekunden. Wenn du eine Push-Notification siehst → Notifications funktionieren. Wenn nicht: Status oben prüfen + Resultat in Zwischenablage kopieren.
+    </div>
+  </div>
+</div>
+
 <script>
   // Section switcher (icon strip)
   function switchSection(name, btn) {
@@ -2802,7 +3003,7 @@
 // Ohne diesen Query-Param bleibt nach einem Deploy die alte auth.js im
 // Cache hängen → neue Features (z.B. "just_registered_handle"-Marker)
 // greifen nicht. Bei jeder relevanten Änderung in auth.js den v-Wert bumpen.
-import { loginWithPasskey } from "./js/auth.js?v=2026-04-27-1";
+import { loginWithPasskey } from "./js/auth.js?v=2026-04-27-8";
 import { apiFetch }         from "./js/api.js";
 import { bootApp }          from "./js/appBoot.js";
 import lang, { applyI18n, getLang, setLang } from "./js/i18n.js";

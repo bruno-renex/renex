@@ -1,5 +1,6 @@
 import { json, readJson } from '../utils.js';
-import { requireSession } from '../auth.js';
+import { requireSession, rateLimit } from '../auth.js';
+import { pushToUser } from '../helpers/pushSend.js';
 
 // ======================================================
 // PUSH ROUTES
@@ -94,6 +95,74 @@ export async function handlePushRoutes(request, env, path) {
           transport_type: r.transport_type,
           created_at: r.created_at,
         })),
+      });
+    }
+
+    // ── TEST-PUSH (Diagnose: sendet Test-Push an alle eigenen Subscriptions) ──
+    // Rate-Limit: max 5 Tests pro Minute pro User.
+    // Returnt detailliertes Per-Subscription-Result für Debug-Anzeige.
+    case "/push/test": {
+      if (request.method !== "POST") break;
+
+      const ok = await rateLimit(env, `push_test:${me}`, 60_000, 5);
+      if (!ok) return json(request, { error: "Too many test pushes", retryAfterMs: 60000 }, 429);
+
+      // Eigene Subscriptions laden
+      const rows = await env.RENEX_DB.prepare(
+        "SELECT endpoint, p256dh, auth_key, transport_type FROM push_subscriptions WHERE user_handle = ?"
+      ).bind(me).all();
+
+      const subs = rows.results || [];
+      if (subs.length === 0) {
+        return json(request, {
+          ok: false,
+          error: "no_subscriptions",
+          message: "Keine Push-Subscriptions vorhanden. Erlaube zuerst Notifications.",
+          subscriptionCount: 0,
+        });
+      }
+
+      // Test-Payload bauen
+      const testPayload = {
+        title: "🔔 RENEX Test-Push",
+        body: `Diese Test-Notification wurde um ${new Date().toLocaleTimeString("de-CH")} gesendet. Wenn du sie siehst, funktionieren Notifications!`,
+        tag: "renex-test",
+        data: {
+          type: "test",
+          ts: Date.now(),
+          url: "/",
+        },
+      };
+
+      // Pro Subscription Push senden + Status sammeln
+      const { sendWebPush } = await import('../helpers/pushSend.js');
+      const results = [];
+      for (const sub of subs) {
+        const subRecord = { ...sub, user_handle: me };
+        try {
+          const r = await sendWebPush(env, subRecord, testPayload);
+          results.push({
+            endpointPreview: String(sub.endpoint).slice(0, 60) + "…",
+            success: r.success === true,
+            status: r.status || null,
+            fallback: r.fallback || false,
+            expired: r.expired || false,
+            error: r.error || null,
+          });
+        } catch (e) {
+          results.push({
+            endpointPreview: String(sub.endpoint).slice(0, 60) + "…",
+            success: false,
+            error: e.message,
+          });
+        }
+      }
+
+      return json(request, {
+        ok: results.some(r => r.success),
+        subscriptionCount: subs.length,
+        results,
+        sentAt: Date.now(),
       });
     }
 

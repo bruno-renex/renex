@@ -18,3 +18,7 @@ npm-debug.log*
 
 # DB Backups
 backup-*.sql
+
+# Vite / Svelte build output
+frontend/dist/
+.vite/

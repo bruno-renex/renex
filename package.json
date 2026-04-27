@@ -5,14 +5,20 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@block65/webcrypto-web-push": "^1.0.2",
     "toucan-js": "^4.1.1"
   },
   "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^4.0.4",
     "@vitest/ui": "^1.6.0",
+    "svelte": "^5.55.5",
+    "vite": "^5.4.21",
     "vitest": "^1.6.0"
   }
 }

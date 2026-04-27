@@ -1,0 +1,96 @@
+/* ======================================================
+   RENEX — Global CSS Reset + Theme
+   ====================================================== */
+
+/* Reset */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* CSS Custom Properties — RENEX Brand */
+:root {
+  /* Backgrounds */
+  --bg-body:        #0f0f12;
+  --bg-panel:       #14141a;
+  --bg-panel-alt:   #1a1a22;
+
+  /* Text */
+  --text-primary:   #e5e7eb;
+  --text-secondary: #9ca3af;
+  --text-muted:     #6b7280;
+
+  /* Borders */
+  --border-panel:   #2a2a35;
+  --border-subtle:  #1f1f28;
+
+  /* Accent — RENEX Cyan */
+  --accent-voice:   #38bdf8;
+  --accent-voice-dim: rgba(56, 189, 248, 0.15);
+
+  /* Status */
+  --status-error:   #ef4444;
+  --status-success: #10b981;
+  --status-warn:    #f59e0b;
+}
+
+/* Body */
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg-body);
+  color: var(--text-primary);
+  height: 100vh;        /* Fallback */
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+}
+
+/* Buttons (sane default) */
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Inputs */
+input, textarea {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  outline: none;
+}
+
+/* Links */
+a {
+  color: var(--accent-voice);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent-voice);
+  color: var(--bg-body);
+}

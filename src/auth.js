@@ -364,7 +364,16 @@ export class UserSessionDO {
   }
 
   // Hibernatable WebSocket Handlers
-  webSocketMessage(ws, message) {}
+  webSocketMessage(ws, message) {
+    // Heartbeat — Client sendet { type: "ping", ts }, Server antwortet mit
+    // { type: "pong", ts }. Verhindert NAT-Timeout + DO-Hibernation.
+    try {
+      const m = typeof message === "string" ? JSON.parse(message) : null;
+      if (m?.type === "ping") {
+        ws.send(JSON.stringify({ type: "pong", ts: m.ts || Date.now() }));
+      }
+    } catch {}
+  }
 
   async webSocketClose(ws, code, reason) {
     // Letzter Socket geschlossen → offline

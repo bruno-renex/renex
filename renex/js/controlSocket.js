@@ -3,7 +3,7 @@
 // Gleiche processControlMessage Logik, gleiche BroadcastChannel Nutzung.
 
 import { apiFetch } from "./api.js";
-import { getDeviceId, idbGet, dmSessionId } from "./e2e.js";
+import { getDeviceId, idbGet, dmSessionId, deleteCMK } from "./e2e.js";
 import { isAuthority, ensureBootstrapped, receiveCMK, handleEpochRotate, rotateCMK, receiveCMKRotation } from "./sessionManager.js";
 import { receiveGroupSK, distributeGroupSK, getOrCreateGroupSK } from "./groupSessionManager.js";
 
@@ -13,6 +13,14 @@ let running = false;
 let reconnectTimer = null;
 let backoff = 1000;
 const MAX_BACKOFF = 30000;
+
+// Heartbeat — verhindert NAT-Timeout (Mobilnetz ~5min) + DO-Hibernation.
+// Client sendet alle 25s ein Ping. Wenn Server nicht innerhalb 10s antwortet
+// (Pong-Frame oder Echo-Message), forcierter Reconnect mit frischem Ticket.
+let heartbeatTimer = null;
+let pongTimeoutTimer = null;
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const PONG_TIMEOUT_MS = 10_000;
 
 // Verhindert doppelte Verarbeitung — Map<id, seenAt> für age-based Eviction
 // Kein .clear() — verhindert Replay-Angriff via ID-Recycling
@@ -126,6 +134,26 @@ async function processControlMessage(m) {
 
     sessionStorage.removeItem(`bootstrapped:${dmSessionId(me, peer)}`);
     await ensureBootstrapped(me, peer, fetchInboxKeys, apiFetch);
+    return;
+  }
+
+  // 1b) CMK_RESET: Peer hat die Verschlüsselung manuell zurückgesetzt.
+  //     Lokalen CMK wegwerfen + Bootstrap-Guard leeren, damit beim nächsten
+  //     Kontakt ein frischer Schlüssel ausgehandelt wird. Wenn ich Authority
+  //     bin → direkt neuen CMK an Peer schicken.
+  if (m.type === "cmk_reset") {
+    const peer = m.from;
+    if (!peer) return;
+    const sid = dmSessionId(me, peer);
+    console.warn("🔁 CMK_RESET empfangen von", peer, "— lokalen Schlüssel verwerfen");
+    try { await deleteCMK(peer); } catch {}
+    try { sessionStorage.removeItem(`bootstrapped:${sid}`); } catch {}
+    try { sessionStorage.removeItem(`cmk_req_sent:${sid}`); } catch {}
+    notify({ type: "CMK_RESET", peer });
+    if (isAuthority(me, peer)) {
+      // Authority → neuen CMK aushandeln + an Peer schicken
+      await ensureBootstrapped(me, peer, fetchInboxKeys, apiFetch);
+    }
     return;
   }
 
@@ -394,11 +422,18 @@ async function connect() {
     console.log("🟢 Control WebSocket connected");
     backoff = 1000; // Reset bei Erfolg
     window.dispatchEvent(new CustomEvent("renex-ws-state", { detail: { connected: true } }));
+    startHeartbeat();
   };
 
   ws.onmessage = async (event) => {
     try {
       const m = JSON.parse(event.data);
+
+      // Pong vom Server → Lebenszeichen erhalten, Pong-Timeout abbrechen
+      if (m?.type === "pong") {
+        clearPongTimeout();
+        return;
+      }
 
       // Doppel-Processing + Replay-Schutz (ID-Dedup + Timestamp-Guard)
       if (isReplay(m)) return;
@@ -412,6 +447,7 @@ async function connect() {
 
   ws.onclose = (event) => {
     ws = null;
+    stopHeartbeat();
     console.log(`🔴 Control WebSocket closed (code: ${event.code})`);
     window.dispatchEvent(new CustomEvent("renex-ws-state", { detail: { connected: false } }));
 
@@ -443,6 +479,73 @@ function scheduleReconnect() {
     backoff = Math.min(backoff * 2, MAX_BACKOFF);
     connect();
   }, backoff);
+}
+
+// Heartbeat — alle 25s Ping senden. Server antwortet mit Pong (siehe wsRoutes.js).
+// Falls innerhalb 10s kein Pong: forcierter Reconnect (Connection ist tot).
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+    } catch (e) {
+      console.warn("⚠️ Heartbeat-Send failed:", e);
+      forceReconnect();
+      return;
+    }
+    // Pong-Timeout starten — Server muss innerhalb 10s antworten
+    if (pongTimeoutTimer) clearTimeout(pongTimeoutTimer);
+    pongTimeoutTimer = setTimeout(() => {
+      console.warn("⚠️ WebSocket Pong-Timeout — forcierter Reconnect");
+      forceReconnect();
+    }, PONG_TIMEOUT_MS);
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  clearPongTimeout();
+}
+
+function clearPongTimeout() {
+  if (pongTimeoutTimer) { clearTimeout(pongTimeoutTimer); pongTimeoutTimer = null; }
+}
+
+function forceReconnect() {
+  stopHeartbeat();
+  if (ws) {
+    try { ws.close(4000, "Heartbeat timeout"); } catch {}
+    ws = null;
+  }
+  if (running && !reconnectTimer) {
+    backoff = 1000; // sofort reconnecten, nicht 30s warten
+    scheduleReconnect();
+  }
+}
+
+// Phase: Visibility-Change-Handler — iOS-PWA suspendiert WS bei Hidden.
+// Hidden → WS sauber schließen + Polling stoppen.
+// Visible → Reconnect mit frischem Ticket.
+if (typeof document !== "undefined" && !window.__wsVisibilityHandler) {
+  window.__wsVisibilityHandler = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopHeartbeat();
+      // WS nicht hart killen — Browser/OS macht das eh. Nur Heartbeat stoppen.
+    } else {
+      // Visible → wenn WS down ist, sofort reconnecten
+      if (running && (!ws || ws.readyState !== WebSocket.OPEN)) {
+        console.log("📲 Tab visible → forcierter WS-Reconnect");
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        backoff = 1000;
+        connect();
+      } else if (running && ws?.readyState === WebSocket.OPEN) {
+        // Heartbeat wieder aufnehmen
+        startHeartbeat();
+      }
+    }
+  });
 }
 
 // ── Public API (gleiche Namen wie controlPoller.js) ───────

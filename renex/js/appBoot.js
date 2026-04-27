@@ -36,9 +36,18 @@ export function bootApp() {
   const isGuest = hasGuestSession();
   if (isGuest) return;
 
-  // einmalig starten
-  if (window.__controlPollerStarted) return;
-  window.__controlPollerStarted = true;
+  // Einmalig starten — pro TOP-Window, nicht pro iframe.
+  // Der Chat läuft im iframe von index.html und importiert appBoot. Ohne diesen
+  // Guard entstünden zwei WS-Verbindungen pro User-DO → Events (z.B. Reactions,
+  // NEW_MESSAGE) kämen doppelt im Client an. Same-Origin → window.top zugreifbar.
+  let flagHolder = window;
+  try {
+    if (window.top && window.top !== window.self) flagHolder = window.top;
+  } catch {
+    // Cross-Origin Frame (sollte hier nie vorkommen, aber defensive)
+  }
+  if (flagHolder.__controlPollerStarted) return;
+  flagHolder.__controlPollerStarted = true;
 
   startGlobalControlPolling();
 
@@ -64,5 +73,17 @@ export function bootApp() {
         checkAppVersion({ silent }).catch(() => {});
       }
     });
+  }
+
+  // Periodischer Version-Check während aktiver Session (alle 15 Min).
+  // Schließt die Lücke "Tab seit Stunden offen" — sonst sieht der User Updates
+  // erst nach Tab-Switch oder Reload. Banner-Modus, da User aktiv ist.
+  // Cooldowns/Dismiss-Logik in versionCheck.js verhindern Spam/Doppel-Banner.
+  if (!flagHolder.__versionPeriodicCheck) {
+    flagHolder.__versionPeriodicCheck = true;
+    setInterval(() => {
+      if (document.hidden) return; // kein Hintergrund-Polling (iOS-PWA-Akku)
+      checkAppVersion({ silent: false }).catch(() => {});
+    }, 15 * 60 * 1000);
   }
 }

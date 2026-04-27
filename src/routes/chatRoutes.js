@@ -192,6 +192,11 @@ export async function handleChatRoutes(request, env, path, params) {
 
         const me = String(session.handle || "").toLowerCase();
 
+        // Rate-Limit: 60 req/min — schützt gegen Polling-Stürme.
+        // Client pollt alle 30s → 2 req/min normal. 60 erlaubt Multi-Tab + Bursts.
+        const rl = await rateLimit(env, `chat_unread:${me}`, 60_000, 60);
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
+
         const rows = await env.RENEX_DB.prepare(
           "SELECT sender, count FROM unread_counters WHERE owner = ?"
         ).bind(me).all();
@@ -218,6 +223,11 @@ export async function handleChatRoutes(request, env, path, params) {
         }
 
         const me = String(session.handle || "").toLowerCase();
+
+        // Rate-Limit: 120 req/min — Delivery-ACKs werden pro neuer Nachricht
+        // gesendet, daher höher als unread.
+        const rl = await rateLimit(env, `chat_delivered:${me}`, 60_000, 120);
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
 
         const body = await readJson(request);
         if (!body) return json(request, { error: "Invalid JSON" }, 400);
@@ -274,7 +284,8 @@ export async function handleChatRoutes(request, env, path, params) {
     // =========================
     case "/chat/message/delete": {
       if (request.method === "DELETE" || request.method === "POST") {
-        const session = await requireSession(request, env);
+        // Gäste dürfen eigene Nachrichten löschen (requireAnySession statt requireSession)
+        const session = await requireAnySession(request, env);
         if (!session) return json(request, { error: "Not authenticated" }, 401);
 
         const me = String(session.handle || "").toLowerCase();
@@ -330,7 +341,8 @@ export async function handleChatRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/chat/message/edit": {
       if (request.method !== "POST") break;
-      const session = await requireSession(request, env);
+      // Gäste dürfen eigene Nachrichten bearbeiten (requireAnySession statt requireSession)
+      const session = await requireAnySession(request, env);
       if (!session) return json(request, { error: "Not authenticated" }, 401);
 
       const me = String(session.handle || "").toLowerCase();
@@ -433,7 +445,8 @@ export async function handleChatRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/chat/react": {
       if (request.method !== "POST") break;
-      const session = await requireSession(request, env);
+      // Gäste dürfen in ihrer zugewiesenen Konvo reagieren (requireAnySession statt requireSession)
+      const session = await requireAnySession(request, env);
       if (!session) return json(request, { error: "Not authenticated" }, 401);
 
       const me   = String(session.handle || "").toLowerCase();

@@ -24,6 +24,10 @@ export async function handleContactRoutes(request, env, path, params) {
 
         const handle = session.handle;
 
+        // Rate-Limit: 60 req/min — Polling alle 30s = 2/min, Multi-Tab + ETag-Refresh ok.
+        const rl = await rateLimit(env, `contacts_list:${handle}`, 60_000, 60);
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
+
         // ── ETag via KV-Versions-Token ────────────────────────────
         // Jede Kontakt-Mutation (request/accept/reject/remove) bump dieses Token.
         // Wenn Token unverändert → 304 ohne DB-Query.
@@ -114,6 +118,13 @@ export async function handleContactRoutes(request, env, path, params) {
         const target = await env.RENEX_KV.get(`webauthn:${targetHandle}`);
         if (!target) return json(request, { error: "Contact not found" }, 404);
 
+        // Tombstone-Check: Account wurde gelöscht (KV ist eventually consistent,
+        // dieser Marker schliesst das Lag-Fenster und bleibt 300 Tage bestehen)
+        const deletedFlag = await env.RENEX_KV.get(`deleted:${targetHandle}`);
+        if (deletedFlag) {
+          return json(request, { error: "account_deleted" }, 410);
+        }
+
         const now = Date.now();
 
         // 7-Tage-Cooldown: Hat targetHandle meine Anfrage kürzlich abgelehnt?
@@ -150,6 +161,9 @@ export async function handleContactRoutes(request, env, path, params) {
         if (existing) {
           if (existing.status === "pending")  return json(request, { status: "already_pending" });
           if (existing.status === "accepted") return json(request, { status: "already_exists" });
+          if (existing.status === "account_deleted") {
+            return json(request, { error: "account_deleted" }, 410);
+          }
           if (existing.status === "removed") {
             // Empfänger (bob→alice): eingehende Anfrage
             await env.RENEX_DB.prepare(

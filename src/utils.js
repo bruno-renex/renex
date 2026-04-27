@@ -15,7 +15,7 @@ export function corsHeaders(request) {
     "Access-Control-Allow-Methods": "GET, POST, DELETE, PATCH, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Mime-Type, X-File-Name, X-File-Size, X-Attachment-Type, X-Convo-Id, X-Guest-Token",
     "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Max-Age": "0",   // kein Preflight-Cache → verhindert veraltete Browser-Caches
+    "Access-Control-Max-Age": "3600", // 1h Preflight-Cache → halbiert Request-Volumen (vorher 0 = jeder Request triggerte OPTIONS)
     "Vary": "Origin",
   };
 

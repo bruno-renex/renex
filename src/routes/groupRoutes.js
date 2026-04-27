@@ -300,6 +300,10 @@ export async function handleGroupRoutes(request, env, path, params) {
     case "/groups/list": {
       if (request.method !== "GET") break;
 
+      // Rate-Limit: 60 req/min — Polling alle 30s = 2/min, Multi-Tab + Bursts ok.
+      const rl = await rateLimit(env, `groups_list:${me}`, 60_000, 60);
+      if (!rl) return json(request, { error: "Too many requests" }, 429);
+
       const rows = await env.RENEX_DB.prepare(`
         SELECT c.id, c.name, c.created_at, cm.role,
                COUNT(DISTINCT cm2.member_handle) AS member_count,

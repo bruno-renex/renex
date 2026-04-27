@@ -1,5 +1,5 @@
 import { json } from '../utils.js';
-import { requireSession } from '../auth.js';
+import { requireSession, rateLimit } from '../auth.js';
 
 // ======================================================
 // PRESENCE ROUTES
@@ -17,6 +17,11 @@ export async function handlePresenceRoutes(request, env, path) {
 
   // ── GET /presence ─────────────────────────────────────────
   if (path === "/presence" && request.method === "GET") {
+    const me = String(session.handle || "").toLowerCase();
+    // Rate-Limit: 120 req/min — Presence-Refresh ist häufig (jede Member-Liste-Anzeige).
+    const rl = await rateLimit(env, `presence:${me}`, 60_000, 120);
+    if (!rl) return json(request, { error: "Too many requests" }, 429);
+
     const url = new URL(request.url);
     const raw = url.searchParams.get("handles") || "";
 

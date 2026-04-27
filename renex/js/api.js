@@ -69,6 +69,16 @@ export async function apiFetch(path, options = {}) {
 
   if (res.status === 429) {
     const data = await res.json().catch(() => ({}));
+    // Gast-Nachrichtenlimit ist PERMANENT — kein Backoff, kein Retry.
+    // Muss als eigener Flag zurückkommen, damit der Caller die UI sperren kann.
+    if (data?.error === "Message limit reached") {
+      return {
+        guestLimitReached: true,
+        msgCount: data.msgCount,
+        msgLimit: data.msgLimit,
+        convertUrl: data.convertUrl || null,
+      };
+    }
     // Global Backoff 10s — stoppt ALLE parallelen Requests
     _globalBackoffUntil = Date.now() + (data.retryAfterMs || 10_000);
     return {
@@ -76,6 +86,15 @@ export async function apiFetch(path, options = {}) {
       status: data.status || null,
       error: data.error || "Too many requests",
       retryAfterMs: data.retryAfterMs || 10000
+    };
+  }
+
+  // 410 Gone = Gast-Session abgelaufen (oder bereits konvertiert)
+  if (res.status === 410) {
+    const data = await res.json().catch(() => ({}));
+    return {
+      guestExpired: true,
+      error: data.error || "Session expired",
     };
   }
 

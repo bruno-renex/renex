@@ -363,8 +363,44 @@
     }
 
     try {
-      const res  = await fetch(`${API}/invite/info?token=${encodeURIComponent(token)}`);
+      // credentials: "include" + X-Guest-Token → Server kann für bereits benutzte
+      // DM-Invites prüfen, ob der Requester eine gültige Session hat und die
+      // Redirect-Daten zurückgeben (statt "already_used"). Safari ITP kann
+      // localStorage dropen, während Cookie noch gilt (oder umgekehrt) — daher
+      // beide Kanäle senden.
+      const headers = {};
+      if (existingSession && existingSession.token) {
+        headers["X-Guest-Token"] = existingSession.token;
+      }
+      const res  = await fetch(`${API}/invite/info?token=${encodeURIComponent(token)}`, {
+        credentials: "include",
+        headers,
+      });
       const data = await res.json().catch(() => ({}));
+
+      // Server hat erkannt: Invite bereits benutzt, aber Session ist gültig → resume
+      if (data.valid && data.resumed) {
+        console.log("[join] Server-Fallback: resumed session → redirect");
+        // localStorage wiederherstellen falls verloren (Safari ITP, PWA-Wechsel, ...)
+        try {
+          setGuestSession({
+            guestHandle:   data.guestHandle,
+            convoId:       data.convoId,
+            convoType:     data.convoType,
+            inviterHandle: data.inviterHandle,
+            expiresAt:     data.expiresAt,
+            msgLimit:      data.msgLimit,
+            msgCount:      data.msgCount ?? 0,
+            token:         data.sessionToken,
+            inviteToken:   token,
+          });
+        } catch (e) { console.warn("setGuestSession (resumed) failed", e); }
+        const target = data.convoType === "group"
+          ? data.convoId
+          : (data.inviterHandle || data.convoId);
+        window.location.replace(`/chat/?with=${encodeURIComponent(target)}&guest=1`);
+        return;
+      }
 
       if (!res.ok || !data.valid) {
         const reason = data.reason || (res.status === 404 ? "not_found" : res.status === 410 ? "already_used" : null);

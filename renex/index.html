@@ -7,17 +7,24 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-21-4" />
+  <meta name="renex-version" content="2026-04-27-1" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
+  // Push: Service Worker + IMMER Backend-Sync (auch bei Handle-Wechsel)
   if("serviceWorker"in navigator){
     navigator.serviceWorker.register("/sw.js").then(function(){
       if(Notification.permission==="granted"){
         navigator.serviceWorker.ready.then(function(reg){
           reg.pushManager.getSubscription().then(function(sub){
-            if(sub)return;
-            fetch("/push/vapid-key").then(function(r){return r.json()}).then(function(d){
+            // Wenn noch keine Subscription → erst subscriben
+            if(sub){
+              // Bestehende Subscription → direkt ans Backend syncen (für aktuellen User)
+              var j=sub.toJSON();
+              return fetch("https://api.renex.id/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({endpoint:j.endpoint,keys:j.keys,transport_type:"web_push"})}).catch(function(){});
+            }
+            // Keine Subscription → neu erstellen + syncen
+            return fetch("/push/vapid-key").then(function(r){return r.json()}).then(function(d){
               var k=d.publicKey,p="=".repeat((4-k.length%4)%4);
               var b=atob((k+p).replace(/-/g,"+").replace(/_/g,"/"));
               var a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);
@@ -517,6 +524,62 @@
   }
 
   /* ═══════════════════════════════════════════
+     PUSH NOTIFICATION BANNER
+     Auf allen Geräten gleich (Desktop, Mobile, VR).
+     JS toggelt display:none → flex.
+  ═══════════════════════════════════════════ */
+  #push-banner {
+    display: none;
+    margin: 10px 10px 6px;
+    background: linear-gradient(135deg, rgba(56,189,248,0.18), rgba(56,189,248,0.05));
+    border: 1px solid var(--accent-voice);
+    border-radius: 12px;
+    padding: 12px 14px;
+    cursor: pointer;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.2s ease, transform 0.1s ease;
+  }
+  #push-banner:hover,
+  #push-banner:focus-visible {
+    background: linear-gradient(135deg, rgba(56,189,248,0.28), rgba(56,189,248,0.08));
+    outline: none;
+  }
+  #push-banner:active {
+    transform: scale(0.98);
+  }
+  #push-banner .pb-icon {
+    font-size: 22px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  #push-banner .pb-text {
+    flex: 1;
+    min-width: 0;
+  }
+  #push-banner-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.3;
+  }
+  #push-banner-subtitle {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.3;
+    margin-top: 2px;
+  }
+  #push-banner .pb-arrow {
+    font-size: 18px;
+    color: var(--accent-voice);
+    flex-shrink: 0;
+    font-weight: 600;
+  }
+
+  /* ═══════════════════════════════════════════
      VOICE PLACEHOLDER
   ═══════════════════════════════════════════ */
   .voice-empty {
@@ -791,10 +854,12 @@
     display: none;
     position: fixed;
     inset: 0;
+    height: 100dvh;
     background: rgba(0,0,0,0.65);
     z-index: 500;
     align-items: center;
     justify-content: center;
+    overscroll-behavior: contain;
   }
 
   #delete-overlay.show { display: flex; }
@@ -805,7 +870,33 @@
     border-radius: 16px;
     padding: 28px 24px;
     width: 320px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
     box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+  }
+
+  /* Bottom Sheet auf Mobile — sichtbar auf jedem Gerät, auch VR */
+  @media (max-width: 600px) {
+    #delete-overlay {
+      align-items: flex-end;
+      justify-content: stretch;
+    }
+    #delete-dialog {
+      width: 100%;
+      max-width: 100%;
+      max-height: 90dvh;
+      border-radius: 20px 20px 0 0;
+      padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
+      padding-left: calc(20px + env(safe-area-inset-left));
+      padding-right: calc(20px + env(safe-area-inset-right));
+      animation: deleteSheetUp 0.22s ease-out;
+    }
+  }
+
+  @keyframes deleteSheetUp {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
   }
 
   #delete-dialog h3 {
@@ -1050,6 +1141,116 @@
   }
 
   #requests-modal.show { display: flex; }
+
+  /* ═══════════════════════════════════════════
+     DISPLAY NAME MODAL
+  ═══════════════════════════════════════════ */
+  #display-name-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 1100;
+    align-items: center;
+    justify-content: center;
+  }
+  #display-name-modal.show { display: flex; }
+  #display-name-modal .dn-card {
+    background: var(--bg-panel);
+    border-radius: 16px;
+    width: calc(100% - 40px);
+    max-width: 440px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    display: flex;
+    flex-direction: column;
+  }
+  #display-name-modal .dn-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  #display-name-modal .dn-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  #display-name-modal .dn-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0;
+  }
+  #display-name-modal .dn-body {
+    padding: 16px 18px;
+  }
+  #display-name-modal .dn-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    line-height: 1.4;
+  }
+  #display-name-modal .dn-input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 15px;
+    box-sizing: border-box;
+  }
+  #display-name-modal .dn-input:focus {
+    outline: none;
+    border-color: var(--accent, #3b82f6);
+  }
+  #display-name-modal .dn-counter {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 6px;
+    text-align: right;
+  }
+  #display-name-modal .dn-error {
+    font-size: 13px;
+    color: #ef4444;
+    margin-top: 8px;
+    min-height: 18px;
+  }
+  #display-name-modal .dn-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+    padding: 12px 18px 16px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  #display-name-modal .dn-btn {
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 14px;
+    cursor: pointer;
+  }
+  #display-name-modal .dn-btn:hover { background: var(--bg-hover, rgba(255,255,255,0.05)); }
+  #display-name-modal .dn-btn.dn-primary {
+    background: var(--accent, #3b82f6);
+    border-color: var(--accent, #3b82f6);
+    color: #fff;
+  }
+  #display-name-modal .dn-btn.dn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  #display-name-modal .dn-btn.dn-reset {
+    margin-right: auto;
+    color: var(--text-secondary);
+  }
 
   /* ═══════════════════════════════════════════
      TOAST
@@ -1773,6 +1974,28 @@
   }
 
   /* ═══════════════════════════════════════════
+     LEGAL SUBMENU (inside dropdown)
+  ═══════════════════════════════════════════ */
+  #legal-submenu {
+    position: absolute;
+    top: 0;
+    left: calc(100% + 6px);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-panel);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 160px;
+    padding: 8px 0;
+    display: none;
+    z-index: 202;
+  }
+  #legal-submenu a.dropdown-item {
+    display: block;
+    text-decoration: none;
+    color: var(--text-primary);
+  }
+
+  /* ═══════════════════════════════════════════
      MOBILE — Strip moves to bottom
   ═══════════════════════════════════════════ */
   @media (max-width: 700px) {
@@ -1782,25 +2005,33 @@
       order: 3;
       width: 100%;
       height: calc(58px + env(safe-area-inset-bottom, 0px));
+      display: flex;
       flex-direction: row;
-      justify-content: space-around;
+      justify-content: space-evenly;
       align-items: center;
-      padding: 0 8px;
-      padding-bottom: env(safe-area-inset-bottom, 0px);
+      padding:
+        0
+        max(8px, env(safe-area-inset-right))
+        env(safe-area-inset-bottom, 0px)
+        max(8px, env(safe-area-inset-left));
       border-right: none;
       border-top: 1px solid var(--border-panel);
     }
 
     .strip-brand { display: none; }
 
-    .strip-icons-top {
-      flex-direction: row;
-      flex: 1;
-      justify-content: space-around;
-      gap: 0;
-    }
+    .strip-icons-top { display: contents; }
 
-    .strip-icons-bottom { flex-direction: row; padding: 0; }
+    .strip-icons-bottom { display: contents; }
+
+    .icon-strip .strip-icon,
+    .icon-strip .profile-wrapper {
+      min-height: 48px;
+      min-width: 48px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
 
     .strip-icon.active::before { display: none; }
 
@@ -1910,6 +2141,7 @@
             </div>
           </div>
           <div class="dropdown-divider"></div>
+          <div id="dropdown-display-name" class="dropdown-item" data-i18n="displayNameMenuLabel">Anzeigename</div>
           <div id="dropdown-passkeys" class="dropdown-item" data-i18n="passkeysLabel">Passkeys</div>
           <div class="dropdown-divider"></div>
           <div id="dropdown-lang" class="dropdown-item has-sub">
@@ -1920,6 +2152,16 @@
               <div id="lang-opt-es" class="dropdown-item">🇪🇸 ES – Español</div>
             </div>
           </div>
+          <div class="dropdown-divider"></div>
+          <div id="dropdown-legal" class="dropdown-item has-sub">
+            <span data-i18n="legalLabel">Rechtliches</span>
+            <div id="legal-submenu">
+              <a href="/impressum/" target="_blank" rel="noopener" class="dropdown-item" data-i18n="footerImprint">Impressum</a>
+              <a href="/datenschutz/" target="_blank" rel="noopener" class="dropdown-item" data-i18n="footerPrivacy">Datenschutz</a>
+              <a href="/agb/" target="_blank" rel="noopener" class="dropdown-item" data-i18n="footerTerms">AGB</a>
+            </div>
+          </div>
+          <a id="dropdown-feedback" class="dropdown-item" href="/feedback/" target="_blank" rel="noopener" style="display:block;text-decoration:none;color:inherit;">💬 <span data-i18n="footerFeedback">Feedback</span></a>
           <div class="dropdown-divider"></div>
           <div id="dropdown-logout" class="dropdown-item logout" data-i18n="logout">Logout</div>
         </div>
@@ -1932,6 +2174,16 @@
        PANEL LIST
   ═══════════════════════════════════════ -->
   <div class="panel-list">
+
+    <!-- Push notification activation banner — JS toggles via initPushBanner() -->
+    <div id="push-banner" role="button" tabindex="0" aria-label="Enable notifications">
+      <div class="pb-icon">🔔</div>
+      <div class="pb-text">
+        <div id="push-banner-title">Benachrichtigungen aktivieren</div>
+        <div id="push-banner-subtitle">Verpasse keine Nachrichten</div>
+      </div>
+      <div class="pb-arrow">→</div>
+    </div>
 
     <!-- ── DMs ── -->
     <div class="list-section active" id="section-dms">
@@ -2083,6 +2335,37 @@
       <button id="requests-modal-close" style="background:none;border:none;color:var(--text-secondary);font-size:20px;cursor:pointer;line-height:1;padding:0;">✕</button>
     </div>
     <ul id="pending" style="margin:0;padding:8px 0;list-style:none;overflow-y:auto;flex:1;"></ul>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════
+     DISPLAY NAME MODAL
+═══════════════════════════════════════ -->
+<div id="display-name-modal">
+  <div class="dn-card">
+    <div class="dn-header">
+      <span class="dn-title" data-i18n="displayNameDialogTitle">Anzeigename ändern</span>
+      <button id="display-name-close" class="dn-close" aria-label="Close">✕</button>
+    </div>
+    <div class="dn-body">
+      <div class="dn-desc" data-i18n="displayNameDialogDesc">Dein Anzeigename wird anderen in Chats und Kontakten angezeigt.</div>
+      <input
+        id="display-name-input"
+        class="dn-input"
+        type="text"
+        maxlength="128"
+        autocomplete="off"
+        data-i18n-placeholder="displayNamePlaceholder"
+        placeholder="z.B. Anna 🌸"
+      />
+      <div id="display-name-counter" class="dn-counter">0/32</div>
+      <div id="display-name-error" class="dn-error"></div>
+    </div>
+    <div class="dn-footer">
+      <button id="display-name-reset" class="dn-btn dn-reset" data-i18n="displayNameResetBtn">Zurücksetzen</button>
+      <button id="display-name-cancel" class="dn-btn" data-i18n="displayNameCancelBtn">Abbrechen</button>
+      <button id="display-name-save" class="dn-btn dn-primary" data-i18n="displayNameSaveBtn">Speichern</button>
+    </div>
   </div>
 </div>
 
@@ -2515,7 +2798,11 @@
 
 <script type="module" src="/js/inbox.js?v=2"></script>
 <script type="module">
-import { loginWithPasskey } from "./js/auth.js";
+// Cache-Buster: ES-Module werden vom Browser aggressiv nach URL gecacht.
+// Ohne diesen Query-Param bleibt nach einem Deploy die alte auth.js im
+// Cache hängen → neue Features (z.B. "just_registered_handle"-Marker)
+// greifen nicht. Bei jeder relevanten Änderung in auth.js den v-Wert bumpen.
+import { loginWithPasskey } from "./js/auth.js?v=2026-04-27-1";
 import { apiFetch }         from "./js/api.js";
 import { bootApp }          from "./js/appBoot.js";
 import lang, { applyI18n, getLang, setLang } from "./js/i18n.js";
@@ -2576,21 +2863,45 @@ function hideModal() {
 
 // ── Auth check on load ─────────────────────────────────
 // Synchron: gecachten User direkt zeigen, sonst Login-Modal → kein Flash
-if (localStorage.getItem("my_user")) {
+// Gast-Handles (guest_*) zählen NICHT als eingeloggt — sonst würde beim
+// Gast→Account-Konvertieren die App kurz aufblitzen und inbox.js authed
+// Requests (→ 401) feuern, bevor die async Session-Prüfung aufräumt.
+const _cachedUser = localStorage.getItem("my_user") || "";
+const _isRealUser = _cachedUser && !_cachedUser.startsWith("guest_");
+if (_isRealUser) {
   showApp(); // App sofort sichtbar, Session-Check läuft im Hintergrund
 } else {
-  showModal(); // Kein gecachter User → Login direkt zeigen
+  showModal(); // Kein (echter) gecachter User → Login direkt zeigen
 }
 
 // Passkey gerade erstellt → Login-Hinweis im Status anzeigen
-if (new URLSearchParams(location.search).get("registered") === "1") {
-  loginStatus.textContent = "✅ Passkey gespeichert – bitte einloggen";
-  // Consent wurde beim Registrieren schon akzeptiert → Checkbox auto-checken
-  if (consentBox) {
-    consentBox.checked = true;
-    consentBox.dispatchEvent(new Event("change"));
+{
+  const _params = new URLSearchParams(location.search);
+  if (_params.get("registered") === "1") {
+    loginStatus.textContent = "✅ Passkey gespeichert – bitte einloggen";
+    // Consent wurde beim Registrieren schon akzeptiert → Checkbox auto-checken
+    if (consentBox) {
+      consentBox.checked = true;
+      consentBox.dispatchEvent(new Event("change"));
+    }
+    // Handle-Feld vorbefüllen → Nutzer muss nur noch einmal auf
+    // "Login mit Passkey" klicken, kein erneutes Tippen.
+    // Quellen in dieser Reihenfolge: URL-Query `h=` (überlebt iOS-PWA-Quirks
+    // und nukeLocalState), dann sessionStorage als Fallback.
+    const _justReg =
+      _params.get("h") ||
+      sessionStorage.getItem("just_registered_handle") ||
+      "";
+    if (_justReg && handleInput) {
+      handleInput.value = _justReg;
+      // Marker (re-)setzen, damit auth.js bei der gleich folgenden
+      // Login-Runde den „Handle vergeben"-Confirm überspringen kann —
+      // selbst wenn sessionStorage zwischenzeitlich gewipt wurde.
+      try { sessionStorage.setItem("just_registered_handle", _justReg); } catch {}
+      if (loginBtn) loginBtn.focus();
+    }
+    history.replaceState(null, "", "/");
   }
-  history.replaceState(null, "", "/");
 }
 
 // Async: Session serverseitig verifizieren
@@ -2646,10 +2957,15 @@ async function nukeLocalState(reason) {
   // Invite-Daten preservieren (Gast-Konvertierung / Invite-Redirect)
   const _preserveConvert  = sessionStorage.getItem("pendingGuestConvert");
   const _preserveRedirect = sessionStorage.getItem("pendingInviteRedirect");
+  // Just-Registered-Marker preservieren — sonst wird der Confirm-Skip
+  // beim direkten Folge-Login nicht greifen (Race: Nuke wischt den Marker
+  // bevor Nutzer auf Login klickt).
+  const _preserveJustReg  = sessionStorage.getItem("just_registered_handle");
   try { localStorage.clear(); } catch {}
   try { sessionStorage.clear(); } catch {}
   if (_preserveConvert)  sessionStorage.setItem("pendingGuestConvert",  _preserveConvert);
   if (_preserveRedirect) sessionStorage.setItem("pendingInviteRedirect", _preserveRedirect);
+  if (_preserveJustReg)  sessionStorage.setItem("just_registered_handle", _preserveJustReg);
   // IndexedDB leeren — typ. E2E-Keys / Peer-Device-Cache. Dürfen weg,
   // werden beim nächsten Login neu bootstrapped.
   try {
@@ -2697,6 +3013,16 @@ loginBtn.onclick = async () => {
     location.reload(); // Seite neu laden → inbox.js initialisiert korrekt
   } catch (e) {
     if (e?.message === "__redirect__") return; // Invite-Redirect läuft — kein reload
+    if (e?.message === "__handle_taken_abort__") {
+      // User hat im Handle-vergeben-Confirm abgebrochen → UI zurücksetzen, keine Fehlermeldung
+      loginStatus.textContent = "";
+      loginBtn.disabled = false;
+      loginBtn.textContent = lang.loginBtn || "Login mit Passkey";
+      loginInProgress = false;
+      handleInput?.focus();
+      handleInput?.select();
+      return;
+    }
     loginStatus.textContent = lang.loginFailed || "Login fehlgeschlagen";
     loginBtn.disabled = false;
     loginBtn.textContent = lang.loginBtn || "Login mit Passkey";

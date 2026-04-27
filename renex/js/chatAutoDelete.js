@@ -225,6 +225,12 @@ export async function initAutoDeleteUI() {
   const inviteItem = document.getElementById("chat-invite-item");
   if (inviteItem && !_isGuestMode && isGroup) inviteItem.style.display = "flex";
 
+  // Key-Reset-Menüpunkt nur für DMs mit eingeloggtem User (kein Guest, keine Gruppe).
+  // Erlaubt manuelle Wiederherstellung wenn E2E-Schlüssel zwischen zwei Geräten
+  // auseinandergedriftet sind (Re-Register / Passkey-Neu-Einrichtung).
+  const keyResetItem = document.getElementById("chat-key-reset-item");
+  if (keyResetItem && !_isGuestMode && !isGroup) keyResetItem.style.display = "flex";
+
   if (menuBtn && menuDropdown) {
     const openMenu  = () => { menuDropdown.style.display = "block"; };
     const closeMenu = () => { menuDropdown.style.display = "none"; if (adSubmenu) adSubmenu.style.display = "none"; };

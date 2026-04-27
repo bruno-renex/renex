@@ -127,6 +127,13 @@ export function showContextMenu(div, { id, from, textEl, ts }) {
       _handled = true;
       e.preventDefault();
       e.stopPropagation();
+      // Android Chrome: feuert nach pointerup einen synthesized click. Weil
+      // das Menü inzwischen aus dem DOM entfernt ist, landet dieser Click auf
+      // dem Element DARUNTER (meist die Message-Bubble) und öffnet das Menü
+      // erneut. In Capture-Phase den nächsten Click schlucken.
+      const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+      document.addEventListener("click", swallow, { capture: true, once: true });
+      setTimeout(() => document.removeEventListener("click", swallow, { capture: true }), 400);
       try { handler(e); } catch (err) { console.error("[ctx] handler error:", err); }
     };
     el.addEventListener("click", fire);
@@ -251,6 +258,9 @@ export function attachContextMenu(div, opts) {
   div.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     if (e.pointerType === "mouse") return;
+    // Während Inline-Edit: Long-Press / Menü-Öffnen deaktivieren, damit Taps
+    // in die Textarea nicht das Kontextmenü über der Bubble öffnen.
+    if (div.querySelector(".edit-textarea")) return;
     _didScroll = false;
     _longPressOpened = false;
     longPressTimer = setTimeout(() => {
@@ -272,6 +282,9 @@ export function attachContextMenu(div, opts) {
   }, { passive: true });
 
   div.addEventListener("click", (e) => {
+    // Während Inline-Edit: Taps in/auf Bubble dürfen das Kontextmenü NICHT
+    // wieder öffnen (sonst blockiert es die Textarea nach "Bearbeiten").
+    if (div.querySelector(".edit-textarea")) return;
     if (e.target.closest(".sender-name")) return;
     if (e.target.closest(".reaction-pill")) return;
     if (e.target.closest(".reply-quote")) return;

@@ -2,12 +2,20 @@ import {
   initE2EKeys,
   uploadInboxKeyIfNeeded
 } from "./e2e.js";
-import { addPasskey } from "./auth.js";
+import { addPasskey } from "./auth.js?v=2026-04-27-1"; // Cache-Buster: bei Änderungen in auth.js bumpen
 import lang, { getLang, setLang } from "./i18n.js";
 import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
 import { formatTime } from "./shared/timeFormat.js";
 import { initServiceWorker, subscribeToPush, getPushStatus, updateBadge } from "./pushManager.js";
 import { showPromptDialog } from "./shared/dialog.js";
+import {
+  loadOwnProfile,
+  saveOwnDisplayName,
+  getOwnDisplayName,
+  onProfileChange,
+  getDisplayName,
+  prefetchProfiles,
+} from "./profiles.js";
 
 // ================================
 // CONFIG
@@ -377,6 +385,17 @@ const deleteHandleError = document.getElementById("delete-handle-error");
 const btnCancelDelete = document.getElementById("btn-cancel-delete");
 const btnConfirmDelete = document.getElementById("btn-confirm-delete");
 
+// Display Name Modal refs
+const dropdownDisplayName = document.getElementById("dropdown-display-name");
+const dnModal = document.getElementById("display-name-modal");
+const dnInput = document.getElementById("display-name-input");
+const dnCounter = document.getElementById("display-name-counter");
+const dnError = document.getElementById("display-name-error");
+const dnSaveBtn = document.getElementById("display-name-save");
+const dnCancelBtn = document.getElementById("display-name-cancel");
+const dnCloseBtn = document.getElementById("display-name-close");
+const dnResetBtn = document.getElementById("display-name-reset");
+
 // ================================
 // PUSH NOTIFICATION BANNER
 // ================================
@@ -384,29 +403,28 @@ async function initPushBanner() {
   const banner = document.getElementById("push-banner");
   if (!banner) return;
 
-  // Bereits weggeklickt?
-  if (localStorage.getItem("renex_push_dismissed")) return;
-
   // Push Status prüfen
   const status = await getPushStatus();
 
   // Nicht unterstützt → kein Banner
   if (!status.supported) return;
 
-  // Bereits granted + subscribed → kein Banner
-  if (status.permission === "granted" && status.subscribed) return;
-
-  // Permission granted aber nicht subscribed → auto-subscribe (ohne Banner)
-  if (status.permission === "granted" && !status.subscribed) {
+  // Permission granted → IMMER Subscription mit Backend syncen
+  // Wichtig: Nach Handle-Wechsel muss Subscription neu zugeordnet werden
+  if (status.permission === "granted") {
     try {
-      const { subscribeToPush: sub } = await import("./pushManager.js");
-      await sub();
-      console.log("🔔 Auto-subscribed (permission was granted)");
+      await subscribeToPush(); // re-POST /push/subscribe für aktuellen User
+      console.log("🔔 Push subscription synced for current user");
     } catch (e) {
-      console.warn("🔔 Auto-subscribe failed:", e.message);
+      console.warn("🔔 Push sync failed:", e.message);
     }
     return; // kein Banner nötig
   }
+
+  // Permission fehlt → Banner IMMER zeigen (ignoriert altes "dismissed"),
+  // weil User sonst nie Push bekommen kann (ohne Permission-Dialog via User-Gesture)
+  // Reset dismissed-Flag damit der Banner nach dem Permission-Erteilen nicht mehr kommt
+  localStorage.removeItem("renex_push_dismissed");
 
   // Banner-Texte aus i18n setzen
   const titleEl = document.getElementById("push-banner-title");
@@ -414,16 +432,22 @@ async function initPushBanner() {
   if (titleEl) titleEl.textContent = lang.pushBannerTitle || "Enable notifications";
   if (subtitleEl) subtitleEl.textContent = lang.pushBannerSubtitle || "Don't miss any messages";
 
-  // Banner anzeigen
-  banner.style.display = "block";
+  // Banner anzeigen (CSS ist flex-Layout)
+  banner.style.display = "flex";
 
-  // Click-Handler: Permission fragen + Subscribe (User-Gesture!)
-  window.__enablePush = async () => {
+  // Click-Handler: Permission fragen + Subscribe.
+  // iOS Safari/PWA: requestPermission() MUSS synchron nach User-Gesture
+  // aufgerufen werden — vor jeglichem await auf andere Promises.
+  // Deshalb: Permission ZUERST, SW-Registration danach.
+  const enablePush = async () => {
+    if (banner.dataset.busy === "1") return;
+    banner.dataset.busy = "1";
     try {
       if (titleEl) titleEl.textContent = lang.pushBannerActivating || "Activating…";
-      await initServiceWorker();
+
       const perm = await Notification.requestPermission();
       if (perm === "granted") {
+        await initServiceWorker();
         await subscribeToPush();
         banner.style.display = "none";
         localStorage.setItem("renex_push_dismissed", "1");
@@ -435,8 +459,26 @@ async function initPushBanner() {
     } catch (err) {
       console.warn("Push banner error:", err);
       banner.style.display = "none";
+    } finally {
+      banner.dataset.busy = "";
     }
   };
+
+  // Click + Tastatur (Enter/Space) für Accessibility — funktioniert auf allen
+  // Geräten inkl. VR-Controller (Click-Event), Tastatur, Touch.
+  if (!banner.dataset.bound) {
+    banner.dataset.bound = "1";
+    banner.addEventListener("click", enablePush);
+    banner.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        enablePush();
+      }
+    });
+  }
+
+  // Backwards-compat: bestehender Inline-Handler aus alter Version
+  window.__enablePush = enablePush;
 }
 
 // ================================
@@ -460,11 +502,21 @@ async function runInboxInit() {
     // 🔔 Push Banner: anzeigen wenn Permission noch nicht granted
     initPushBanner();
 
-    // 👤 Handle im Dropdown anzeigen
+    // 👤 Handle im Dropdown anzeigen (mit Display Name Fallback)
 const myUser = localStorage.getItem("my_user");
-if (myUser && dropdownHandleLabel) {
-  dropdownHandleLabel.textContent = myUser;
+function refreshOwnLabel() {
+  if (!myUser || !dropdownHandleLabel) return;
+  const dn = getOwnDisplayName();
+  dropdownHandleLabel.textContent = dn ? `${dn}  ·  @${myUser}` : myUser;
 }
+refreshOwnLabel();
+
+// Eigenes Profil vom Backend laden (async) → Label aktualisieren, sobald da
+// DOM-Updates für data-profile-handle laufen zentral in profiles.js (auch auf /chat-Seite).
+loadOwnProfile().then(refreshOwnLabel).catch(() => {});
+onProfileChange((changedHandle) => {
+  if (changedHandle === myUser) refreshOwnLabel();
+});
 
 // 🔽 Dropdown Toggle (Ebene 1)
 if (profileCircle && profileDropdown) {
@@ -487,9 +539,78 @@ if (dropdownHandle && accountSubmenu) {
 if (dropdownLogout) {
   dropdownLogout.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const { logout } = await import("./auth.js");
+    const { logout } = await import("./auth.js?v=2026-04-27-1"); // Cache-Buster: bei Änderungen in auth.js bumpen
     await logout();
   });
+}
+
+// ✏️ Display Name Modal
+function updateDnCounter() {
+  if (!dnInput || !dnCounter) return;
+  const len = Array.from(dnInput.value.trim()).length;
+  dnCounter.textContent = typeof lang.displayNameCharCount === "function"
+    ? lang.displayNameCharCount(len)
+    : `${len}/32`;
+  dnCounter.style.color = len > 32 ? "#ef4444" : "";
+  if (dnSaveBtn) dnSaveBtn.disabled = len > 32;
+}
+function closeDnModal() {
+  if (!dnModal) return;
+  dnModal.classList.remove("show");
+  if (dnError) dnError.textContent = "";
+}
+async function handleDnSave(resetMode = false) {
+  if (!dnError || !dnSaveBtn) return;
+  dnError.textContent = "";
+  dnSaveBtn.disabled = true;
+  if (dnResetBtn) dnResetBtn.disabled = true;
+  const value = resetMode ? null : dnInput.value.trim();
+  const result = await saveOwnDisplayName(value);
+  dnSaveBtn.disabled = false;
+  if (dnResetBtn) dnResetBtn.disabled = false;
+  if (result.ok) {
+    showToast({
+      icon: "✓",
+      title: result.display_name ? lang.displayNameSaved : lang.displayNameReset,
+      durationMs: 2500
+    });
+    closeDnModal();
+  } else if (result.error === "too_long") {
+    dnError.textContent = lang.displayNameTooLong;
+  } else if (result.error === "rate_limit") {
+    dnError.textContent = lang.displayNameRateLimit;
+  } else if (result.error === "invalid") {
+    dnError.textContent = lang.displayNameInvalid;
+  } else {
+    dnError.textContent = lang.displayNameSaveFailed;
+  }
+}
+
+if (dropdownDisplayName && dnModal && dnInput) {
+  dropdownDisplayName.addEventListener("click", (e) => {
+    e.stopPropagation();
+    profileDropdown?.classList.remove("show");
+    accountSubmenu?.classList.remove("show");
+    dnInput.value = getOwnDisplayName() || "";
+    updateDnCounter();
+    if (dnError) dnError.textContent = "";
+    dnModal.classList.add("show");
+    setTimeout(() => { dnInput.focus(); dnInput.select(); }, 0);
+  });
+}
+if (dnInput) {
+  dnInput.addEventListener("input", updateDnCounter);
+  dnInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); handleDnSave(false); }
+    if (e.key === "Escape") { e.preventDefault(); closeDnModal(); }
+  });
+}
+if (dnCancelBtn) dnCancelBtn.addEventListener("click", (e) => { e.stopPropagation(); closeDnModal(); });
+if (dnCloseBtn)  dnCloseBtn.addEventListener("click",  (e) => { e.stopPropagation(); closeDnModal(); });
+if (dnResetBtn)  dnResetBtn.addEventListener("click",  (e) => { e.stopPropagation(); handleDnSave(true); });
+if (dnSaveBtn)   dnSaveBtn.addEventListener("click",   (e) => { e.stopPropagation(); handleDnSave(false); });
+if (dnModal) {
+  dnModal.addEventListener("click", (e) => { if (e.target === dnModal) closeDnModal(); });
 }
 
 // 🗑️ Account löschen — Dialog öffnen
@@ -713,8 +834,21 @@ document.addEventListener("click", (e) => {
     profileDropdown?.classList.remove("show");
     accountSubmenu?.classList.remove("show");
     document.getElementById("lang-submenu")?.style.setProperty("display", "none");
+    document.getElementById("legal-submenu")?.style.setProperty("display", "none");
   }
 });
+
+// ⚖️ Rechtliches-Submenü
+const legalBtn = document.getElementById("dropdown-legal");
+const legalSubmenu = document.getElementById("legal-submenu");
+if (legalBtn && legalSubmenu) {
+  legalBtn.addEventListener("click", (e) => {
+    // Klick auf einen Link innerhalb des Submenüs soll normal navigieren
+    if (e.target.closest("#legal-submenu a")) return;
+    e.stopPropagation();
+    legalSubmenu.style.display = legalSubmenu.style.display === "block" ? "none" : "block";
+  });
+}
 
 // ======================================================
 // 🌍 SPRACHE
@@ -751,9 +885,12 @@ if (langBtn && langSubmenu) {
   await loadMutedConvos();
   loadContacts();
   loadGroups();
-  // 🔄 Inbox automatisch aktualisieren
-  window._contactsInterval = setInterval(loadContacts, 8000);
-  setInterval(loadGroups, 8000);
+  // 🔄 Inbox automatisch aktualisieren — 30s statt 8s (Rate-Limit-Schutz).
+  // Realtime-Updates kommen ohnehin via WebSocket/BroadcastChannel, das Polling
+  // ist nur Fallback bei verpassten Events. 30s reicht; spart bei Multi-Device
+  // ~73% der Requests pro Endpoint.
+  window._contactsInterval = setInterval(loadContacts, 30000);
+  setInterval(loadGroups, 30000);
   setInterval(loadMutedConvos, MUTED_TTL_MS); // Mute-Status alle 10min sync
 
   // 🔔 Echtzeit: Kontaktanfrage akzeptiert → sofort neu laden (kein Warten auf Poll)
@@ -925,7 +1062,10 @@ function triggerInboxInit() {
   runInboxInit().catch(err => console.warn("inbox init failed:", err));
 }
 document.addEventListener("DOMContentLoaded", () => {
-  if (localStorage.getItem("my_user")) {
+  // Gast-Handles (guest_*) sind keine echten Logins → inbox.js darf keine
+  // authentifizierten Requests feuern (sonst 401 für /chat/unread, /contacts/list, …).
+  const _u = localStorage.getItem("my_user") || "";
+  if (_u && !_u.startsWith("guest_")) {
     triggerInboxInit();
   }
   // Sonst: auf renex-user-ready warten (dispatched aus index.html/inbox.html
@@ -1048,6 +1188,13 @@ async function loadContacts() {
       }
     });
 
+    // Display Names aller (echten) Kontakte vorwärmen — aktualisiert die UI
+    // asynchron sobald Profile aus KV geladen sind.
+    const realHandles = contacts
+      .map(c => c.handle)
+      .filter(h => h && !h.startsWith("guest_"));
+    prefetchProfiles(realHandles).catch(() => {});
+
     // Banner: bei jeglichen pending Anfragen (in + out) anzeigen
     const incomingCount = contacts.filter(c => c.status === "pending" && c.direction === "in").length;
     const outgoingCount = contacts.filter(c => c.status === "pending" && c.direction === "out").length;
@@ -1147,7 +1294,8 @@ async function loadContacts() {
 // ================================
 function renderPending(contact) {
   const rawHandle = contact.display_handle || contact.handle;
-  const initial   = rawHandle.charAt(0).toUpperCase();
+  const shownName = getDisplayName(contact.handle, rawHandle);
+  const initial   = shownName.charAt(0).toUpperCase();
   const isOut     = contact.direction === "out";
 
   // ── Helper: Banner nach Aktion aktualisieren ──────────
@@ -1186,7 +1334,7 @@ function renderPending(contact) {
   topRow.className = "contact-top-row";
   const nameEl = document.createElement("span");
   nameEl.className = "contact-name";
-  nameEl.textContent = rawHandle;
+  nameEl.textContent = shownName;
   topRow.appendChild(nameEl);
   info.appendChild(topRow);
 
@@ -1276,7 +1424,10 @@ function renderPending(contact) {
 
 function renderAccepted(contact) {
   const rawHandle = contact.display_handle || contact.handle;
-  const handle    = rawHandle.startsWith("guest_") ? guestDisplayName(rawHandle) : rawHandle;
+  const baseName  = rawHandle.startsWith("guest_") ? guestDisplayName(rawHandle) : rawHandle;
+  // Für echte User bevorzugen wir den vom User gesetzten Display Name (Profil),
+  // Gäste behalten ihren guestDisplayName-Transform unverändert.
+  const handle    = rawHandle.startsWith("guest_") ? baseName : getDisplayName(contact.handle, baseName);
   const myUser    = (localStorage.getItem("my_user") || "").toLowerCase();
   const convoId = dmConvoId(myUser, contact.handle);
   const isMuted = _mutedConvos.has(convoId);
@@ -1324,6 +1475,10 @@ function renderAccepted(contact) {
   const nameEl = document.createElement("span");
   nameEl.className = "contact-name" + (unread > 0 ? " unread" : "");
   nameEl.textContent = handle;
+  if (!rawHandle.startsWith("guest_")) {
+    nameEl.dataset.profileHandle = contact.handle;
+    nameEl.dataset.profileFallback = baseName;
+  }
 
   const timeMeta = document.createElement("span");
   timeMeta.className = "contact-time" + (unread > 0 ? " unread" : "");
@@ -1388,7 +1543,7 @@ function renderDeleted(contact) {
   li.style.opacity = "0.5";
 
   const name = document.createElement("span");
-  name.textContent = contact.display_handle || contact.handle;
+  name.textContent = getDisplayName(contact.handle, contact.display_handle || contact.handle);
   name.style.textDecoration = "line-through";
 
   const label = document.createElement("span");
@@ -1867,7 +2022,12 @@ addBtn?.addEventListener("click", async () => {
 
   } catch (err) {
     console.warn("Kontaktanfrage fehlgeschlagen:", err);
-    alert(lang.contactRequestFailed);
+    let msg = lang.contactRequestFailed;
+    try {
+      const parsed = JSON.parse(err.message);
+      if (parsed?.error === "account_deleted") msg = lang.contactRequestAccountDeleted;
+    } catch {}
+    alert(msg);
 
   } finally {
 

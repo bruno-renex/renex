@@ -667,7 +667,6 @@ export async function handleVoiceRoutes(request, env, path, params) {
       const stunOnly = {
         iceServers: [
           { urls: "stun:stun.cloudflare.com:3478" },
-          { urls: "stun:stun.l.google.com:19302" },
         ],
         ttl: TTL_SEC,
       };

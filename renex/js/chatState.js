@@ -11,6 +11,9 @@ export const ROTATION_THRESHOLD = 50;
 export const ROTATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const MAX_DEFERRED_BACKOFF = 15000;
 export const MAX_INBOUND_RETRIES = 10;
+// Stale-Cleanup: Nachrichten älter als 1h werden nicht mehr retried
+// (verhindert ewiges Decrypt-Looping bei permanent verlorenen Keys)
+export const STALE_MESSAGE_MAX_AGE_MS = 60 * 60 * 1000;
 export const MAX_DECRYPT_CACHE = 2000;
 export const INBOX_KEY_TTL = 30_000;
 export const REACTION_EMOJIS = ["💀","🔥","🗿","😭","🫡","💯","🤝"];

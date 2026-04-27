@@ -4,7 +4,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#38bdf8" />
   <link rel="manifest" href="/manifest.json" />
   <script>
@@ -59,30 +59,19 @@
       overflow: hidden;
     }
 
-    /* ── Header: WIRKLICH fixiert (position:fixed) — kompatibel mit ALLEN
-       Browsern inkl. Huawei 2019 / Chromium <80. position:sticky braucht
-       einen scrollbaren Parent, den wir hier nicht zuverlässig haben.
-       position:fixed ist am Viewport verankert und kann nicht wegscrollen. ── */
+    /* ── Header: normales Flex-Item, flex-shrink:0 hält es oben. Der Scroll
+       passiert im #messages-Container, nicht im body/wrapper — daher kann
+       der Header gar nicht wegscrollen und wir brauchen kein position:fixed
+       (das auf Android Chrome mit Soft-Keyboard aus dem sichtbaren Bereich
+       rutscht, weil es am Layout-Viewport statt am visuellen Viewport klebt). ── */
     #chat-header {
-      position: fixed !important;
-      top: 0;
-      left: 0;
-      right: 0;
+      flex-shrink: 0;
       z-index: 100;
       background: var(--bg-body);
       border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
       padding: 10px 16px;
       padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
       box-sizing: border-box;
-    }
-
-    /* Spacer gleicht die Header-Höhe aus damit der Messages-Container
-       nicht unter dem fixierten Header beginnt. Höhe muss zur Header-Höhe
-       passen (padding 10 + content ~34 + padding 10 ≈ 54px + safe-area-top). */
-    #chat-header-spacer {
-      display: block;
-      flex-shrink: 0;
-      height: calc(env(safe-area-inset-top, 0px) + 54px);
     }
 
 #chat-menu-btn:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
@@ -648,6 +637,11 @@
         <span data-i18n="createInviteLinkLabel">🔗 Create invite link</span>
         <span id="chat-invite-status" style="font-size:11px;color:var(--accent-voice);"></span>
       </div>
+      <!-- Key Reset (nur DMs, eingeloggte User) — manuelle Wiederherstellung bei E2E-Mismatch -->
+      <div id="chat-key-reset-item" style="display:none;border-top:1px solid var(--border-subtle);margin-top:4px;padding:10px 16px;cursor:pointer;font-size:13px;align-items:center;justify-content:space-between;" onclick="resetChatKeys()">
+        <span data-i18n="resetKeysLabel">🔑 Reset encryption keys</span>
+        <span id="chat-key-reset-status" style="font-size:11px;color:var(--accent-voice);"></span>
+      </div>
       <!-- Gruppen: Verlassen -->
       <div id="group-leave-item" style="display:none;border-top:1px solid var(--border-subtle);margin-top:4px;padding:4px 16px 8px;">
         <button id="group-leave-btn" data-i18n="leaveGroupBtn" style="width:100%;font-size:13px;padding:7px 12px;border-radius:7px;background:transparent;border:1px solid var(--border-subtle);color:var(--status-error);cursor:pointer;text-align:left;">Verlassen</button>
@@ -656,7 +650,6 @@
   </div>
 </div>
 
-<div id="chat-header-spacer"></div>
 <div id="messages"></div>
 
 <div id="new-indicator">
@@ -728,20 +721,10 @@
     </div>
     <div id="gif-results" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;overflow-y:auto;flex:1;"></div>
     <div id="gif-loading" data-i18n="gifSearching" style="display:none;text-align:center;padding:20px;color:var(--text-secondary);font-size:13px;">Searching…</div>
-    <!-- GIPHY Attribution (Pflicht für Production-Key-Approval) -->
-    <div id="giphy-attribution" style="display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 4px 4px;border-top:1px solid var(--border-subtle);margin-top:8px;font-size:11px;color:var(--text-secondary);user-select:none;">
-      <span>Powered by</span>
-      <a href="https://giphy.com" target="_blank" rel="noopener noreferrer" aria-label="GIPHY" style="display:inline-flex;align-items:center;text-decoration:none;">
-        <!-- GIPHY Wordmark (offiziell, SVG inline — kein externer Asset-Host nötig) -->
-        <svg width="60" height="18" viewBox="0 0 100 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" role="img">
-          <g fill="#FFFFFF" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-weight="900" font-size="24" letter-spacing="0.5">
-            <text x="0" y="22" fill="#00FF99">G</text>
-            <text x="18" y="22" fill="#9933FF">I</text>
-            <text x="26" y="22" fill="#FFFF00">P</text>
-            <text x="44" y="22" fill="#FF6666">H</text>
-            <text x="62" y="22" fill="#00CCFF">Y</text>
-          </g>
-        </svg>
+    <!-- GIPHY Attribution — offizielles Badge (Pflicht für Production-Key) -->
+    <div id="giphy-attribution" style="display:flex;align-items:center;justify-content:center;padding:8px 4px 4px;border-top:1px solid var(--border-subtle);margin-top:8px;">
+      <a href="https://giphy.com" target="_blank" rel="noopener noreferrer" aria-label="Powered by GIPHY">
+        <img src="/icons/giphy-badge.gif" alt="Powered by GIPHY" height="22" style="display:block;" />
       </a>
     </div>
   </div>

@@ -10,7 +10,46 @@ import { readCredentials, writeCredentials, MAX_PASSKEYS } from '../helpers/cred
 //              /auth/passkeys
 // ======================================================
 
+// ── Profile helpers ────────────────────────────────
+// KV: profile:${handle} → { display_name: string|null, updated_at: number }
+// display_name ist optional und darf null/fehlend sein; Fallback ist der Handle.
+async function readProfile(env, handle) {
+  const raw = await env.RENEX_KV.get(`profile:${handle}`);
+  if (!raw) return { handle, display_name: null };
+  try {
+    const p = JSON.parse(raw);
+    return { handle, display_name: p.display_name || null };
+  } catch {
+    return { handle, display_name: null };
+  }
+}
+
+function validateDisplayName(name) {
+  if (name === null || name === undefined) return { ok: true, value: null };
+  if (typeof name !== "string") return { ok: false, error: "invalid_type" };
+  // Kontrollzeichen, Zeilenumbrüche, Tabs entfernen
+  const cleaned = name.replace(/[\r\n\t\x00-\x1f\x7f]/g, "").trim();
+  if (cleaned.length === 0) return { ok: true, value: null };
+  // Länge als Codepoints zählen (damit Emojis nicht doppelt zählen)
+  const codepoints = Array.from(cleaned);
+  if (codepoints.length > 32) return { ok: false, error: "too_long" };
+  return { ok: true, value: cleaned };
+}
+
 export async function handleAuthRoutes(request, env, path, params) {
+  // /users/:handle/profile  (GET, öffentlich für eingeloggte User)
+  const profileMatch = path.match(/^\/users\/([a-z0-9_]+)\/profile$/);
+  if (profileMatch) {
+    if (request.method !== "GET") {
+      return json(request, { error: "Method not allowed" }, 405);
+    }
+    const session = await requireSession(request, env);
+    if (!session) return json(request, { error: "Not authenticated" }, 401);
+    const targetHandle = profileMatch[1];
+    const profile = await readProfile(env, targetHandle);
+    return json(request, profile);
+  }
+
   switch (path) {
 
     // =========================
@@ -340,12 +379,40 @@ export async function handleAuthRoutes(request, env, path, params) {
     // USERS / ME
     // =========================
     case "/users/me": {
+      const session = await requireSession(request, env);
+      if (!session) return json(request, { error: "Not authenticated" }, 401);
+
       if (request.method === "GET") {
-        const session = await requireSession(request, env);
-        if (!session) return json(request, { error: "Not authenticated" }, 401);
-        return json(request, { handle: session.handle });
+        const profile = await readProfile(env, session.handle);
+        return json(request, profile);
       }
-      break;
+
+      if (request.method === "PATCH") {
+        const body = await readJson(request);
+        if (!body) return json(request, { error: "Invalid JSON" }, 400);
+
+        // Rate-Limit: max. 10 Profil-Updates pro Stunde pro User
+        const rlOk = await rateLimit(env, `profile_update:${session.handle}`, 3600_000, 10);
+        if (!rlOk) return json(request, { error: "Too many requests" }, 429);
+
+        const check = validateDisplayName(body.display_name);
+        if (!check.ok) {
+          return json(request, { error: check.error }, 400);
+        }
+
+        if (check.value === null) {
+          // Reset: Eintrag komplett löschen → Fallback auf Handle
+          await env.RENEX_KV.delete(`profile:${session.handle}`);
+        } else {
+          await env.RENEX_KV.put(
+            `profile:${session.handle}`,
+            JSON.stringify({ display_name: check.value, updated_at: Date.now() })
+          );
+        }
+        return json(request, { handle: session.handle, display_name: check.value });
+      }
+
+      return json(request, { error: "Method not allowed" }, 405);
     }
 
     // =========================
@@ -488,6 +555,9 @@ export async function handleAuthRoutes(request, env, path, params) {
 
         // 6b. Terms-Zustimmung löschen (DSG/DSGVO Löschungsrecht)
         await env.RENEX_KV.delete(`user:terms:${handle}`);
+
+        // 6c. Profil (Display Name) löschen
+        await env.RENEX_KV.delete(`profile:${handle}`);
 
         // 7. Handle für 300 Tage sperren
         await env.RENEX_KV.put(

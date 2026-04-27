@@ -4,7 +4,8 @@ import {
   getDeviceId          // ⬅️ HIER
 } from "./e2e.js";
 import { initServiceWorker, subscribeToPush } from "./pushManager.js";
-import { clearGuestSession } from "./shared/guestStorage.js";
+import { clearGuestSession, getGuestSession } from "./shared/guestStorage.js";
+import lang from "./i18n.js";
 
 // ================================
 // API BASE URL
@@ -53,7 +54,17 @@ export async function registerWithPasskey(handle) {
   console.log("📦 register/start:", startData);
 
   if (!startData.publicKey) {
-    alert("❌ Register start fehlgeschlagen");
+    if (startRes.status === 401) {
+      alert(lang.registerHandleTaken(handle));
+    } else if (startRes.status === 409) {
+      alert(lang.registerHandleBlocked(handle));
+    } else if (startRes.status === 400) {
+      alert(lang.registerHandleInvalid);
+    } else if (startRes.status === 429) {
+      alert(lang.registerTooManyRequests);
+    } else {
+      alert(lang.registerFailed(startData.error || lang.unknownError));
+    }
     return;
   }
 
@@ -233,6 +244,21 @@ try {
     const regData = await regRes.json();
     console.log("📦 register/start:", regData);
 
+    if (!regData.publicKey) {
+      if (regRes.status === 401) {
+        alert(lang.registerHandleTaken(handle));
+      } else if (regRes.status === 409) {
+        alert(lang.registerHandleBlocked(handle));
+      } else if (regRes.status === 400) {
+        alert(lang.registerHandleInvalid);
+      } else if (regRes.status === 429) {
+        alert(lang.registerTooManyRequests);
+      } else {
+        alert(lang.registerFailed(regData.error || lang.unknownError));
+      }
+      return;
+    }
+
     const publicKey = {
       ...regData.publicKey,
 
@@ -297,15 +323,39 @@ try {
 
 console.log("✅ Registrierung abgeschlossen");
 
+// Marker: Nutzer hat diesen Handle soeben registriert. Wird beim direkten
+// Folge-Login ausgelesen, um den „Handle vergeben"-Confirm zu überspringen
+// (sonst wäre der Flow: Register → „bereits vergeben?"-Dialog → verwirrend).
+// sessionStorage als Primär-Quelle; ist aber unzuverlässig auf iOS-PWA und
+// kann durch nukeLocalState verloren gehen — deshalb übergeben wir das
+// Handle ZUSÄTZLICH per URL-Query (`h=`). Die Login-Seite liest beide.
+sessionStorage.setItem("just_registered_handle", handle);
+
 // optional kleine Info
 // Kein alert, kein reload — direkt zur Login-Seite (kein Flash)
-window.location.replace("/?registered=1");
+window.location.replace("/?registered=1&h=" + encodeURIComponent(handle));
 return;
 }
 
   // =========================
   // 🔐 FALL 2: LOGIN
   // =========================
+
+  // UX-Fix: Wenn der Handle schon registriert ist aber nicht zum gecachten
+  // `my_user` passt, zuerst bestätigen lassen — sonst sieht ein Nutzer, der
+  // eigentlich registrieren wollte, erst einen unerwarteten Passkey-Dialog
+  // und erst bei dessen Abbruch die "Handle vergeben"-Meldung.
+  // Ausnahme: Nutzer hat den Handle gerade eben registriert (sessionStorage-
+  // Marker) → direkter Folge-Login, kein Confirm nötig.
+  const cachedUser = (localStorage.getItem("my_user") || "").toLowerCase();
+  const justRegistered = (sessionStorage.getItem("just_registered_handle") || "").toLowerCase();
+  if (cachedUser !== handle && justRegistered !== handle) {
+    const proceed = confirm(lang.loginHandleExistsConfirm(handle));
+    if (!proceed) {
+      throw new Error("__handle_taken_abort__");
+    }
+  }
+
   const publicKey = {
   ...startData.publicKey,
 
@@ -332,11 +382,13 @@ try {
 } catch (err) {
   console.error("❌ WebAuthn ERROR:", err);
 
-  alert(
-    "WebAuthn Fehler:\n\n" +
-    err.name + "\n" +
-    err.message
-  );
+  if (err.name === "NotAllowedError") {
+    // Kann zwei Ursachen haben: (a) Handle ist von jemand anderem registriert,
+    // (b) User hat den Passkey nicht auf diesem Gerät oder den Dialog abgebrochen.
+    alert(lang.loginHandleTaken(handle));
+  } else {
+    alert(lang.loginGenericError(err.name, err.message || ""));
+  }
 
   throw err; // wichtig: damit Login sauber abbricht
 }
@@ -371,6 +423,8 @@ try {
   
 if (data.authenticated) {
   localStorage.setItem("my_user", handle);
+  // Just-registered-Marker ist erfüllt → aufräumen (einmaliger Folge-Login-Bonus).
+  sessionStorage.removeItem("just_registered_handle");
   // Alte Gast-Session komplett löschen (localStorage + sessionStorage + E2E-Keys) —
   // sonst wird requireAnySession fälschlicherweise die Gast-Session zurückgeben.
   clearGuestSession();
@@ -435,8 +489,30 @@ if (data.authenticated) {
     try {
       const guestInfo = JSON.parse(_pendingConvert);
       sessionStorage.removeItem("pendingGuestConvert");
+
+      // Gast-Handle VOR clearGuestSession extrahieren — für Preview-Cache-Reset
+      const _preClearGuestSession = getGuestSession();
+      const _guestHandleForCleanup = _preClearGuestSession?.guestHandle || null;
+
       // Gast-Session komplett aufräumen (localStorage + sessionStorage + Keys)
       clearGuestSession();
+
+      // Preview-Cache der Gast-Konversation(en) invalidieren, damit in der Inbox
+      // nicht das alte Gast-Message-Preview stehen bleibt. Die Messages selbst
+      // werden post-Conversion durch den _convertBoundaryTs-Filter in chat.js
+      // ausgeblendet (E2E-Keys sind weg, Backend-Copy nicht entschlüsselbar).
+      if (_guestHandleForCleanup) {
+        try {
+          const keysToDelete = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith("renex_preview_") && k.includes(_guestHandleForCleanup)) {
+              keysToDelete.push(k);
+            }
+          }
+          for (const k of keysToDelete) localStorage.removeItem(k);
+        } catch {}
+      }
 
       // Nachrichten des Gastes auf echten Account übertragen
       const convertRes = await fetch(`${API}/invite/convert`, {

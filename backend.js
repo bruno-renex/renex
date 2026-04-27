@@ -54,7 +54,7 @@ async function fetch(request, env) {
     if (path.startsWith('/chat/')) {
       return await handleChatRoutes(request, env, path, params);
     }
-    if (path.startsWith('/auth/') || path === '/users/me' || path === '/account') {
+    if (path.startsWith('/auth/') || path.startsWith('/users/') || path === '/account') {
       return await handleAuthRoutes(request, env, path, params);
     }
     if (path.startsWith('/contacts')) {

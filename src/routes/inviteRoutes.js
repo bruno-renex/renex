@@ -1,5 +1,5 @@
 import { json, param, corsHeaders, dmConvoId, isUUID, validateConvoId, generateGuestToken, generateGuestHandle } from '../utils.js';
-import { requireSession, requireGuestSession, rateLimit, GUEST_TOKEN_RE, GUEST_HANDLE_RE, pushToGroupMembers, pushToUserDO } from '../auth.js';
+import { requireSession, requireGuestSession, getGuestToken, rateLimit, GUEST_TOKEN_RE, GUEST_HANDLE_RE, pushToGroupMembers, pushToUserDO } from '../auth.js';
 
 // ======================================================
 // INVITE ROUTES — Gastzugang ohne Passkey
@@ -105,7 +105,49 @@ export async function handleInviteRoutes(request, env, path, params) {
     ).bind(token).first();
 
     if (!row)                         return json(request, { valid: false, reason: "not_found" }, 404);
-    if (row.guest_handle === "__used__") return json(request, { valid: false, reason: "already_used" }, 410);
+
+    // ── Fallback für bereits benutzte DM-Invites ─────────────────────────
+    // Wenn die Template-Row als '__used__' markiert ist, der Gast aber noch
+    // eine gültige Session hat (Cookie oder X-Guest-Token), geben wir die
+    // Redirect-Daten zurück statt "already_used". So landet der Gast beim
+    // Wieder-Öffnen des Links direkt im Chat — auch wenn localStorage weg ist
+    // (Safari ITP, PWA-vs-Tab-Wechsel, Storage-Race).
+    if (row.guest_handle === "__used__") {
+      // Resume nur bei bewiesenem Ownership: Client schickt einen gültigen
+      // Guest-Token (Cookie oder X-Guest-Token). Ohne diesen Beweis → 410.
+      // E2E-Modell wird eingehalten: ein geleakter Invite-Link alleine reicht
+      // NICHT, um die Session und damit die Nachrichten zu übernehmen.
+      const guestToken = getGuestToken(request);
+      if (guestToken) {
+        const sess = await env.RENEX_DB.prepare(
+          "SELECT guest_handle, convo_id, convo_type, created_by, expires_at, converted_to FROM guest_sessions WHERE token = ?"
+        ).bind(guestToken).first();
+        if (
+          sess &&
+          !sess.converted_to &&
+          Date.now() < sess.expires_at &&
+          sess.created_by === row.created_by &&
+          sess.convo_type === row.convo_type &&
+          sess.guest_handle && GUEST_HANDLE_RE.test(sess.guest_handle)
+        ) {
+          return json(request, {
+            valid:         true,
+            resumed:       true,
+            convoType:     sess.convo_type,
+            convoId:       sess.convo_id,
+            guestHandle:   sess.guest_handle,
+            inviterHandle: sess.created_by,
+            createdBy:     sess.created_by,
+            displayName:   sess.created_by + "'s Chat",
+            expiresAt:     sess.expires_at,
+            msgLimit:      GUEST_MSG_LIMIT,
+            sessionToken:  guestToken,
+            msgCount:      0,
+          });
+        }
+      }
+      return json(request, { valid: false, reason: "already_used" }, 410);
+    }
     if (Date.now() > row.expires_at)  return json(request, { valid: false, reason: "expired" }, 410);
 
     // Anzeigenamen der Konversation ermitteln

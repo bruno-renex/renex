@@ -1,13 +1,48 @@
 import de from "./lang/de.js";
 import en from "./lang/en.js";
 import es from "./lang/es.js";
+import { hasGuestSession } from "./shared/guestStorage.js";
 
 const LANGS = { de, en, es };
 const STORAGE_KEY = "renex_lang";
+const SUPPORTED   = Object.keys(LANGS);
+const DEFAULT_LANG = "en";
+
+// ── Browser-Sprache detektieren (für Gäste ohne gespeicherte Präferenz) ──
+// navigator.languages bevorzugt (Prioritätenliste), Fallback auf navigator.language.
+// Matches: "de-CH" → "de", "en-US" → "en". Nicht unterstützte Sprachen → DEFAULT_LANG.
+function detectBrowserLang() {
+  try {
+    const candidates = [
+      ...(Array.isArray(navigator.languages) ? navigator.languages : []),
+      navigator.language,
+    ].filter(Boolean);
+    for (const raw of candidates) {
+      const code = String(raw).toLowerCase().split("-")[0];
+      if (SUPPORTED.includes(code)) return code;
+    }
+  } catch {}
+  return DEFAULT_LANG;
+}
 
 // ── Aktive Sprache ermitteln ──────────────────────────
+// Gäste: IMMER Browser-Sprache (ignorieren localStorage, damit der Gast nicht
+//         die Sprachpräferenz des Geräte-Owners erbt, wenn derselbe Browser
+//         vorher für den regulären Account genutzt wurde).
+// Reguläre User:
+//   1) Explizite Wahl aus localStorage (setLang)
+//   2) Browser-Sprache
+//   3) DEFAULT_LANG
 export function getLang() {
-  return localStorage.getItem(STORAGE_KEY) || "en";
+  // Gast-Modus → immer Browser-Sprache (same-origin localStorage kann "de" etc.
+  // vom Inviter enthalten und darf den Gast nicht überschreiben)
+  let isGuest = false;
+  try { isGuest = hasGuestSession(); } catch {}
+  if (isGuest) return detectBrowserLang();
+
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored && SUPPORTED.includes(stored)) return stored;
+  return detectBrowserLang();
 }
 
 // ── Sprache wechseln (Seite wird neu geladen) ─────────

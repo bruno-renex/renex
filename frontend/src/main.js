@@ -3,7 +3,15 @@
 // ======================================================
 import { mount } from 'svelte';
 import App from './App.svelte';
+import { sessionStore } from './stores/session.svelte.js';
 import './app.css';
+
+// Session-Check beim App-Start (einmal, OUTSIDE von $effect — sonst loop).
+// Skip via ?dev=skipSessionCheck — nur für UI-Tests im Dev.
+const params = new URLSearchParams(location.search);
+if (params.get("dev") !== "skipSessionCheck") {
+  sessionStore.check();
+}
 
 const app = mount(App, {
   target: document.getElementById('app'),

@@ -2,7 +2,7 @@ import {
   initE2EKeys,
   uploadInboxKeyIfNeeded
 } from "./e2e.js";
-import { addPasskey } from "./auth.js?v=2026-04-27-8"; // Cache-Buster: bei Änderungen in auth.js bumpen
+import { addPasskey } from "./auth.js?v=2026-04-27-9"; // Cache-Buster: bei Änderungen in auth.js bumpen
 import lang, { getLang, setLang } from "./i18n.js";
 import { guestDisplayName, replaceGuestHandles } from "./shared/guestUtils.js";
 import { formatTime } from "./shared/timeFormat.js";
@@ -539,7 +539,7 @@ if (dropdownHandle && accountSubmenu) {
 if (dropdownLogout) {
   dropdownLogout.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const { logout } = await import("./auth.js?v=2026-04-27-8"); // Cache-Buster: bei Änderungen in auth.js bumpen
+    const { logout } = await import("./auth.js?v=2026-04-27-9"); // Cache-Buster: bei Änderungen in auth.js bumpen
     await logout();
   });
 }

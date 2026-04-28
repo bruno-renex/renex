@@ -1,23 +1,43 @@
 #!/bin/bash
 # ─────────────────────────────────────────────
-#  RENEX Deploy Script
-#  Bumpt Version automatisch + deployt Frontend
-#  Aufruf: bash deploy.sh
+#  RENEX Deploy Script (Phase 1A.6.6 Cutover — Svelte)
+#
+#  Deployed:
+#   - Backend (api.renex.id)
+#   - Frontend Svelte-Build (app.renex.id, project "renex-static")
+#
+#  Vanilla-Codebase ist archiviert in /renex-legacy/.
+#  Rollback: siehe /renex-legacy/_DEPRECATED.md
+#
+#  Aufruf:
+#    bash deploy.sh           # Voller Deploy (Tests + Build + Backend + Frontend)
+#    bash deploy.sh --skip-tests  # Schneller Deploy ohne Tests (NICHT empfohlen)
 # ─────────────────────────────────────────────
 
 set -e
 
 APP_DIR="/Users/brunohochstrasser/Library/Mobile Documents/com~apple~CloudDocs/16.03. renex Kopie/app.renex"
-RENEX="$APP_DIR/renex"
+DIST="$APP_DIR/frontend/dist"
+LEGACY="$APP_DIR/renex-legacy"  # Static Assets (sw.js, icons, manifest, _headers, etc.)
+PAGES_PROJECT="renex-static"     # Production Pages-Project (gleiche wie Vanilla nutzte)
 
-# ── 1. Aktuelle Version lesen ──────────────────
+cd "$APP_DIR"
+
+# ── 1. Tests laufen (außer --skip-tests) ──────────
+if [ "$1" != "--skip-tests" ]; then
+  echo "▶ Running tests…"
+  npm test || { echo "❌ Tests failed — Deploy abgebrochen"; exit 1; }
+fi
+
+# ── 2. Version berechnen ───────────────────────────
+# Quelle der Wahrheit: legacy/version.json (für Backwards-Compat mit alten PWAs)
+VERSION_FILE="$LEGACY/version.json"
 CURRENT=$(python3 -c "
 import json
-d = json.load(open('$RENEX/version.json'))
+d = json.load(open('$VERSION_FILE'))
 print(d['version'])
 ")
 
-# ── 2. Neue Version berechnen (heute-N+1) ──────
 NEW=$(python3 -c "
 from datetime import date
 v = '$CURRENT'
@@ -32,37 +52,67 @@ print(new)
 
 echo "Version: $CURRENT → $NEW"
 
-# ── 3. version.json updaten ────────────────────
+# ── 3. version.json updaten + meta-Tag in HTML ────
 python3 -c "
 import json
-path = '$RENEX/version.json'
+path = '$VERSION_FILE'
 d = json.load(open(path))
 d['version'] = '$NEW'
 open(path, 'w').write(json.dumps(d, indent=2) + '\n')
 "
 
-# ── 4. index.html updaten (inbox.html ist nur Redirect, kein Duplikat mehr) ──
-sed -i '' "s/name=\"renex-version\" content=\"[^\"]*\"/name=\"renex-version\" content=\"$NEW\"/" "$RENEX/index.html"
+# Svelte-index.html Meta-Version setzen (für Sentry-Release + Update-Banner)
+sed -i '' "s/name=\"renex-version\" content=\"[^\"]*\"/name=\"renex-version\" content=\"$NEW\"/" \
+  "$APP_DIR/frontend/index.html"
 
-# ── 4b. Cache-Buster für ES-Module-Imports von auth.js bumpen ──
-# Browser cachen ES-Module aggressiv nach URL. Ohne diesen Bump bleibt nach
-# einem Deploy die alte auth.js im Cache hängen, neue Features greifen nicht.
-sed -i '' "s|auth\\.js?v=[^\"]*|auth.js?v=$NEW|g" "$RENEX/index.html"
-sed -i '' "s|auth\\.js?v=[^\"]*|auth.js?v=$NEW|g" "$RENEX/js/inbox.js"
+echo "Version aktualisiert: $NEW"
 
-echo "Version in index.html + version.json aktualisiert (inkl. auth.js-Cache-Buster)"
+# ── 4. Svelte Build ────────────────────────────────
+echo ""
+echo "▶ Building Svelte-Frontend (Vite)…"
+npm run build
 
-# ── 5. Deploy ──────────────────────────────────
-cd "$APP_DIR"
+if [ ! -d "$DIST" ]; then
+  echo "❌ Build-Output fehlt: $DIST"
+  exit 1
+fi
 
+# ── 5. Static Assets aus /renex-legacy nach dist kopieren ──
+# Svelte-Build erzeugt nur HTML/JS/CSS. Static Assets wie sw.js, icons,
+# manifest.json, _headers, _redirects bleiben aus dem Legacy-Verzeichnis.
+echo ""
+echo "▶ Static Assets aus /renex-legacy kopieren…"
+for f in sw.js manifest.json _headers _redirects version.json colors.css renex-logo.svg; do
+  [ -f "$LEGACY/$f" ] && cp "$LEGACY/$f" "$DIST/$f"
+done
+[ -d "$LEGACY/icons" ] && cp -r "$LEGACY/icons" "$DIST/icons"
+
+# Auch Static-Pages (impressum, datenschutz, agb, feedback, etc.) kopieren
+for d in impressum datenschutz agb feedback chat join terms privacy; do
+  [ -d "$LEGACY/$d" ] && cp -r "$LEGACY/$d" "$DIST/$d"
+done
+
+# version.json mit neuer Version
+python3 -c "
+import json
+path = '$DIST/version.json'
+d = json.load(open(path))
+d['version'] = '$NEW'
+open(path, 'w').write(json.dumps(d, indent=2) + '\n')
+"
+
+# ── 6. Deploy Backend ──────────────────────────────
 echo ""
 echo "▶ Deploying Backend-Worker (api.renex.id)…"
 npx wrangler deploy
 
+# ── 7. Deploy Frontend ─────────────────────────────
 echo ""
-echo "▶ Deploying Frontend (renex-static)…"
-npx wrangler pages deploy renex/ --project-name renex-static --commit-dirty=true
+echo "▶ Deploying Frontend Svelte (app.renex.id)…"
+npx wrangler pages deploy "$DIST" --project-name "$PAGES_PROJECT" --commit-dirty=true
 
 echo ""
-echo "✅ Deploy fertig! Version $NEW ist live (Backend + Frontend)."
-echo "   → Auf dem Smartphone erscheint der blaue Balken automatisch."
+echo "✅ Deploy fertig! Version $NEW ist live."
+echo "   → Frontend: https://app.renex.id (Svelte)"
+echo "   → Backend:  https://api.renex.id"
+echo "   → Vanilla-Archive: /renex-legacy/ (rollback siehe /renex-legacy/_DEPRECATED.md)"

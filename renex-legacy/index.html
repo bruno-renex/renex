@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#38bdf8" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="renex-version" content="2026-04-27-8" />
+  <meta name="renex-version" content="2026-04-27-9" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <script>
@@ -3003,7 +3003,7 @@
 // Ohne diesen Query-Param bleibt nach einem Deploy die alte auth.js im
 // Cache hängen → neue Features (z.B. "just_registered_handle"-Marker)
 // greifen nicht. Bei jeder relevanten Änderung in auth.js den v-Wert bumpen.
-import { loginWithPasskey } from "./js/auth.js?v=2026-04-27-8";
+import { loginWithPasskey } from "./js/auth.js?v=2026-04-27-9";
 import { apiFetch }         from "./js/api.js";
 import { bootApp }          from "./js/appBoot.js";
 import lang, { applyI18n, getLang, setLang } from "./js/i18n.js";

@@ -7,7 +7,8 @@
 // ======================================================
 import { describe, it, expect } from 'vitest';
 
-// Direkter Import der Pure-Functions
+// Direkter Import der Pure-Functions (aus archiviertem Vanilla — Phase 1B
+// migriert dies in frontend/src/lib/crypto.js)
 import {
   abToB64,
   b64ToAb,
@@ -17,7 +18,7 @@ import {
   exportKeyB64,
   importKeyB64,
   e2eEncryptBytes,
-} from '../renex/js/chatCrypto.js';
+} from '../renex-legacy/js/chatCrypto.js';
 
 // ── Test 1: Base64 Round-Trip ─────────────────────────────────
 // Wenn dieser Test fehlt → keine Encryption funktioniert (alle Payloads kaputt).

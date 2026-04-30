@@ -23,18 +23,27 @@ const API = "https://api.renex.id";
 export async function apiFetch(path, options = {}) {
   const { method = "GET", body, headers = {}, signal } = options;
 
+  // Binary bodies (Uint8Array, ArrayBuffer, Blob) durchreichen ohne JSON-Stringify
+  const isBinaryBody = body instanceof Uint8Array
+                    || body instanceof ArrayBuffer
+                    || (typeof Blob !== "undefined" && body instanceof Blob);
+
   const init = {
     method,
     credentials: "include",
     headers: {
-      ...(body && method !== "GET" ? { "Content-Type": "application/json" } : {}),
+      ...(body && method !== "GET" && !isBinaryBody ? { "Content-Type": "application/json" } : {}),
       ...headers,
     },
     signal,
   };
 
   if (body !== undefined && method !== "GET") {
-    init.body = typeof body === "string" ? body : JSON.stringify(body);
+    if (isBinaryBody) {
+      init.body = body;
+    } else {
+      init.body = typeof body === "string" ? body : JSON.stringify(body);
+    }
   }
 
   let res;

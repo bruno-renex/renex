@@ -237,6 +237,10 @@ Jedes Device entschlüsselt nur seinen eigenen Payload
 - Master-Key verschlüsselt alle CMKs in R2-Bucket
 - Auf neuem Gerät: Phrase eingeben → alle Konversationen wiederherstellbar
 
+> **📐 Detail-Spec:** Vollständige Spec inkl. Sequence-Diagrams, State-Machine,
+> API-Surface, Edge-Cases siehe [`MULTI_DEVICE.md`](./MULTI_DEVICE.md).
+> Bei Widerspruch zwischen diesem Dokument und MULTI_DEVICE.md gewinnt MULTI_DEVICE.md.
+
 ---
 
 ## 7. Technologie-Stack
@@ -578,6 +582,11 @@ Wenn eine strategische Entscheidung geändert wird, hier dokumentieren:
 | 2026-04-27 | Pro-Features | — | **Nur Grundfunktionen gratis**, Pro-Features paywalled | Standard-Freemium für Sustainability |
 | 2026-04-27 | AI-Klage-Schutz | — | **AGB-Klausel "Best Effort, keine Garantie"** | Rechtssicherheit ohne Substanz-Verlust |
 | 2026-04-27 | Beta-Launch-Datum | Oktober 2026 | **Oktober/November 2026** (Option B) | Svelte-Migration verzögert leicht, Signal Protocol verschoben hält Termin |
+| 2026-04-28 | Multi-Device-Limit | "5 Devices" pauschal | **5 Free / 10 Pro** | Pro-Tier braucht Verkaufsargumente; 5 reicht für 95% der User. Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §6 |
+| 2026-04-28 | Revoke-Pfade | Code rotierte immer | **`revoked_by`-Feld trennt User/Self/Auto** — Rotation nur bei `user` | Cron-Storm vermeiden (1000× CMK-Rotation täglich), Forward Secrecy nur bei echtem Security-Event. Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §3.2 |
+| 2026-04-28 | Recovery-Cutoff | unspezifiziert | **7 Tage Recent-CMK-Share** beim Add-Device | iMessage-Standard, Privacy-Brand-konform. Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §4.4.3 |
+| 2026-04-28 | Device-State-Storage | nur KV-Index | **D1-Tabelle `devices` + KV als Hot-Cache** | Send-Path bleibt schnell (KV), Cron+Settings-UI sauber (D1). Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §2 |
+| 2026-04-28 | Add-Device-Bestätigung | unspezifiziert | **Cross-Device-Passkey IST die Bestätigung**, Toast nur als Notbremse | Passkey ist Trust-Anchor; zusätzlicher Confirm wäre UX-Friktion. Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §4.1 |
 
 ---
 

@@ -19,6 +19,7 @@
   import { sessionStore } from '../stores/session.svelte.js';
   import DisplayNameModal from './DisplayNameModal.svelte';
   import PasskeysModal from './PasskeysModal.svelte';
+  import SettingsDevicesPanel from './SettingsDevicesPanel.svelte';
   import DebugOverlay from './DebugOverlay.svelte';
 
   let lang = $derived(i18nStore.lang);
@@ -26,6 +27,7 @@
   // Modal-States (lifted up — die Modals selbst werden hier gerendert)
   let showDisplayNameModal = $state(false);
   let showPasskeysModal = $state(false);
+  let showDevicesModal = $state(false);
   let showDebugOverlay = $state(false);
   let myUser = $derived(userStore.myUser);
   let displayName = $derived(userStore.displayName);
@@ -168,6 +170,15 @@
         {lang.passkeysLabel || "Passkeys"}
       </button>
 
+      <!-- Devices (Multi-Device Management) -->
+      <button
+        type="button"
+        class="dropdown-item"
+        onclick={() => { showDevicesModal = true; close(); }}
+      >
+        {lang.devicesLabel || "Geräte"}
+      </button>
+
       <!-- Debug / Diagnose -->
       <button
         type="button"
@@ -257,6 +268,7 @@
      nicht das Modal schließt) -->
 <DisplayNameModal bind:isOpen={showDisplayNameModal} />
 <PasskeysModal bind:isOpen={showPasskeysModal} />
+<SettingsDevicesPanel bind:isOpen={showDevicesModal} />
 <DebugOverlay bind:isOpen={showDebugOverlay} />
 
 <style>

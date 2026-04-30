@@ -9,6 +9,10 @@
   import { loginWithPasskey, validateHandle } from '../lib/passkey.js';
   import { captureException } from '../lib/sentry.js';
 
+  // Recovery-Login wird im Parent (App.svelte) gerendert, damit das Modal
+  // nach Passkey-Auth nicht unmountet (LoginModal selbst verschwindet sobald myUser gesetzt).
+  let { onRecoveryClick = () => {} } = $props();
+
   // Reactive: lang aus Store ableiten
   let lang = $derived(i18nStore.lang);
 
@@ -135,6 +139,19 @@
       {/if}
     </form>
 
+    <!-- Recovery-Link: nur wenn User existing-Account hat aber alle Devices weg -->
+    <div class="recovery-row">
+      <span class="recovery-divider"></span>
+      <button
+        type="button"
+        class="recovery-link"
+        onclick={onRecoveryClick}
+        disabled={isSubmitting}
+      >
+        🆘 {lang.recoveryLoginLink || 'Alle Geräte verloren? Recovery via Phrase'}
+      </button>
+    </div>
+
     <div class="lang-row">
       {#each i18nStore.supported as code}
         <button
@@ -150,6 +167,7 @@
     </div>
   </div>
 </div>
+
 
 <style>
   .login-modal {
@@ -314,6 +332,41 @@
   .status-info    { color: var(--text-muted); }
   .status-success { color: var(--status-success); }
   .status-error   { color: var(--status-error); }
+
+  .recovery-row {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .recovery-divider {
+    width: 60%;
+    height: 1px;
+    background: var(--border-subtle);
+  }
+
+  .recovery-link {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: color 0.15s;
+  }
+
+  .recovery-link:hover:not(:disabled) {
+    color: var(--text-secondary);
+  }
+
+  .recovery-link:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
 
   .lang-row {
     display: flex;

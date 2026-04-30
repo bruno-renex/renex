@@ -1,6 +1,7 @@
 import { json, corsHeaders } from './src/utils.js';
 import { handleWsRoutes } from './src/routes/wsRoutes.js';
 import { handleE2eRoutes } from './src/routes/e2eRoutes.js';
+import { handleRecoveryRoutes } from './src/routes/recoveryRoutes.js';
 import { handleChatRoutes } from './src/routes/chatRoutes.js';
 import { handleAuthRoutes } from './src/routes/authRoutes.js';
 import { handleContactRoutes } from './src/routes/contactRoutes.js';
@@ -15,6 +16,7 @@ import { handlePushRoutes } from './src/routes/pushRoutes.js';
 import { handleFeedbackRoutes } from './src/routes/feedbackRoutes.js';
 import { handleVoiceRoutes } from './src/routes/voiceRoutes.js';
 import { scheduled } from './src/cron.js';
+import { runBackfillDevices } from './src/scripts/backfillDevices.js';
 import { Toucan } from 'toucan-js';
 
 // Cloudflare Durable Object binding requirement — must be re-exported from entry point
@@ -73,6 +75,9 @@ async function fetch(request, env, ctx) {
     if (path === '/chat/ws' || path === '/chat/control' || path === '/chat/test') {
       return await handleWsRoutes(request, env, path, params);
     }
+    if (path.startsWith('/e2e/recovery/')) {
+      return await handleRecoveryRoutes(request, env, path, params);
+    }
     if (path.startsWith('/chat/keys/') || path.startsWith('/e2e/')) {
       return await handleE2eRoutes(request, env, path, params);
     }
@@ -109,6 +114,20 @@ async function fetch(request, env, ctx) {
     // Sentry-Config (publik — DSN ist Public-Token, kein Secret)
     if (path === '/sentry-config') {
       return json(request, { dsn: env.SENTRY_DSN_FRONTEND || null });
+    }
+    // Admin: One-shot Backfill (Spec: docs/MULTI_DEVICE.md §7.1)
+    // Gated durch env.ADMIN_TOKEN. Idempotent — kann mehrfach ausgeführt werden.
+    if (path === '/admin/backfill-devices') {
+      if (request.method !== 'POST') {
+        return json(request, { error: 'POST required' }, 405);
+      }
+      const auth = request.headers.get('authorization') || '';
+      const token = auth.replace(/^bearer\s+/i, '');
+      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+        return json(request, { error: 'Unauthorized' }, 401);
+      }
+      const stats = await runBackfillDevices(env);
+      return json(request, { ok: true, stats });
     }
     return json(request, { error: 'Not found' }, 404);
 

@@ -1,3 +1,5 @@
+import { pushToUserDO } from './auth.js';
+
 // ======================================================
 // CRON: Automatische Nachrichten-Löschung (täglich 03:00 UTC)
 // ======================================================
@@ -112,5 +114,92 @@ export async function scheduled(event, env) {
     }
   } catch (e) {
     console.error("❌ Guest-Cleanup Cron fehlgeschlagen:", e);
+  }
+
+  // ======================================================
+  // Multi-Device Cron-Sweeps (Phase 1B.1)
+  // Spec: docs/MULTI_DEVICE.md §3, §6, §7.4 (Δ6)
+  // ======================================================
+
+  // ── Stuck-Syncing-Cleanup (24h) ──────────────────────
+  // Devices, die >24h in 'new' oder 'syncing' hängen → 'revoked' (auto).
+  try {
+    const cutoff = Date.now() - 86400_000;
+    const result = await env.RENEX_DB.prepare(`
+      UPDATE devices
+      SET state = 'revoked', revoked_at = ?, revoked_by = 'auto'
+      WHERE state IN ('new','syncing') AND created_at < ?
+    `).bind(Date.now(), cutoff).run();
+    const changes = result.meta?.changes ?? 0;
+    if (changes > 0) {
+      console.log(`🧹 Stuck-Syncing-Cleanup: ${changes} Devices`);
+    }
+  } catch (e) {
+    console.error("❌ Stuck-Syncing-Cleanup fehlgeschlagen:", e);
+  }
+
+  // ── Auto-Revoke (30d Inaktivität) ────────────────────
+  // KEINE CMK-Rotation (revoked_by='auto'). Nur eigene Devices benachrichtigen.
+  try {
+    const cutoff = Date.now() - 30 * 86400_000;
+    const stale = await env.RENEX_DB.prepare(`
+      SELECT device_id, user_handle FROM devices
+      WHERE state = 'active' AND last_seen_at < ?
+    `).bind(cutoff).all();
+
+    const staleRows = stale.results || [];
+    for (const row of staleRows) {
+      try {
+        await env.RENEX_DB.prepare(`
+          UPDATE devices SET state = 'revoked', revoked_at = ?, revoked_by = 'auto'
+          WHERE device_id = ?
+        `).bind(Date.now(), row.device_id).run();
+
+        await env.RENEX_KV.delete(`e2e:inbox:${row.user_handle}:${row.device_id}`);
+        await env.RENEX_KV.delete(`e2e:inbox:sigpub:${row.user_handle}:${row.device_id}`);
+
+        // KV-Index aus D1 neu ableiten
+        const remaining = await env.RENEX_DB.prepare(
+          "SELECT device_id FROM devices WHERE user_handle = ? AND state IN ('active','syncing') ORDER BY created_at"
+        ).bind(row.user_handle).all();
+        await env.RENEX_KV.put(
+          `e2e:inbox:index:${row.user_handle}`,
+          JSON.stringify((remaining.results || []).map(r => r.device_id))
+        );
+
+        // Self-DO-Push (NUR self — keine Authority-Pushes, keine Rotation)
+        await pushToUserDO(env, row.user_handle, {
+          id: crypto.randomUUID(),
+          type: "device_removed",
+          from: row.user_handle,
+          to: row.user_handle,
+          deviceId: row.device_id,
+          reason: "auto",
+          ts: Date.now()
+        }).catch(() => {});
+      } catch (e) {
+        console.warn(`Auto-Revoke einzelnes Device fehlgeschlagen (${row.device_id}):`, e.message);
+      }
+    }
+    if (staleRows.length > 0) {
+      console.log(`🧹 Auto-Revoke: ${staleRows.length} inaktive Devices entfernt (>30d)`);
+    }
+  } catch (e) {
+    console.error("❌ Auto-Revoke Cron fehlgeschlagen:", e);
+  }
+
+  // ── Revoked-Row-Retention (90d) ──────────────────────
+  // Audit-Forensik: revoked Rows nach 90 Tagen endgültig löschen.
+  try {
+    const cutoff = Date.now() - 90 * 86400_000;
+    const result = await env.RENEX_DB.prepare(
+      "DELETE FROM devices WHERE state = 'revoked' AND revoked_at < ?"
+    ).bind(cutoff).run();
+    const changes = result.meta?.changes ?? 0;
+    if (changes > 0) {
+      console.log(`🧹 Revoked-Retention: ${changes} alte Device-Rows gelöscht (>90d)`);
+    }
+  } catch (e) {
+    console.error("❌ Revoked-Retention fehlgeschlagen:", e);
   }
 }

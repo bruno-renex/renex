@@ -264,25 +264,55 @@ export async function handleAuthRoutes(request, env, path, params) {
           }
           existing.push(newCred);
           await writeCredentials(env, handle, existing);
-        } else {
-          // Neue Registrierung: Terms-Version validieren
-          const ACCEPTED_TERMS_VERSIONS = ["2026-04-15"];
-          const termsVersion = typeof body.termsVersion === "string" ? body.termsVersion : null;
-          if (!termsVersion || !ACCEPTED_TERMS_VERSIONS.includes(termsVersion)) {
-            return json(request, { error: "Terms acceptance required" }, 400);
-          }
-
-          // Array mit erstem Credential erstellen
-          await writeCredentials(env, handle, [newCred]);
-
-          // Terms-Zustimmung in KV speichern (Nachweis für DSG/DSGVO)
-          await env.RENEX_KV.put(
-            `user:terms:${handle}`,
-            JSON.stringify({ acceptedAt: Date.now(), version: termsVersion })
-          );
+          return json(request, { status: "ok" });
         }
 
-        return json(request, { status: "ok" });
+        // Neue Registrierung: Terms-Version validieren
+        const ACCEPTED_TERMS_VERSIONS = ["2026-04-15"];
+        const termsVersion = typeof body.termsVersion === "string" ? body.termsVersion : null;
+        if (!termsVersion || !ACCEPTED_TERMS_VERSIONS.includes(termsVersion)) {
+          return json(request, { error: "Terms acceptance required" }, 400);
+        }
+
+        // Array mit erstem Credential erstellen
+        await writeCredentials(env, handle, [newCred]);
+
+        // Terms-Zustimmung in KV speichern (Nachweis für DSG/DSGVO)
+        await env.RENEX_KV.put(
+          `user:terms:${handle}`,
+          JSON.stringify({ acceptedAt: Date.now(), version: termsVersion })
+        );
+
+        // Auto-Login: nach erfolgreicher Registrierung sofort Session erzeugen
+        // (sonst muss User explizit nochmal einloggen — Svelte kann das nicht
+        // wie Vanilla via window.location.replace umgehen).
+        // Same Cookie-Format wie login/finish.
+        const sessionToken = "sess_" + crypto.randomUUID();
+        const ua = request.headers.get("user-agent") || "";
+        const uaHash = ua ? await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ua)).then(h => base64url(new Uint8Array(h))) : null;
+        await env.RENEX_KV.put(
+          `session:${sessionToken}`,
+          JSON.stringify({
+            handle,
+            createdAt: Date.now(),
+            ua: uaHash,
+          }),
+          { expirationTtl: 86_400 }
+        );
+        await registerSessionToken(env, handle, sessionToken);
+
+        const sessionCookie = `session=${sessionToken}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=86400`;
+        return new Response(
+          JSON.stringify({ status: "ok", authenticated: true }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "Set-Cookie": sessionCookie,
+              ...corsHeaders(request),
+            },
+          }
+        );
       }
       break;
     }
@@ -558,6 +588,13 @@ export async function handleAuthRoutes(request, env, path, params) {
 
         // 6c. Profil (Display Name) löschen
         await env.RENEX_KV.delete(`profile:${handle}`);
+
+        // 6d. Recovery-Bundle + Salt + Meta löschen (Spec: docs/RECOVERY.md §10.3)
+        await env.RENEX_KV.delete(`user:recovery:${handle}`);
+        if (env.RENEX_FILES) {
+          await env.RENEX_FILES.delete(`recovery/${handle}.salt`).catch(() => {});
+          await env.RENEX_FILES.delete(`recovery/${handle}.bin`).catch(() => {});
+        }
 
         // 7. Handle für 300 Tage sperren
         await env.RENEX_KV.put(

@@ -1,15 +1,26 @@
 // =========================
-// CORS
+// CORS / Origin-Allowlist
 // =========================
+// Single Source of Truth für Allowed-Origins.
+// - app.renex.id          → Production Vanilla
+// - renex-static.pages.dev → Pages-Project alt (Vanilla)
+// - renex-svelte.pages.dev → Pages-Project Svelte (Phase 1A.6 Migration)
+// - <hash>.renex-svelte.pages.dev → per-Deploy Preview-URLs (Cloudflare Pages)
+// - localhost:*           → lokale Entwicklung
+const PAGES_DEPLOY_RE = /^https:\/\/[a-z0-9-]+\.renex-svelte\.pages\.dev$/;
+
+function isAllowedOrigin(origin) {
+  if (!origin) return false;
+  if (origin === "https://app.renex.id") return true;
+  if (origin === "https://renex-static.pages.dev") return true;
+  if (origin === "https://renex-svelte.pages.dev") return true;
+  if (origin.startsWith("http://localhost:")) return true;
+  if (PAGES_DEPLOY_RE.test(origin)) return true;
+  return false;
+}
+
 export function corsHeaders(request) {
   const origin = request.headers.get("Origin");
-
-  const allowedOrigins = [
-    "https://app.renex.id",
-    "https://renex-static.pages.dev",
-  ];
-  // Lokale Entwicklung: localhost auf beliebigem Port erlauben
-  if (origin?.startsWith("http://localhost:")) allowedOrigins.push(origin);
 
   const headers = {
     "Access-Control-Allow-Methods": "GET, POST, DELETE, PATCH, OPTIONS",
@@ -20,7 +31,7 @@ export function corsHeaders(request) {
   };
 
   // Nur explizit erlaubte Origins → kein Fallback auf fixen Wert
-  if (origin && allowedOrigins.includes(origin)) {
+  if (isAllowedOrigin(origin)) {
     headers["Access-Control-Allow-Origin"] = origin;
   }
   // Kein ACAO-Header für unbekannte Origins → Browser blockt, Server verrät nichts
@@ -38,14 +49,7 @@ export function checkCsrf(request) {
   if (method === "GET" || method === "OPTIONS" || method === "HEAD") return null;
 
   const origin = request.headers.get("Origin");
-  const allowedOrigins = [
-    "https://app.renex.id",
-    "https://renex-static.pages.dev",
-  ];
-  // Lokale Entwicklung: localhost auf beliebigem Port erlauben
-  if (origin?.startsWith("http://localhost:")) allowedOrigins.push(origin);
-
-  if (!origin || !allowedOrigins.includes(origin)) {
+  if (!isAllowedOrigin(origin)) {
     return new Response(JSON.stringify({ error: "CSRF check failed" }), {
       status: 403,
       headers: { "Content-Type": "application/json" }

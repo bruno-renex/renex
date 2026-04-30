@@ -20,7 +20,10 @@ set -e
 
 APP_DIR="/Users/brunohochstrasser/Library/Mobile Documents/com~apple~CloudDocs/16.03. renex Kopie/app.renex"
 DIST="$APP_DIR/frontend/dist"
-PAGES_PROJECT="renex-svelte"  # NEU — separates Pages-Project, kein Konflikt mit "renex-static"
+# `renex-static` ist das Pages-Project mit Custom-Domain `app.renex.id` (= production).
+# `renex-svelte` ist nur Test-URL ohne Custom-Domain — kann via DEPLOY_TARGET=svelte
+# überschrieben werden für Staging-Tests.
+PAGES_PROJECT="${DEPLOY_TARGET:-renex-static}"
 
 cd "$APP_DIR"
 
@@ -29,7 +32,7 @@ echo "▶ Running tests…"
 npm test || { echo "❌ Tests failed — Deploy abgebrochen"; exit 1; }
 
 # ── 2. Version berechnen (gleiche Logik wie deploy.sh) ────
-RENEX="$APP_DIR/renex"
+RENEX="$APP_DIR/renex-legacy"
 CURRENT=$(python3 -c "
 import json
 d = json.load(open('$RENEX/version.json'))
@@ -103,5 +106,9 @@ npx wrangler pages deploy "$DIST" --project-name "$PAGES_PROJECT" --commit-dirty
 
 echo ""
 echo "✅ Svelte-Deploy fertig! Version $NEW ist live."
-echo "   → Test-URL: https://$PAGES_PROJECT.pages.dev"
-echo "   → Vanilla bleibt unter https://app.renex.id (unverändert)"
+if [ "$PAGES_PROJECT" = "renex-static" ]; then
+  echo "   → Production: https://app.renex.id"
+else
+  echo "   → Staging: https://$PAGES_PROJECT.pages.dev"
+  echo "   (Production app.renex.id NICHT betroffen — DEPLOY_TARGET=$PAGES_PROJECT)"
+fi

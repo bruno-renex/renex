@@ -198,6 +198,15 @@ export async function handleContactRoutes(request, env, path, params) {
           ).bind(now, me, targetHandle).run();
         }
 
+        // Empfänger live benachrichtigen → Badge + Liste sofort aktualisieren
+        // (ohne diesen Push sieht der Empfänger die Anfrage erst beim nächsten Reload)
+        await pushToUserDO(env, targetHandle, {
+          id:   crypto.randomUUID(),
+          type: "contact_request",
+          from: me,
+          ts:   now,
+        }).catch(() => {});
+
         await bumpContactsVersion(env, me, targetHandle);
         return json(request, { status: "requested", contact });
       }

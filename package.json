@@ -12,11 +12,13 @@
   },
   "dependencies": {
     "@block65/webcrypto-web-push": "^1.0.2",
+    "@scure/bip39": "^2.2.0",
     "toucan-js": "^4.1.1"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^4.0.4",
     "@vitest/ui": "^1.6.0",
+    "fake-indexeddb": "^6.2.5",
     "svelte": "^5.55.5",
     "vite": "^5.4.21",
     "vitest": "^1.6.0"

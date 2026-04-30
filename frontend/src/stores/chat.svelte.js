@@ -13,6 +13,16 @@
 import { apiFetch } from '../lib/api.js';
 import { userStore } from './user.svelte.js';
 import { captureException } from '../lib/sentry.js';
+import {
+  decryptIncomingMessage, sendEncryptedDm,
+  ensureSecureDmSession, clearChatPipelineCaches,
+  sendCmkRequest,
+} from '../lib/chatPipeline.js';
+import { getCMKIfExists } from '../lib/cmk.js';
+import {
+  isPendingCmkReq, markPendingCmkReq, clearPendingCmkReq,
+  isCmkUnavailable, markCmkUnavailable, clearCmkUnavailable, clearAllCmkState,
+} from '../lib/cmkRequestState.js';
 
 let _selectedChat = $state(null); // { type, key, name, peer? }
 let _messages = $state([]);       // Array of { id, from, ts, text, status, isMe, ... }
@@ -44,16 +54,25 @@ export const chatStore = {
 
     if (!chat) return;
 
-    // Load messages from API
-    // Phase 1A.6.5: real fetch, NO E2E-decrypt yet (Phase 1B)
-    // Encrypted messages (e2e=true) zeigen Placeholder bis Phase 1B.
+    // KEIN Pre-Fetch mehr: das hat eine Race-Condition geschaffen, in der BEIDE
+    // Seiten beim Chat-Öffnen gleichzeitig eigene CMKs erzeugten. Stattdessen:
+    // ensureSecureDmSession passiert nur beim ersten Send (in sendEncryptedDm),
+    // und decryptIncomingMessage holt CMKs lazy aus KV bei Bedarf.
+    const myHandle = userStore.myUser;
+
+    // Load messages from API + decrypt e2e messages async
     _isLoading = true;
     try {
       const peerOrConvo = chat.type === "dm" ? (chat.peer || chat.key) : chat.key;
       const r = await apiFetch(`/chat/list?with=${encodeURIComponent(peerOrConvo)}`);
       if (r.ok && Array.isArray(r.data?.messages)) {
-        const myHandle = userStore.myUser;
-        _messages = r.data.messages.map(m => _normalizeMessage(m, myHandle));
+        // Sofort mit Placeholdern rendern, dann async decrypten
+        const initial = r.data.messages.map(m => _normalizeMessage(m, myHandle));
+        _messages = initial;
+
+        if (chat.type === "dm" && chat.peer) {
+          void _decryptAllE2E(chat.peer, myHandle);
+        }
       } else {
         _messages = [];
       }
@@ -71,8 +90,8 @@ export const chatStore = {
 
   /**
    * Real send via /chat/send API.
-   * Phase 1A.6.5: Plaintext send (no E2E yet).
-   * Phase 1B: E2E-Encrypt + multi-device payloads.
+   * DM: E2E-Encrypt via lib/chatPipeline.js (CMK + Session + Sig).
+   * Group: Plaintext (Group-E2E folgt in Phase 1C).
    */
   async sendMessage(text) {
     if (!_selectedChat || !text.trim()) return;
@@ -81,7 +100,7 @@ export const chatStore = {
     const trimmed = text.trim();
     const tempId = crypto.randomUUID();
 
-    // Optimistic UI: Message sofort anzeigen mit "sending"-Status
+    // Optimistic UI
     const optimisticMsg = {
       id: tempId,
       from: myHandle,
@@ -95,22 +114,33 @@ export const chatStore = {
     _draftText = "";
     _drafts.delete(_selectedChat.key);
 
-    // Real send via API
     const isGroup = _selectedChat.type === "group";
-    const payload = isGroup
-      ? { to: myHandle, convoId: _selectedChat.key, message: trimmed }
-      : { to: _selectedChat.peer || _selectedChat.key, message: trimmed };
+    const peer = _selectedChat.peer || _selectedChat.key;
 
     try {
-      const r = await apiFetch("/chat/send", {
-        method: "POST",
-        body: payload,
-      });
+      let r;
+      if (!isGroup) {
+        // DM → E2E-encrypted send
+        const result = await sendEncryptedDm(myHandle, peer, trimmed);
+        r = result.ok
+          ? { ok: true, data: { message: result.message } }
+          : { ok: false, error: result.error };
+      } else {
+        // Group → Plaintext für jetzt (Group-E2E = Phase 1C)
+        r = await apiFetch("/chat/send", {
+          method: "POST",
+          body: { to: myHandle, convoId: _selectedChat.key, message: trimmed },
+        });
+      }
 
       if (r.ok && r.data?.message) {
-        // Replace optimistic msg with server-confirmed
         const serverMsg = _normalizeMessage(r.data.message, myHandle);
-        _messages = _messages.map(m => m.id === tempId ? { ...serverMsg, status: "sent" } : m);
+        // Optimistic-Replace: Klartext lokal behalten (eigene Message muss nicht neu decryptet werden)
+        _messages = _messages.map(m =>
+          m.id === tempId
+            ? { ...serverMsg, text: trimmed, status: "sent" }
+            : m
+        );
       } else {
         _messages = _messages.map(m =>
           m.id === tempId ? { ...m, status: "failed" } : m
@@ -132,18 +162,38 @@ export const chatStore = {
     const myHandle = userStore.myUser;
     const msg = _normalizeMessage(rawMsg, myHandle);
 
-    // Echo-Schutz: eigene Messages nicht doppelt einfügen (kommen via /chat/send Response)
-    if (msg.isMe && _messages.some(m => m.id === msg.id)) return;
+    // Self-Push-Filter: Backend pusht eigene DM-Messages auch an alle eigenen Devices
+    // (Multi-Device-Self-Sync). Aktuelles Sender-Tab erkennt sich am deviceId und skipt
+    // — das Optimistic-Replace-Flow behandelt die Message bereits via /chat/send-Response.
+    // Andere Tabs/Devices nehmen die Message via diesen Pfad auf.
+    if (msg.isMe) {
+      const myDeviceId = (typeof localStorage !== 'undefined' ? localStorage.getItem('device_id') : null) || null;
+      const senderDeviceId = rawMsg.deviceId || rawMsg.device_id;
+      if (myDeviceId && senderDeviceId && senderDeviceId === myDeviceId) {
+        return;  // eigene Send-Echo — bereits im UI via Optimistic+Response
+      }
+    }
+
+    // Dedup: keine Message ID darf 2× in der Liste sein.
+    if (msg.id && _messages.some(m => m.id === msg.id)) return;
 
     if (!_selectedChat) return;
 
-    // Match-Check: gehört Message zum aktuellen Chat?
     const isForCurrentChat =
       (_selectedChat.type === "dm"   && (msg.from === _selectedChat.peer || msg.to === _selectedChat.peer)) ||
       (_selectedChat.type === "group" && rawMsg.groupId === _selectedChat.key);
 
-    if (isForCurrentChat) {
-      _messages = [..._messages, msg];
+    if (!isForCurrentChat) return;
+
+    _messages = [..._messages, msg];
+
+    // Async-Decrypt für ALLE e2e DM-Messages.
+    // WICHTIG: NICHT nur Peer-Messages — bei Multi-Device kommen eigene Messages
+    // von ANDEREN eigenen Devices via WS. Die brauchen auch Decrypt (kein Optimistic-
+    // Replace, da nicht in DIESEM Tab gesendet). Same-Device-Echo ist bereits
+    // weiter oben via senderDeviceId-Filter ausgeschlossen.
+    if (msg.e2e && _selectedChat.type === "dm" && _selectedChat.peer) {
+      void _decryptOne(rawMsg, myHandle, _selectedChat.peer);
     }
   },
 
@@ -152,18 +202,161 @@ export const chatStore = {
     _messages = [];
     _draftText = "";
     _drafts.clear();
+    clearAllCmkState();
+    clearChatPipelineCaches();
+  },
+
+  /**
+   * Wird vom WS-Listener gerufen wenn der Peer ein `cmk_unavailable` schickt:
+   * Beide Seiten haben Storage verloren → CMK ist permanent verloren.
+   * Wir markieren alle 🔐-Messages als „nicht entschlüsselbar" und stoppen Retries.
+   */
+  markCmkUnavailable(peerHandle) {
+    if (!peerHandle) return;
+    markCmkUnavailable(peerHandle);
+    if (_selectedChat?.type === 'dm' && _selectedChat?.peer === peerHandle) {
+      _messages = _messages.map(m =>
+        (m.e2e && m.text === '🔐 …')
+          ? { ...m, text: '🔓✗ Nicht entschlüsselbar (Schlüssel verloren)', _unrecoverable: true }
+          : m
+      );
+    }
+  },
+
+  /**
+   * Test-Helper: ist Peer als „CMK unavailable" markiert?
+   */
+  isCmkUnavailable(peerHandle) {
+    return isCmkUnavailable(peerHandle);
   },
 };
+
+// ── E2E-Decrypt-Helpers (Phase 1A.6.x.2) ──────────────
+
+// Exponential Backoff für Decrypt-Failures.
+// 3s → 8s → 25s → 60s = total ~96s, dann aufgeben.
+// Wenn ein cmk_req pending ist → Retries pausiert bis Antwort/Timeout.
+// Wenn cmk_unavailable empfangen → komplett aufgeben.
+const DECRYPT_RETRY_DELAYS_MS = [3000, 8000, 25000, 60000];
+
+async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
+  try {
+    // Hard-Stop: Peer hat cmk_unavailable gesendet → nie wieder versuchen.
+    if (isCmkUnavailable(peerHandle)) {
+      _patchMessage(rawMsg.id, {
+        text: '🔓✗ Nicht entschlüsselbar (Schlüssel verloren)',
+        _unrecoverable: true,
+      });
+      return;
+    }
+
+    const { text, verified } = await decryptIncomingMessage(rawMsg, myHandle, peerHandle);
+    if (text != null) {
+      console.log(`🔓 decrypt OK id=${rawMsg.id?.slice(0,8)} from=${rawMsg.from}`);
+      _patchMessage(rawMsg.id, { text, verified });
+      // Ein erfolgreicher Decrypt heißt: CMK ist da → pending-Flag + ggf. fälschlich
+      // gesetztes unavailable-Flag clearen (z.B. nach Bundle-Restore mitten im Flow).
+      clearPendingCmkReq(peerHandle);
+      clearCmkUnavailable(peerHandle);
+      return;
+    }
+    console.warn(`🔒 decrypt FAIL id=${rawMsg.id?.slice(0,8)} from=${rawMsg.from} attempt=${attempt} sid=${rawMsg.sid} epoch=${rawMsg.epoch} ivLen=${(rawMsg.ivB64 || rawMsg.iv_b64 || "").length}`);
+
+    if (attempt >= DECRYPT_RETRY_DELAYS_MS.length) return;  // aufgeben
+
+    // Wenn cmk_req pending: Retry verzögern bis Antwort kommt (Pause-on-pending).
+    // Sonst: Backoff-Delay verwenden.
+    const baseDelay = DECRYPT_RETRY_DELAYS_MS[attempt];
+    const delay = isPendingCmkReq(peerHandle)
+      ? Math.max(baseDelay, 5000)   // mindestens 5s wenn wir auf cmk_response warten
+      : baseDelay;
+
+    setTimeout(() => {
+      // Nochmal prüfen ob CMK inzwischen unrecoverable
+      if (isCmkUnavailable(peerHandle)) return;
+      const stillThere = _messages.find(m => m.id === rawMsg.id);
+      if (stillThere && stillThere.text === "🔐 …") {
+        void _decryptOne(rawMsg, myHandle, peerHandle, attempt + 1);
+      }
+    }, delay);
+  } catch (e) {
+    console.error("🔒 decrypt EXCEPTION", e);
+    captureException(e, { context: "decryptOne" });
+  }
+}
+
+async function _decryptAllE2E(peerHandle, myHandle) {
+  // Snapshot — patches by id, so Liste-Mutation ok während Decrypt.
+  // WICHTIG: Backend /chat/list returnt camelCase (ivB64, ctB64), NICHT snake_case.
+  // Eigene Messages (isMe) MÜSSEN auch decrypted werden — auf Reload haben sie
+  // keine optimistic-Plaintext mehr, nur Ciphertext aus DB. CMK ist symmetrisch.
+  const snapshot = _messages.filter(m =>
+    m.e2e &&
+    m.text === "🔐 …" &&
+    (m._raw?.ivB64 || m._raw?.iv_b64)
+  );
+  console.log(`🔓 _decryptAllE2E: peer=${peerHandle} totalMsgs=${_messages.length} toDecrypt=${snapshot.length}`);
+
+  // Wenn Peer als unrecoverable bekannt → alle Messages direkt patchen, kein Decrypt-Versuch.
+  if (isCmkUnavailable(peerHandle)) {
+    for (const m of snapshot) {
+      _patchMessage(m.id, {
+        text: '🔓✗ Nicht entschlüsselbar (Schlüssel verloren)',
+        _unrecoverable: true,
+      });
+    }
+    return;
+  }
+
+  for (const m of snapshot) {
+    const raw = m._raw || m;
+    void _decryptOne(raw, myHandle, peerHandle);
+  }
+
+  // Proactive CMK-Acquisition: wenn beim Chat-Öffnen lokal keine CMK existiert,
+  // ABER e2e-Messages zu decrypten sind, sofort einen cmk_req triggern.
+  // Sonst würde der Decrypt-Retry-Loop bis zu 36s warten (3s+8s+25s) bevor was passiert.
+  // Dedup: markPendingCmkReq verhindert doppelte Sends.
+  if (snapshot.length > 0) {
+    void _kickCmkAcquisitionIfNeeded(peerHandle);
+  }
+}
+
+async function _kickCmkAcquisitionIfNeeded(peerHandle) {
+  // Kurzer Delay damit erste Decrypt-Attempts (lokale CMK + KV-Single-Flight)
+  // eine Chance haben — falls die CMK schon da ist, kein cmk_req nötig.
+  await new Promise(r => setTimeout(r, 1500));
+
+  // Inzwischen alles decrypted? Dann skip.
+  const stillLocked = _messages.some(m => m.e2e && m.text === "🔐 …");
+  if (!stillLocked) return;
+  if (isCmkUnavailable(peerHandle)) return;
+  if (isPendingCmkReq(peerHandle)) return;  // schon pending
+
+  // Lokale CMK existiert? Dann ist der Fail-Grund anderswo (epoch, signature) —
+  // cmk_req würde nichts ändern.
+  const localCmk = await getCMKIfExists(peerHandle).catch(() => null);
+  if (localCmk) return;
+
+  console.warn(`📨 Proaktiv cmk_req → ${peerHandle} (Chat geöffnet, keine lokale CMK)`);
+  markPendingCmkReq(peerHandle);
+  void sendCmkRequest(peerHandle);
+}
+
+function _patchMessage(id, patch) {
+  _messages = _messages.map(m => m.id === id ? { ...m, ...patch } : m);
+}
 
 // ── Helpers ─────────────────────────────────────────────
 /**
  * Backend-Message → Frontend-Message normalisieren.
- * Phase 1A.6.5: nur Plaintext + e2e=false. E2E-Decrypt folgt Phase 1B.
+ * E2E=true Messages werden initial mit Placeholder gerendert; async-Decrypt
+ * patcht das `text`-Feld später (siehe _decryptAllE2E + _decryptOne).
  */
 function _normalizeMessage(m, myHandle) {
   const isMe = (m.from || m.from_user) === myHandle;
   const text = m.e2e
-    ? "🔐 [E2E — Phase 1B]"  // Placeholder bis Decrypt-Implementation
+    ? "🔐 …"  // Placeholder bis async-Decrypt patcht
     : (m.message || m.text || "");
 
   return {
@@ -176,6 +369,7 @@ function _normalizeMessage(m, myHandle) {
     isMe,
     type: m.type || null,
     e2e: !!m.e2e,
+    verified: null,  // wird vom Decrypt-Pfad gesetzt: true|false|null
     replyTo: m.reply_to_id ? {
       from: m.reply_from,
       text: m.e2e ? "🔐" : (m.reply_message || ""),
@@ -184,5 +378,7 @@ function _normalizeMessage(m, myHandle) {
       type: m.attachment_type,
       key: m.attachment_key,
     } : undefined,
+    // Raw-Original bewahren — wird vom async-Decrypter in _decryptAllE2E benötigt
+    _raw: m,
   };
 }

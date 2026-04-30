@@ -15,6 +15,8 @@
    *     text: string,
    *     status?: "sending" | "sent" | "delivered" | "read" | "failed",
    *     isMe?: boolean,
+   *     verified?: boolean | null,   // E2E-Sig-Verify: true=ok, false=Tampering, null=unkonklusiv
+   *     _unrecoverable?: boolean,    // 🔓✗ — CMK permanent verloren
    *     replyTo?: { from, text },
    *     attachment?: { type, url, name }
    *   },
@@ -45,7 +47,7 @@
 </script>
 
 <div class="bubble-row" class:me={message.isMe}>
-  <div class="bubble" class:me={message.isMe}>
+  <div class="bubble" class:me={message.isMe} class:tampered={message.verified === false}>
     {#if showSender && !message.isMe}
       <div class="sender">{message.from}</div>
     {/if}
@@ -54,6 +56,12 @@
       <div class="reply-preview">
         <div class="reply-author">{message.replyTo.from}</div>
         <div class="reply-text">{message.replyTo.text}</div>
+      </div>
+    {/if}
+
+    {#if message.verified === false}
+      <div class="tamper-warning" title="Signatur ungültig — diese Nachricht wurde verändert oder stammt nicht vom angegebenen Absender.">
+        ⚠️ Signatur ungültig — Manipulation möglich
       </div>
     {/if}
 
@@ -97,6 +105,29 @@
     color: #07070a;
     border-color: var(--accent-voice);
     border-radius: 16px 16px 4px 16px;
+  }
+
+  /* Tampering: roter Border + Warnbanner. Sticht visuell heraus. */
+  .bubble.tampered {
+    border-color: var(--status-error, #ef4444);
+    border-width: 2px;
+  }
+
+  .tamper-warning {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--status-error, #ef4444);
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid var(--status-error, #ef4444);
+    border-radius: 6px;
+    padding: 4px 8px;
+    margin-bottom: 6px;
+    cursor: help;
+  }
+
+  .bubble.me .tamper-warning {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fff;
   }
 
   .sender {

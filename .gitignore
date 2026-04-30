@@ -12,9 +12,10 @@
 node_modules/
 npm-debug.log*
 
-# Editor
+# Editor / Tools
 .vscode/
 .idea/
+.claude/
 
 # DB Backups
 backup-*.sql

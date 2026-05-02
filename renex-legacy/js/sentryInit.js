@@ -12,6 +12,77 @@
 // weil Sentry's CDN-Bundles UMD sind, nicht ES Modules.
 // ======================================================
 
+// ======================================================
+// M2 Privacy-Scrubbing: vor jedem send durchsuchen Event-Payload
+// nach sensitiven Identifier-Namen (Phrase, CMK, MasterKey, …) und
+// Byte-Material. Defense-in-depth — sentry.js Wrapper macht erste
+// Stufe schon, aber Sentry SDK fügt Stack-Frames + lokale Variablen
+// erst HIER an, deshalb muss zweite Stufe in beforeSend sitzen.
+// ======================================================
+const _SENSITIVE_KEY_RE = /^(phrase|mnemonic|seed|cmk|cmkBytes|masterKey|masterKeyBytes|privateKey|priv|password|secret|sigKey|recoveryKey|deviceSecret|p256dh|jwk|d|x|y)$/i;
+const _SENSITIVE_VALUE_RE = /\b(phrase|mnemonic|cmkBytes|masterKey(?:Bytes)?|privateKey|deviceSecret|recoveryKey)\b/gi;
+const _MAX_DEPTH = 6;
+
+function _scrubObj(value, depth) {
+  depth = depth || 0;
+  if (depth > _MAX_DEPTH) return "[REDACTED:depth]";
+  if (value == null) return value;
+  if (typeof value === "string") {
+    _SENSITIVE_VALUE_RE.lastIndex = 0;
+    return value.replace(_SENSITIVE_VALUE_RE, "[REDACTED]");
+  }
+  if (typeof value !== "object") return value;
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer
+      || (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView && ArrayBuffer.isView(value))) {
+    return "[REDACTED:bytes]";
+  }
+  if (Array.isArray(value)) {
+    return value.map(v => _scrubObj(v, depth + 1));
+  }
+  const out = {};
+  for (const k of Object.keys(value)) {
+    if (_SENSITIVE_KEY_RE.test(k)) {
+      out[k] = "[REDACTED]";
+    } else {
+      out[k] = _scrubObj(value[k], depth + 1);
+    }
+  }
+  return out;
+}
+
+function _scrubSentryEvent(event) {
+  if (!event) return event;
+  // Exception-Werte (Message-Text)
+  if (event.exception?.values) {
+    for (const ev of event.exception.values) {
+      if (typeof ev.value === "string") {
+        _SENSITIVE_VALUE_RE.lastIndex = 0;
+        ev.value = ev.value.replace(_SENSITIVE_VALUE_RE, "[REDACTED]");
+      }
+      // Stack-Frame Variablen (frame.vars) und Pre/Post-Context (Source-Code)
+      if (ev.stacktrace?.frames) {
+        for (const f of ev.stacktrace.frames) {
+          if (f.vars) f.vars = _scrubObj(f.vars);
+          if (typeof f.context_line === "string") {
+            _SENSITIVE_VALUE_RE.lastIndex = 0;
+            f.context_line = f.context_line.replace(_SENSITIVE_VALUE_RE, "[REDACTED]");
+          }
+        }
+      }
+    }
+  }
+  // Top-level message
+  if (typeof event.message === "string") {
+    _SENSITIVE_VALUE_RE.lastIndex = 0;
+    event.message = event.message.replace(_SENSITIVE_VALUE_RE, "[REDACTED]");
+  }
+  // Extra context (passed via captureException second arg)
+  if (event.extra) event.extra = _scrubObj(event.extra);
+  if (event.contexts) event.contexts = _scrubObj(event.contexts);
+  if (event.tags) event.tags = _scrubObj(event.tags);
+  return event;
+}
+
 (async () => {
   // 1) DSN-Config holen
   let dsn = null;
@@ -68,13 +139,19 @@
         if (event.request?.query_string) {
           delete event.request.query_string;
         }
-        return event;
+        // M2 Privacy-Hardening: scrubbe Event-Payload nach Key-Material
+        return _scrubSentryEvent(event);
       },
       beforeBreadcrumb(crumb) {
         if (crumb.category === "fetch" || crumb.category === "xhr") {
           if (crumb.data?.url && /\/chat\/keys\/|\/e2e\/|\/push\//.test(crumb.data.url)) {
             return null;
           }
+        }
+        // M2: Breadcrumb-Daten + Message scrubben
+        if (crumb.data) crumb.data = _scrubObj(crumb.data);
+        if (typeof crumb.message === "string") {
+          crumb.message = crumb.message.replace(_SENSITIVE_VALUE_RE, "[REDACTED]");
         }
         return crumb;
       },

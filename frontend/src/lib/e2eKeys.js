@@ -36,11 +36,25 @@ const _bgRetryActive = new Set();
 // Helpers
 // ======================================================
 
+/**
+ * deviceId per User scopen. Verhindert dass mehrere User auf demselben Browser
+ * den gleichen device_id beanspruchen (was im Backend zu user_handle-Mismatch
+ * + 404 Heartbeat führt — siehe Multi-Device-Hardening 2026-05-02).
+ *
+ * Storage-Key: `device_id:<handle>`. Legacy-Key `device_id` wird ignoriert.
+ * Pro User-Login auf einem Browser: eigener stabiler deviceId.
+ */
 export function getDeviceId() {
-  let id = localStorage.getItem('device_id');
+  const handle = (typeof localStorage !== 'undefined'
+    ? localStorage.getItem('my_user') : null) || '';
+  const lower = String(handle).toLowerCase();
+  // Vor Login (handle leer): legacy Key als Fallback (für e2e Init-Pfade vor User-Login)
+  const key = lower ? `device_id:${lower}` : 'device_id';
+
+  let id = localStorage.getItem(key);
   if (!id) {
     id = 'dev_' + crypto.randomUUID();
-    localStorage.setItem('device_id', id);
+    localStorage.setItem(key, id);
   }
   return id;
 }

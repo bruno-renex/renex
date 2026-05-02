@@ -15,7 +15,7 @@
 
 import { idbGet, idbSet, idbDelete } from './idb.js';
 import { bytesToB64, b64ToBytes } from './bytes.js';
-import { loadPrivateKey } from './e2eKeys.js';
+import { loadPrivateKey, getDeviceId } from './e2eKeys.js';
 
 // Lazy-Import um Circular zu vermeiden: cmkBundleSync importiert importAndStore-CMK.
 async function _scheduleBundleSync() {
@@ -299,9 +299,8 @@ export async function wrapCMKForInboxDevices(devices, cmkBytes) {
   const myPriv = await loadPrivateKey();
   if (!myPriv) throw new Error('No private key — initE2EKeys first');
 
-  const fromDeviceId = (typeof localStorage !== 'undefined')
-    ? localStorage.getItem('device_id')
-    : null;
+  // getDeviceId() ist jetzt per-User-skoped (Bug 13 Fix)
+  const fromDeviceId = getDeviceId();
   if (!fromDeviceId) throw new Error('No device_id');
 
   const payloads = [];

@@ -16,17 +16,23 @@ import { setUser as sentrySetUser } from '../lib/sentry.js';
 // Reactive State
 let _myUser = $state(get("my_user") || null);
 let _displayName = $state(get("display_name") || null);
-let _deviceId = $state(get("device_id") || _generateDeviceId());
 let _isGuest = $state((get("my_user") || "").startsWith("guest_"));
 
-function _generateDeviceId() {
-  // Generiert einmal pro Browser-Install eine UUID, persistiert
-  const existing = get("device_id");
-  if (existing) return existing;
-  const id = (typeof crypto !== "undefined" && crypto.randomUUID)
-    ? crypto.randomUUID()
-    : "dev-" + Math.random().toString(36).slice(2, 18);
-  set("device_id", id);
+/**
+ * deviceId ist per-User-skoped (Storage-Key `device_id:<handle>`).
+ * Generiert lazy beim ersten Zugriff für den aktuellen User.
+ * Mehrere User auf dem gleichen Browser bekommen je ihre eigene stabile ID.
+ */
+function _currentDeviceId() {
+  const h = (_myUser || "").toLowerCase();
+  const key = h ? `device_id:${h}` : "device_id";  // Pre-Login: Legacy-Key
+  let id = get(key);
+  if (!id) {
+    id = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : "dev-" + Math.random().toString(36).slice(2, 18);
+    set(key, id);
+  }
   return id;
 }
 
@@ -34,7 +40,9 @@ function _generateDeviceId() {
 export const userStore = {
   get myUser()      { return _myUser; },
   get displayName() { return _displayName; },
-  get deviceId()    { return _deviceId; },
+  // Reaktiv: wenn _myUser sich ändert, gibt der Getter den neuen User-spezifischen
+  // deviceId zurück (oder generiert ihn lazy)
+  get deviceId()    { return _currentDeviceId(); },
   get isGuest()     { return _isGuest; },
 
   setUser(handle) {
@@ -57,7 +65,9 @@ export const userStore = {
     remove("my_user");
     remove("display_name");
     sentrySetUser(null);
-    // Note: deviceId bleibt — pro Browser-Install eindeutig, kein Reset bei Logout
+    // Note: device_id:<handle>-Einträge bleiben — pro User stabil, damit
+    // re-login desselben Users denselben deviceId behält. Nur user-handle wird
+    // gecleart, nicht die per-user deviceIds.
   },
 
   isLoggedIn() {

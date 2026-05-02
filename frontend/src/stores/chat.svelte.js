@@ -175,8 +175,9 @@ export const chatStore = {
     // (Multi-Device-Self-Sync). Aktuelles Sender-Tab erkennt sich am deviceId und skipt
     // — das Optimistic-Replace-Flow behandelt die Message bereits via /chat/send-Response.
     // Andere Tabs/Devices nehmen die Message via diesen Pfad auf.
+    // userStore.deviceId ist per-User-skoped (Bug 13 Fix).
     if (msg.isMe) {
-      const myDeviceId = (typeof localStorage !== 'undefined' ? localStorage.getItem('device_id') : null) || null;
+      const myDeviceId = userStore.deviceId;
       const senderDeviceId = rawMsg.deviceId || rawMsg.device_id;
       if (myDeviceId && senderDeviceId && senderDeviceId === myDeviceId) {
         return;  // eigene Send-Echo — bereits im UI via Optimistic+Response

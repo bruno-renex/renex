@@ -212,7 +212,8 @@
   }
 
   function _runHeartbeat() {
-    const id = localStorage.getItem('device_id') || userStore.deviceId;
+    // userStore.deviceId ist per-User-skoped (siehe Bug 13 Fix)
+    const id = userStore.deviceId;
     if (!id) return;
     heartbeat(id);  // silent-fail, fire-and-forget
   }

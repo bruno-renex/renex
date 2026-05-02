@@ -163,6 +163,18 @@ export async function handleE2eRoutes(request, env, path, params) {
           }, 409);
         }
 
+        // Pre-Upsert-State lesen — entscheidet ob `device_added`-Broadcast nötig ist.
+        // Verhindert Spam-Broadcasts wenn ein bereits aktives Device sich nur
+        // re-uploaded (Page-Reload, Heartbeat-Recovery etc.).
+        // Broadcast ist nötig bei:
+        //   - Wirklich neues Device (kein Eintrag in D1)
+        //   - Reaktivierung von 'revoked' (Re-Pairing nach Self-Logout)
+        // Skip bei 'active' / 'syncing' / 'new' (peers wurden schon informiert).
+        const preState = await env.RENEX_DB.prepare(
+          "SELECT state FROM devices WHERE device_id = ? AND user_handle = ? LIMIT 1"
+        ).bind(deviceId, handle).first();
+        const shouldBroadcast = !preState || preState.state === 'revoked';
+
         // D1-Upsert: Source-of-Truth für Device-State
         const now = Date.now();
         const safeName = (typeof name === "string") ? name.slice(0, 64) : null;
@@ -214,43 +226,49 @@ export async function handleE2eRoutes(request, env, path, params) {
         // Grund: KV ist eventually consistent — Empfänger der fetchPeerDevices()
         // ruft, könnte alten Index ohne neuen Device sehen. Mit Push-Daten kann
         // Frontend retry-bis-deviceId-im-fetch-list machen.
-        const pushPayload = {
-          type: "device_added",
-          from: handle,
-          deviceId,
-          jwk,
-          sigPub: sigPub || null,
-          ts: Date.now(),
-        };
+        //
+        // Broadcast nur bei *echten* Adds (siehe `shouldBroadcast` oben). Bei
+        // Re-Uploads bestehender aktiver Devices (Page-Reload etc.) skippen,
+        // sonst flutet jeder Browser-Refresh alle Kontakte mit redundanten Events.
+        if (shouldBroadcast) {
+          const pushPayload = {
+            type: "device_added",
+            from: handle,
+            deviceId,
+            jwk,
+            sigPub: sigPub || null,
+            ts: Date.now(),
+          };
 
-        try {
-          const authContacts = await env.RENEX_DB.prepare(
-            "SELECT contact_handle FROM contacts WHERE user_handle = ? AND status = 'accepted' AND contact_handle < ?"
-          ).bind(handle, handle).all();
+          try {
+            const authContacts = await env.RENEX_DB.prepare(
+              "SELECT contact_handle FROM contacts WHERE user_handle = ? AND status = 'accepted' AND contact_handle < ?"
+            ).bind(handle, handle).all();
 
-          for (const row of (authContacts.results || [])) {
-            await pushToUserDO(env, row.contact_handle, {
+            for (const row of (authContacts.results || [])) {
+              await pushToUserDO(env, row.contact_handle, {
+                ...pushPayload,
+                id: crypto.randomUUID(),
+                to: row.contact_handle,
+              });
+            }
+          } catch (e) {
+            console.warn("device_added push fehlgeschlagen (non-fatal):", e.message);
+          }
+
+          // Self-Push: eigene anderen Devices benachrichtigen
+          try {
+            await pushToUserDO(env, handle, {
               ...pushPayload,
               id: crypto.randomUUID(),
-              to: row.contact_handle,
+              to: handle,
             });
+          } catch (e) {
+            console.warn("device_added self-push fehlgeschlagen (non-fatal):", e.message);
           }
-        } catch (e) {
-          console.warn("device_added push fehlgeschlagen (non-fatal):", e.message);
         }
 
-        // Self-Push: eigene anderen Devices benachrichtigen
-        try {
-          await pushToUserDO(env, handle, {
-            ...pushPayload,
-            id: crypto.randomUUID(),
-            to: handle,
-          });
-        } catch (e) {
-          console.warn("device_added self-push fehlgeschlagen (non-fatal):", e.message);
-        }
-
-        return json(request, { ok: true });
+        return json(request, { ok: true, broadcast: shouldBroadcast });
       }
       break;
     }

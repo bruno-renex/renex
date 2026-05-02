@@ -43,6 +43,15 @@ export const chatStore = {
    * @param {object} chat - { type: "dm"|"group", key: string, name: string, peer?: string }
    */
   async selectChat(chat) {
+    // Idempotent: Re-Select des bereits aktiven Chats ist no-op.
+    // Verhindert doppeltes /chat/list + _decryptAllE2E bei Doppel-Klick
+    // oder Svelte-Re-Renders auf demselben Inbox-Item.
+    if (_selectedChat && chat
+        && _selectedChat.key === chat.key
+        && _selectedChat.type === chat.type) {
+      return;
+    }
+
     // Save current draft before switching
     if (_selectedChat) {
       _drafts.set(_selectedChat.key, _draftText);
@@ -285,7 +294,24 @@ async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
   }
 }
 
+// In-flight Guard für _decryptAllE2E. Defense-in-depth gegen schnelle
+// Mehrfach-Aufrufe (auch wenn selectChat schon idempotent ist).
+// Eintrag wird nach DECRYPT_ALL_GUARD_MS gelöscht damit echte Re-Decrypts
+// (z.B. nach echtem Chat-Wechsel + Zurück) nicht blockiert werden.
+const _decryptAllInFlight = new Set();
+const DECRYPT_ALL_GUARD_MS = 1500;
+
 async function _decryptAllE2E(peerHandle, myHandle) {
+  // Dedup: wenn für diesen Peer schon ein Sweep läuft (oder gerade lief)
+  // → skip. Verhindert doppeltes Decrypten + UI-Flackern bei z.B.
+  // device_added → Re-Render → Re-Select-Chain.
+  if (_decryptAllInFlight.has(peerHandle)) {
+    console.log(`🔓 _decryptAllE2E: peer=${peerHandle} schon in-flight, skip`);
+    return;
+  }
+  _decryptAllInFlight.add(peerHandle);
+  setTimeout(() => _decryptAllInFlight.delete(peerHandle), DECRYPT_ALL_GUARD_MS);
+
   // Snapshot — patches by id, so Liste-Mutation ok während Decrypt.
   // WICHTIG: Backend /chat/list returnt camelCase (ivB64, ctB64), NICHT snake_case.
   // Eigene Messages (isMe) MÜSSEN auch decrypted werden — auf Reload haben sie

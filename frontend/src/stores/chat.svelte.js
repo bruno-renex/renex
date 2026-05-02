@@ -249,6 +249,35 @@ export const chatStore = {
 // Wenn cmk_unavailable empfangen → komplett aufgeben.
 const DECRYPT_RETRY_DELAYS_MS = [3000, 8000, 25000, 60000];
 
+// Concurrency-Cap für initial Sweep (Performance QW1, 2026-05-02).
+// Verhindert dass bei 1000-Message-Chats 1000 parallele crypto.subtle-Tasks
+// IDB + Crypto-Worker thrashen. 8 ist heuristisch gut für Browser
+// (typisch 4 Cores × 2 für IO/CPU-Mix).
+const DECRYPT_CONCURRENCY = 8;
+
+/**
+ * Mini-Semaphore: läuft `task` aus, blockt wenn `active >= max` erreicht ist.
+ * Returns Promise das auflöst wenn task fertig ist.
+ */
+function _makeSemaphore(max) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active >= max || queue.length === 0) return;
+    active++;
+    const { task, resolve, reject } = queue.shift();
+    Promise.resolve()
+      .then(task)
+      .then(resolve, reject)
+      .finally(() => { active--; next(); });
+  };
+  return (task) => new Promise((resolve, reject) => {
+    queue.push({ task, resolve, reject });
+    next();
+  });
+}
+const _decryptSlot = _makeSemaphore(DECRYPT_CONCURRENCY);
+
 async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
   try {
     // Hard-Stop: Peer hat cmk_unavailable gesendet → nie wieder versuchen.
@@ -335,9 +364,14 @@ async function _decryptAllE2E(peerHandle, myHandle) {
     return;
   }
 
+  // QW1 (2026-05-02): Concurrency-Cap statt unbounded fan-out.
+  // Bei N=1000 Messages spawnen wir nicht 1000 parallele Crypto-Tasks
+  // (würde IDB + Crypto-Worker thrashen), sondern max DECRYPT_CONCURRENCY
+  // gleichzeitig. UI-Updates kommen früh (erste 8 Messages decrypten sofort,
+  // dann incremental).
   for (const m of snapshot) {
     const raw = m._raw || m;
-    void _decryptOne(raw, myHandle, peerHandle);
+    void _decryptSlot(() => _decryptOne(raw, myHandle, peerHandle));
   }
 
   // Proactive CMK-Acquisition: wenn beim Chat-Öffnen lokal keine CMK existiert,

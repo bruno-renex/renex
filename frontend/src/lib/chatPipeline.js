@@ -30,8 +30,10 @@ import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
 import { signMessage, verifyMessageSig } from './messageSig.js';
 
 // LRU für SK-Bytes pro (sid, rotationIndex) — vermeidet Re-Derivation pro Message
+// Bei vielen Rotation-Indices (Multi-Device + älteren Konversationen) wäre 50 zu klein.
+// 200 deckt komfortabel ~10 unique Rotation-Indices × 20 sid (Pro-Tier) ab.
 const _skCache = new Map();
-const SK_CACHE_MAX = 50;
+const SK_CACHE_MAX = 200;
 function _skCacheKey(sid, rotation) { return `${sid}:${rotation || 0}`; }
 function _skCacheGet(sid, rotation) {
   const key = _skCacheKey(sid, rotation);
@@ -55,8 +57,11 @@ function _skCacheSet(sid, rotation, sk) {
 // Speichert {text, verified} damit verified-State nicht verloren geht wenn ein
 // device_added eine zweite _decryptAllE2E-Runde triggert und die Cache-Hits
 // die UI mit verified=null überschreiben würden.
+// 1000 Einträge × ~150 B/Entry ≈ 150 KB Memory — bei 1000-Message-Chats deckt
+// es einen vollständigen Re-Render ohne Cache-Miss ab (vorher: 800 Misses bei
+// 1000 Messages → ~10s Re-Decrypt-Zeit).
 const _decryptCache = new Map();
-const DECRYPT_CACHE_MAX = 200;
+const DECRYPT_CACHE_MAX = 1000;
 function _decryptCacheGet(msgId) { return _decryptCache.get(msgId) || null; }
 function _decryptCacheSet(msgId, text, verified) {
   if (_decryptCache.has(msgId)) _decryptCache.delete(msgId);

@@ -246,22 +246,26 @@ export async function handleLoginFinish(request, env) {
     )
   );
 
+  const now = Date.now();
   await env.RENEX_KV.put(
     `session:${sessionToken}`,
     JSON.stringify({
       handle,
-      created_at: Date.now(),
-      exp: Date.now() + 86_400_000, // 24h in ms
+      createdAt: now,
+      lastRefreshed: now,           // Sliding-TTL Anker (M4)
+      exp: now + 86_400_000,        // 24h in ms (initial; KV TTL refresht später)
       ua: uaHash || null
     }),
-    { expirationTtl: 86_400 }       // 24h in Sekunden (KV TTL)
+    { expirationTtl: 86_400 }       // 24h in Sekunden (KV TTL — sliding)
   );
 
   // Session-Index aktualisieren (für spätere Revocation)
   await registerSessionToken(env, handle, sessionToken);
 
-  // Max-Age = 86400s = 24h (Cookie-Laufzeit = KV TTL)
-  const sessionCookie = `session=${sessionToken}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=86400`;
+  // Cookie Max-Age = 30 Tage (lange Persistierung). KV ist Source-of-Truth:
+  // bei 24h Inaktivität expirt KV → requireSession returnt null → 401 → Re-Login.
+  // Aktive User bekommen sliding-Refresh in requireSession.
+  const sessionCookie = `session=${sessionToken}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=2592000`;
   return new Response(JSON.stringify({ authenticated: true }), {
     status: 200,
     headers: {

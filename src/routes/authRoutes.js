@@ -290,18 +290,22 @@ export async function handleAuthRoutes(request, env, path, params) {
         const sessionToken = "sess_" + crypto.randomUUID();
         const ua = request.headers.get("user-agent") || "";
         const uaHash = ua ? await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ua)).then(h => base64url(new Uint8Array(h))) : null;
+        const sessionNow = Date.now();
         await env.RENEX_KV.put(
           `session:${sessionToken}`,
           JSON.stringify({
             handle,
-            createdAt: Date.now(),
+            createdAt: sessionNow,
+            lastRefreshed: sessionNow,    // Sliding-TTL Anker (M4)
             ua: uaHash,
           }),
           { expirationTtl: 86_400 }
         );
         await registerSessionToken(env, handle, sessionToken);
 
-        const sessionCookie = `session=${sessionToken}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=86400`;
+        // Cookie Max-Age = 30d (sliding session: aktive User bleiben unbegrenzt
+        // eingeloggt, idle 24h → KV-Expiry → forced re-login).
+        const sessionCookie = `session=${sessionToken}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=2592000`;
         return new Response(
           JSON.stringify({ status: "ok", authenticated: true }),
           {

@@ -86,7 +86,22 @@ export async function requireSession(request, env) {
     return null;
   }
 
-  return session; // { handle, created_at, exp }
+  // Sliding-TTL-Refresh (M4, 2026-05-02): wenn letzte Refresh-Zeit > 6h alt ist,
+  // verlängert sich KV-TTL auf weitere 24h. Aktive User bleiben praktisch
+  // unbegrenzt eingeloggt; idle 24h → KV expired → forced logout.
+  // Cookie ist Max-Age=30d (in Routes), aber KV ist Source-of-Truth.
+  const SESSION_REFRESH_THRESHOLD_MS = 6 * 60 * 60 * 1000;
+  const SESSION_TTL_SEC = 86_400;
+  const lastRef = Number(session.lastRefreshed || session.createdAt || session.created_at || 0);
+  if (lastRef > 0 && Date.now() - lastRef > SESSION_REFRESH_THRESHOLD_MS) {
+    session.lastRefreshed = Date.now();
+    // Non-fatal: bei KV-Fehler bleibt Session weiter gültig (alte TTL läuft normal aus)
+    try {
+      await env.RENEX_KV.put(`session:${token}`, JSON.stringify(session), { expirationTtl: SESSION_TTL_SEC });
+    } catch {}
+  }
+
+  return session; // { handle, createdAt|created_at, exp?, ua, lastRefreshed? }
 }
 
 // =========================
@@ -231,7 +246,7 @@ export async function registerSessionToken(env, handle, token) {
   tokens.push(token);
   // Max 20 aktive Sessions pro User speichern
   if (tokens.length > 20) tokens = tokens.slice(-20);
-  await env.RENEX_KV.put(key, JSON.stringify(tokens), { expirationTtl: 90000 }); // 25h
+  await env.RENEX_KV.put(key, JSON.stringify(tokens), { expirationTtl: 2592000 }); // 30d (matches sliding session lifetime)
 }
 
 // ── Session-Index: Token entfernen ────────────────────
@@ -241,7 +256,7 @@ export async function unregisterSessionToken(env, handle, token) {
     const raw = await env.RENEX_KV.get(key);
     if (!raw) return;
     const tokens = JSON.parse(raw).filter(t => t !== token);
-    await env.RENEX_KV.put(key, JSON.stringify(tokens), { expirationTtl: 90000 });
+    await env.RENEX_KV.put(key, JSON.stringify(tokens), { expirationTtl: 2592000 });
   } catch {}
 }
 

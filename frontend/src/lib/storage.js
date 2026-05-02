@@ -18,7 +18,13 @@ const LEGACY_KEYS = new Set([
 ]);
 
 function k(key) {
-  return LEGACY_KEYS.has(key) ? key : `renex_${key}`;
+  if (LEGACY_KEYS.has(key)) return key;
+  // Per-User Device-IDs (`device_id:<handle>`, Bug 13 Fix): kein renex_-Prefix,
+  // damit user.svelte.js und e2eKeys.js denselben Storage-Slot teilen.
+  // e2eKeys.js liest/schreibt raw localStorage; ohne diese Ausnahme würden
+  // die beiden divergieren → Upload nutzt Slot A, Heartbeat Slot B → 404.
+  if (key.startsWith("device_id:")) return key;
+  return `renex_${key}`;
 }
 
 export function get(key) {

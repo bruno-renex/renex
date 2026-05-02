@@ -22,4 +22,5 @@ backup-*.sql
 
 # Vite / Svelte build output
 frontend/dist/
+frontend/bundle-stats.html
 .vite/

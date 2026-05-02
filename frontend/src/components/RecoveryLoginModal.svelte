@@ -142,7 +142,8 @@
 
       let bundle;
       try {
-        bundle = await decryptBundle(data.blob, masterKey);
+        // L2: handle als AAD — der user-handle ist hier `handle` (Step 1 input).
+        bundle = await decryptBundle(data.blob, masterKey, handle);
       } catch {
         attemptsLeft = Math.max(0, attemptsLeft - 1);
         phraseError = attemptsLeft > 0

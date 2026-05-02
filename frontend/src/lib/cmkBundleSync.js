@@ -101,14 +101,15 @@ async function _doSync() {
 
     const cmks = await collectLocalCmks();
     const bundle = {
-      v: 1,
       ts: Date.now(),
       cmks,
       gsks: {},  // GSKs Phase 1C
     };
 
     const masterKey = await masterKeyBytesToCryptoKey(masterKeyBytes);
-    const blob = await encryptBundle(bundle, masterKey);
+    // L2: handle als AAD-Binding — auto-sync upgraded Legacy v=1 → v=2 mit AAD
+    const handle = getMyHandle();
+    const blob = await encryptBundle(bundle, masterKey, handle);
     const r = await putBundle(blob);
     if (r.ok) {
       const count = Object.keys(cmks).length;
@@ -204,7 +205,8 @@ export async function bootstrapBundleRestore() {
     const masterKey = await masterKeyBytesToCryptoKey(masterKeyBytes);
     let bundle;
     try {
-      bundle = await decryptBundle(data.blob, masterKey);
+      // L2: handle als AAD — fällt automatisch auf v=1 (legacy) zurück.
+      bundle = await decryptBundle(data.blob, masterKey, getMyHandle());
     } catch {
       // Cached masterKey passt nicht zum aktuellen Bundle — Salt/Phrase wechselte.
       // Cache ist tot, User muss Recovery erneut durchgehen.

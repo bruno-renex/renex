@@ -92,7 +92,11 @@
 
       let bundle;
       try {
-        bundle = await decryptBundle(data.blob, masterKey);
+        // L2: handle als AAD — falls Bundle v=2, AAD validiert User-Binding.
+        // Fallback v=1 (legacy ohne AAD) automatisch innerhalb decryptBundle.
+        const myHandle = (typeof localStorage !== 'undefined'
+          ? localStorage.getItem('my_user') : null) || '';
+        bundle = await decryptBundle(data.blob, masterKey, myHandle);
       } catch {
         // Decrypt failed → Phrase falsch
         attemptsLeft = Math.max(0, attemptsLeft - 1);

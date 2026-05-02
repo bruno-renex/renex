@@ -177,19 +177,36 @@ export async function deriveMasterKeyRaw(phrase, salt) {
 // ======================================================
 
 /**
+ * Bundle-AAD-String: bindet Bundle-Ciphertext kryptografisch an einen
+ * bestimmten Handle. Verhindert dass ein Bundle z.B. mit dem masterKey
+ * eines anderen Users decryptet werden könnte (auch wenn der RNG-Salt
+ * mal kollidieren sollte). L2 Hardening (2026-05-02).
+ */
+function _bundleAad(handle) {
+  if (!handle) return null;
+  return new TextEncoder().encode(`renex:bundle:${String(handle).toLowerCase()}`);
+}
+
+/**
  * Verschlüsselt ein Bundle-Objekt mit AES-GCM.
- * @param {object} bundle - z.B. { v:1, ts, cmks, gsks }
+ *
+ * @param {object} bundle - z.B. { v, ts, cmks, gsks }
  * @param {CryptoKey} masterKey
+ * @param {string} [handle] - Wenn gegeben → AAD = "renex:bundle:<handle>".
+ *   Bundle wird als v=2 markiert. Ohne handle: v=1 Legacy-Format ohne AAD.
  * @returns {Promise<Uint8Array>} [IV (12B)] [Ciphertext]
  */
-export async function encryptBundle(bundle, masterKey) {
+export async function encryptBundle(bundle, masterKey, handle) {
+  const aad = _bundleAad(handle);
+  // Markiere Version: v=2 wenn AAD gebunden, v=1 sonst (rückwärts-kompatibel)
+  const versioned = { ...bundle, v: aad ? 2 : 1 };
+
   const iv = crypto.getRandomValues(new Uint8Array(AES_IV_SIZE));
-  const plaintext = new TextEncoder().encode(JSON.stringify(bundle));
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    masterKey,
-    plaintext
-  );
+  const plaintext = new TextEncoder().encode(JSON.stringify(versioned));
+  const params = aad
+    ? { name: 'AES-GCM', iv, additionalData: aad }
+    : { name: 'AES-GCM', iv };
+  const ciphertext = await crypto.subtle.encrypt(params, masterKey, plaintext);
 
   // [IV][Ciphertext] concatenieren
   const out = new Uint8Array(iv.length + ciphertext.byteLength);
@@ -199,29 +216,47 @@ export async function encryptBundle(bundle, masterKey) {
 }
 
 /**
- * Entschlüsselt einen Bundle-Blob.
+ * Entschlüsselt einen Bundle-Blob. Versucht v=2 (mit AAD) zuerst,
+ * fällt auf v=1 (legacy ohne AAD) zurück. Beide Versionen bleiben
+ * permanent supportet — Migration on-the-fly bei nächstem Bundle-Sync.
+ *
  * @param {Uint8Array} blob - [IV (12B)] [Ciphertext]
  * @param {CryptoKey} masterKey
+ * @param {string} [handle] - Wenn gegeben → AAD-Versuch zuerst (v=2)
  * @returns {Promise<object>} bundle-Objekt
  * @throws bei falschem Key oder korrupten Daten
  */
-export async function decryptBundle(blob, masterKey) {
+export async function decryptBundle(blob, masterKey, handle) {
   if (!(blob instanceof Uint8Array) || blob.length < AES_IV_SIZE + 16) {
     throw new Error('invalid_blob');
   }
   const iv = blob.slice(0, AES_IV_SIZE);
   const ciphertext = blob.slice(AES_IV_SIZE);
-  const plaintextBuf = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    masterKey,
-    ciphertext
-  );
-  const json = new TextDecoder().decode(plaintextBuf);
-  const bundle = JSON.parse(json);
-  if (!bundle || bundle.v !== 1) {
-    throw new Error('unsupported_bundle_version');
+  const aad = _bundleAad(handle);
+
+  // 1. Versuche v=2 mit AAD (current)
+  if (aad) {
+    try {
+      const pt = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv, additionalData: aad },
+        masterKey, ciphertext
+      );
+      const bundle = JSON.parse(new TextDecoder().decode(pt));
+      if (bundle && (bundle.v === 1 || bundle.v === 2)) return bundle;
+    } catch {}
   }
-  return bundle;
+
+  // 2. Fallback v=1 (legacy ohne AAD) — auch ohne handle versucht
+  try {
+    const pt = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv }, masterKey, ciphertext
+    );
+    const bundle = JSON.parse(new TextDecoder().decode(pt));
+    if (bundle && (bundle.v === 1 || bundle.v === 2)) return bundle;
+    throw new Error('unsupported_bundle_version');
+  } catch (e) {
+    throw new Error(e?.message || 'decrypt_failed');
+  }
 }
 
 // ======================================================

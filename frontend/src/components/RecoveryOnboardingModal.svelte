@@ -70,12 +70,13 @@
 
       // 4. Initial-Bundle: leer (User hat noch keine Convos)
       const initialBundle = {
-        v: 1,
         ts: Date.now(),
         cmks: {},
         gsks: {},
       };
-      const blob = await encryptBundle(initialBundle, masterKey);
+      // L2: handle als AAD-Binding → Bundle-Ciphertext gehört nachweislich
+      // zu DIESEM User. encryptBundle markiert v=2 wenn handle gegeben.
+      const blob = await encryptBundle(initialBundle, masterKey, userStore.myUser);
       isSavingBundle = true;
       const putRes = await putBundle(blob);
       isSavingBundle = false;

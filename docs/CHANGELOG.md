@@ -4,6 +4,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-05-02 — Security Defense-in-Depth (L1, L2, L3)
+
+Drei kosmetische Härtungen am Krypto-Layer. Keine bekannten Exploits — die
+Änderungen sind defense-in-depth, falls Implementierungen in anderen Layern
+mal Bugs haben sollten.
+
+### 🔒 Hardened
+
+**L1 — HKDF info per-peer für DeviceStorageKey** (`frontend/src/lib/cmk.js`)
+- Vorher: `info = "renex:storage:<me>"` — alle CMKs eines Users wurden mit
+  demselben Storage-Key verschlüsselt.
+- Nachher: `info = "renex:storage:<me>:<peer>"` — jede CMK hat einen
+  eigenen, peer-gebundenen Storage-Key.
+- Falls ein Storage-Key irgendwie geleakt wird: nur die zugehörige
+  Peer-Konversation ist exponiert, nicht alle anderen.
+- Migration: 3-Layer-Fallback (per-peer → legacy per-user → legacy global)
+  beim Read. Re-Encrypt mit per-peer Key on-the-fly.
+
+**L2 — AAD in Bundle-Encryption** (`frontend/src/lib/recovery.js`)
+- AES-GCM-Bundles sind jetzt mit AAD = `"renex:bundle:<handle>"` gebunden.
+- Verhindert, dass ein Bundle z.B. unter dem masterKey eines anderen Users
+  decryptet werden könnte (auch bei RNG-Salt-Kollision).
+- `bundle.v` Field signalisiert Format: v=2 mit AAD, v=1 ohne (legacy).
+- Bei Decrypt: zuerst v=2 + AAD versucht, fallback v=1 ohne AAD.
+- Auto-Sync upgraded Legacy-Bundles bei nächstem CMK-Change automatisch zu v=2.
+
+**L3 — Documentation + Comments**
+- `cmk.js`: Comment über IV-Birthday-Bound (2^48 Encryptions) und
+  Rotations-Erwartung. Bei realistischem Volume nicht erreichbar.
+- Auto-Rotate-Mechanismus deferred zu Phase 1C (z.B. nach 2^32 Encryptions
+  pro Key). Aktuell kein Risk.
+
+### Geänderte Dateien
+
+- `frontend/src/lib/cmk.js` — getDeviceStorageKey nimmt peerHandle, 3-Layer-Migration
+- `frontend/src/lib/recovery.js` — encryptBundle/decryptBundle mit optional handle/AAD
+- `frontend/src/lib/cmkBundleSync.js` — handle-AAD bei encrypt + decrypt
+- `frontend/src/components/RecoveryOnboardingModal.svelte` — handle-AAD bei encryptBundle
+- `frontend/src/components/RecoveryVerifyModal.svelte` — handle-AAD bei decryptBundle
+- `frontend/src/components/RecoveryLoginModal.svelte` — handle-AAD bei decryptBundle
+
+---
+
 ## 2026-04-30 — E2E-Recovery & Multi-Device Hardening
 
 Vollständige Härtung des E2E-Recovery-Flows: vom CMK-Verteilungspfad über Bundle-Backup

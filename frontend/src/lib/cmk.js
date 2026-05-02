@@ -28,8 +28,17 @@ async function _scheduleBundleSync() {
 const IDB_DEVICE_SECRET = 'device_secret';
 
 // ======================================================
-// Device-Storage-Key: HKDF(device_secret + userHandle) → AES-GCM-Key
+// Device-Storage-Key: HKDF(device_secret + userHandle + peerHandle) → AES-GCM-Key
 // Lokaler Wrap-Key zum Schutz von CMK-IDB-Einträgen.
+//
+// IV-Lifetime / Birthday-Bound (L3, 2026-05-02):
+// AES-GCM verwendet 96-bit IVs (random). Birthday-Kollisions-Risiko bei ~2^48
+// Encryptions mit demselben Key. Pro CMK + DeviceStorageKey:
+//   - CMK selbst: 1× encrypt pro create + 1× pro Migration ≈ konstant
+//   - Bei aggressiver Rotation alle 5 Min für 100 Jahre: ~10^7 Encryptions
+//   → praktisch unerreichbar bei realen Volumes.
+// Falls in Phase 1C ein Auto-Rotate-Mechanismus eingeführt wird, sollte er
+// nach 2^32 Encryptions pro Key prophylaktisch rotieren.
 // ======================================================
 
 async function getDeviceSecretB64() {
@@ -54,10 +63,21 @@ async function getDeviceSecretB64() {
 }
 
 /**
- * Leitet einen user-isolierten AES-GCM-Storage-Key aus device_secret ab.
- * Bei userHandle=null: globaler Key (für Migration alter Daten).
+ * Leitet einen Storage-Key aus device_secret ab.
+ *
+ * Scoping (L1, 2026-05-02): wenn peerHandle gegeben, ist der Key zusätzlich
+ * an das User-Paar gebunden — jede CMK hat damit einen EIGENEN Storage-Key.
+ * Vorteil: ein potentieller Key-Compromise eines Pairs leakt nicht alle anderen.
+ *
+ * Modi:
+ *   - getDeviceStorageKey(me, peer)  → per-peer Key (current standard)
+ *   - getDeviceStorageKey(me, null)  → per-user Key (legacy migration-only)
+ *   - getDeviceStorageKey(null)      → globaler Key (älteste Legacy)
+ *
+ * @param {string|null} userHandle
+ * @param {string|null} [peerHandle]
  */
-async function getDeviceStorageKey(userHandle) {
+async function getDeviceStorageKey(userHandle, peerHandle) {
   const secretB64 = await getDeviceSecretB64();
   const secretBytes = b64ToBytes(secretB64);
 
@@ -67,9 +87,15 @@ async function getDeviceStorageKey(userHandle) {
     false, ['deriveKey']
   );
 
-  const info = userHandle
-    ? new TextEncoder().encode(`renex:storage:${userHandle.toLowerCase()}`)
-    : new TextEncoder().encode('renex:storage:global');
+  let infoStr;
+  if (userHandle && peerHandle) {
+    infoStr = `renex:storage:${userHandle.toLowerCase()}:${peerHandle.toLowerCase()}`;
+  } else if (userHandle) {
+    infoStr = `renex:storage:${userHandle.toLowerCase()}`;
+  } else {
+    infoStr = 'renex:storage:global';
+  }
+  const info = new TextEncoder().encode(infoStr);
 
   return crypto.subtle.deriveKey(
     { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info },
@@ -140,22 +166,37 @@ function cmkIdbKey(peerHandle) {
 export async function getOrCreateCMK(peerHandle) {
   const me = getMyHandle();
   const key = cmkIdbKey(peerHandle);
-  const storageKey = await getDeviceStorageKey(me);
-  const globalKey  = await getDeviceStorageKey(null);
+
+  // L1 (2026-05-02): per-peer Storage-Key. Vorherige Versionen nutzten
+  // per-user (alle Peers gleicher Key) bzw. global. Migration: alle drei
+  // Schichten durchprobieren, bei Erfolg auf neuen Key re-encrypten.
+  const newKey  = await getDeviceStorageKey(me, peerHandle);  // per-peer
+  const userKey = await getDeviceStorageKey(me);              // legacy per-user
+  const globalKey = await getDeviceStorageKey(null);          // legacy global
 
   const saved = await idbGet(key);
   if (saved && saved.ivB64 && saved.ctB64) {
-    // 1. User-spezifischer Key (aktueller Standard)
+    // 1. Per-peer Key (current)
     try {
-      const cmkBytes = await decryptFromStorage(storageKey, saved.ivB64, saved.ctB64);
+      const cmkBytes = await decryptFromStorage(newKey, saved.ivB64, saved.ctB64);
       if (cmkBytes instanceof Uint8Array && cmkBytes.length === 32) return cmkBytes;
     } catch {}
 
-    // 2. Migration: alter globaler Key + re-encrypt
+    // 2. Legacy per-user Key → migrate zu per-peer
+    try {
+      const cmkBytes = await decryptFromStorage(userKey, saved.ivB64, saved.ctB64);
+      if (cmkBytes instanceof Uint8Array && cmkBytes.length === 32) {
+        const enc = await encryptForStorage(newKey, cmkBytes);
+        await idbSet(key, enc);
+        return cmkBytes;
+      }
+    } catch {}
+
+    // 3. Legacy global Key → migrate zu per-peer
     try {
       const cmkBytes = await decryptFromStorage(globalKey, saved.ivB64, saved.ctB64);
       if (cmkBytes instanceof Uint8Array && cmkBytes.length === 32) {
-        const enc = await encryptForStorage(storageKey, cmkBytes);
+        const enc = await encryptForStorage(newKey, cmkBytes);
         await idbSet(key, enc);
         return cmkBytes;
       }
@@ -165,9 +206,9 @@ export async function getOrCreateCMK(peerHandle) {
     throw new Error('CMK_DECRYPT_FAILED');
   }
 
-  // Wirklich keiner vorhanden → neu erzeugen
+  // Wirklich keiner vorhanden → neu erzeugen mit per-peer Key
   const cmk = crypto.getRandomValues(new Uint8Array(32));
-  const enc = await encryptForStorage(storageKey, cmk);
+  const enc = await encryptForStorage(newKey, cmk);
   await idbSet(key, enc);
   return cmk;
 }
@@ -178,36 +219,50 @@ export async function getOrCreateCMK(peerHandle) {
  */
 export async function getCMKIfExists(peerHandle) {
   const me = getMyHandle();
-  const newKey = cmkIdbKey(peerHandle);
-  const oldKey = `cmk:${String(peerHandle).toLowerCase()}`;
-  const storageKey = await getDeviceStorageKey(me);
-  const globalKey  = await getDeviceStorageKey(null);
+  const idbKey = cmkIdbKey(peerHandle);
+  const oldIdbKey = `cmk:${String(peerHandle).toLowerCase()}`;
 
-  let saved = await idbGet(newKey);
+  // L1 (2026-05-02): per-peer Storage-Key. Mehrere Migrations-Layer:
+  const newSk    = await getDeviceStorageKey(me, peerHandle);  // per-peer (current)
+  const userSk   = await getDeviceStorageKey(me);              // legacy per-user
+  const globalSk = await getDeviceStorageKey(null);            // legacy global
 
-  // Migration vom alten Key
+  let saved = await idbGet(idbKey);
+
+  // IDB-Key-Migration vom alten "cmk:<peer>"-Key (ohne me-prefix)
   if (!saved) {
-    const legacy = await idbGet(oldKey);
+    const legacy = await idbGet(oldIdbKey);
     if (legacy && legacy.ivB64 && legacy.ctB64) {
-      await idbSet(newKey, legacy);
-      await idbDelete(oldKey);
+      await idbSet(idbKey, legacy);
+      await idbDelete(oldIdbKey);
       saved = legacy;
     }
   }
 
   if (!saved || !saved.ivB64 || !saved.ctB64) return null;
 
+  // 1. Per-peer Key (current)
   try {
-    const cmkBytes = await decryptFromStorage(storageKey, saved.ivB64, saved.ctB64);
+    const cmkBytes = await decryptFromStorage(newSk, saved.ivB64, saved.ctB64);
     if (cmkBytes instanceof Uint8Array && cmkBytes.length === 32) return cmkBytes;
   } catch {}
 
-  // Migration alter globaler Key
+  // 2. Legacy per-user Key → migrate zu per-peer
   try {
-    const cmkBytes = await decryptFromStorage(globalKey, saved.ivB64, saved.ctB64);
+    const cmkBytes = await decryptFromStorage(userSk, saved.ivB64, saved.ctB64);
     if (cmkBytes instanceof Uint8Array && cmkBytes.length === 32) {
-      const enc = await encryptForStorage(storageKey, cmkBytes);
-      await idbSet(newKey, enc);
+      const enc = await encryptForStorage(newSk, cmkBytes);
+      await idbSet(idbKey, enc);
+      return cmkBytes;
+    }
+  } catch {}
+
+  // 3. Legacy global Key → migrate zu per-peer
+  try {
+    const cmkBytes = await decryptFromStorage(globalSk, saved.ivB64, saved.ctB64);
+    if (cmkBytes instanceof Uint8Array && cmkBytes.length === 32) {
+      const enc = await encryptForStorage(newSk, cmkBytes);
+      await idbSet(idbKey, enc);
       return cmkBytes;
     }
   } catch {}
@@ -225,7 +280,8 @@ export async function importAndStoreCMKFromPeer(peerHandle, cmkBytes) {
   }
   const me = getMyHandle();
   const key = cmkIdbKey(peerHandle);
-  const storageKey = await getDeviceStorageKey(me);
+  // L1: per-peer Storage-Key
+  const storageKey = await getDeviceStorageKey(me, peerHandle);
   const enc = await encryptForStorage(storageKey, cmkBytes);
   await idbSet(key, enc);
   void _scheduleBundleSync();

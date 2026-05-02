@@ -1,5 +1,6 @@
 import { json, readJson, param, isUUID } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit, isAcceptedContact, pushToUserDO } from '../auth.js';
+import { verifyWebAuthnAssertion, createWebAuthnChallenge } from '../helpers/webauthnVerify.js';
 
 // ======================================================
 // JWK Validation Helpers (Security-Hardening 2026-05-02)
@@ -393,8 +394,49 @@ export async function handleE2eRoutes(request, env, path, params) {
     }
 
     // ======================================================
+    // INBOX DEVICE REMOVE / CHALLENGE
+    // Schritt 1 des Re-Auth-Flows (M5): erzeugt eine WebAuthn-Challenge
+    // gebunden an (handle, deviceId-zu-revoken). Frontend ruft dann
+    // navigator.credentials.get() mit diesem Challenge.
+    // ======================================================
+    case "/e2e/inbox/remove/challenge": {
+      if (request.method === "POST") {
+        const session = await requireSession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+        const handle = String(session.handle || "").toLowerCase();
+        const rl = await rateLimit(env, `revoke_challenge:${handle}`, 60_000, 10);
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
+
+        const body = await readJson(request);
+        const deviceId = String(body?.deviceId || "").trim();
+        if (!deviceId || deviceId.length < 8 || deviceId.length > 64) {
+          return json(request, { error: "deviceId required" }, 400);
+        }
+
+        // Challenge ist target-deviceId-spezifisch — kann nicht für anderes
+        // Device ge-replayed werden.
+        const challengeKey = `challenge:revoke:${handle}:${deviceId}`;
+        const r = await createWebAuthnChallenge(env, { challengeKey, handle });
+        if (!r.ok) return json(request, { error: r.error }, 400);
+
+        return json(request, {
+          challenge: r.challenge,
+          allowCredentials: r.allowCredentials,
+          rpId: 'app.renex.id',
+        });
+      }
+      break;
+    }
+
+    // ======================================================
     // INBOX DEVICE REMOVE: Entfernt ein eigenes Device aus dem Inbox-Index
     // Triggert device_removed bei Authority-Kontakten → CMK Rotation (Forward Secrecy)
+    //
+    // M5 (2026-05-02): Re-Auth via WebAuthn-Assertion erforderlich.
+    // Schützt gegen Lockout-Attacken durch kompromittiertes Device A das
+    // Device B aus reinem Cookie-Besitz revoken könnte.
+    // Vorher Challenge holen via /e2e/inbox/remove/challenge.
     // ======================================================
     case "/e2e/inbox/remove": {
       if (request.method === "POST") {
@@ -413,6 +455,18 @@ export async function handleE2eRoutes(request, env, path, params) {
         const reason = body.reason === 'self' ? 'self' : 'user';
 
         if (!deviceId) return json(request, { error: "deviceId required" }, 400);
+
+        // ── M5: WebAuthn-Re-Auth Pflicht ──
+        // Challenge ist gebunden an (handle, deviceId) — kein Replay auf anderes Device.
+        const challengeKey = `challenge:revoke:${handle}:${deviceId}`;
+        const verify = await verifyWebAuthnAssertion(env, {
+          challengeKey,
+          handle,
+          assertion: body.assertion,
+        });
+        if (!verify.ok) {
+          return json(request, { error: 'Re-auth required: ' + verify.error, code: 'reauth_failed' }, 403);
+        }
 
         // D1: state='revoked' setzen (Source-of-Truth)
         const now = Date.now();

@@ -1,4 +1,4 @@
 {
-  "version": "2026-05-02-8",
+  "version": "2026-05-02-9",
   "notes": "Bei jedem Deploy hochz\u00e4hlen. Format: YYYY-MM-DD-N. Frontend vergleicht <meta name=renex-version> aus dem HTML mit diesem Wert und zeigt Update-Banner bei Mismatch. NICHT vergessen: beim Bumpen auch die <meta>-Tags in BEIDEN: index.html UND inbox.html synchron aktualisieren."
 }

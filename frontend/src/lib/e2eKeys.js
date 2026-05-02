@@ -95,31 +95,84 @@ export async function initE2EKeys() {
 // ======================================================
 // ECDSA-P256 Signing-Keypair (Sig-Pubkey, für Message-Sigs)
 // ======================================================
+// Security-Hardening (2026-05-02 H1): privateKey wird als non-extractable
+// CryptoKey direkt in IDB gespeichert (statt vorher als JWK exportiert).
+// Bei XSS / IDB-Compromise kann der Key nicht mehr offline exfiltriert werden.
+// Public-Key bleibt JWK (ist eh public, wird beim Inbox-Upload mitgeschickt).
+//
+// Legacy-Format: { pub: pubJwk, priv: privJwk } → wird beim ersten Load migriert
+// New-Format:    { pub: pubJwk, priv: CryptoKey (non-extractable) }
+// ======================================================
+
+function _isLegacySigJwk(priv) {
+  // Legacy: priv war ein exportiertes JWK-Objekt mit kty='EC'.
+  // New: priv ist ein CryptoKey (hat kein kty-Feld, dafür type/algorithm/usages).
+  return priv && typeof priv === 'object' && priv.kty === 'EC';
+}
+
+async function _migrateLegacySigKey(legacyPriv, pubJwk) {
+  // Importiert legacy JWK als NON-EXTRACTABLE — ab diesem Moment ist der Key
+  // nicht mehr exportierbar, selbst aus dem CryptoKey-Objekt.
+  const privKey = await crypto.subtle.importKey(
+    'jwk', legacyPriv,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,        // <- key change: extractable=false
+    ['sign']
+  );
+  // Persistieren im neuen Format. Legacy-JWK wird überschrieben + ist weg.
+  await idbSet(IDB_SIG_KEYPAIR, { pub: pubJwk, priv: privKey });
+  console.log('🔐 Sig-Keypair migrated to non-extractable storage');
+  return privKey;
+}
 
 async function getOrCreateSigningKeyPair() {
   const saved = await idbGet(IDB_SIG_KEYPAIR);
   if (saved?.pub && saved?.priv) {
-    try {
-      const privKey = await crypto.subtle.importKey(
-        'jwk', saved.priv,
-        { name: 'ECDSA', namedCurve: 'P-256' },
-        false, ['sign']
-      );
-      return { privKey, pubJwk: saved.pub };
-    } catch {
-      // Korrupte Keys → neu generieren
+    // Legacy → migrate
+    if (_isLegacySigJwk(saved.priv)) {
+      try {
+        const privKey = await _migrateLegacySigKey(saved.priv, saved.pub);
+        return { privKey, pubJwk: saved.pub };
+      } catch {
+        // Korrupte Keys → fallthrough zu neu generieren
+      }
+    } else {
+      // New format: priv ist CryptoKey (oder structured-clone davon)
+      return { privKey: saved.priv, pubJwk: saved.pub };
     }
   }
 
-  // Neu generieren — extractable=true damit JWK exportierbar (Storage)
+  // Neu generieren — extractable=false. Nur publicKey kann via exportKey
+  // ausgegeben werden (Public-Keys sind per WebCrypto-Spec immer extractable).
   const pair = await crypto.subtle.generateKey(
     { name: 'ECDSA', namedCurve: 'P-256' },
-    true, ['sign', 'verify']
+    false,        // <- privateKey ist non-extractable
+    ['sign', 'verify']
   );
-  const pubJwk  = await crypto.subtle.exportKey('jwk', pair.publicKey);
-  const privJwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
-  await idbSet(IDB_SIG_KEYPAIR, { pub: pubJwk, priv: privJwk });
+  const pubJwk = await crypto.subtle.exportKey('jwk', pair.publicKey);
+  // privateKey wird als CryptoKey gespeichert (nicht exportiert!)
+  await idbSet(IDB_SIG_KEYPAIR, { pub: pubJwk, priv: pair.privateKey });
   return { privKey: pair.privateKey, pubJwk };
+}
+
+/**
+ * Lädt den Signing-Private-Key aus IDB. Wird von messageSig.signMessage genutzt.
+ * Migriert Legacy-JWK-Format on-the-fly zum non-extractable CryptoKey.
+ *
+ * @returns {Promise<CryptoKey|null>} non-extractable ECDSA-P256 PrivateKey
+ *   oder null wenn Keypair noch nicht initialisiert ist.
+ */
+export async function loadSigningPrivKey() {
+  const saved = await idbGet(IDB_SIG_KEYPAIR);
+  if (!saved?.priv || !saved?.pub) return null;
+  if (_isLegacySigJwk(saved.priv)) {
+    try {
+      return await _migrateLegacySigKey(saved.priv, saved.pub);
+    } catch {
+      return null;
+    }
+  }
+  return saved.priv;  // CryptoKey (already non-extractable in new format)
 }
 
 /**

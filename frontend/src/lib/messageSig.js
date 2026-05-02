@@ -13,28 +13,12 @@
 // Spec: docs/MULTI_DEVICE.md §4.2 (Send-Flow, Schritt "Signiere")
 // ======================================================
 
-import { idbGet } from './idb.js';
 import { bytesToB64, b64ToBytes } from './bytes.js';
+import { loadSigningPrivKey } from './e2eKeys.js';
 
-const IDB_SIG_KEYPAIR = 'sig_keypair';
-
-/**
- * Lädt den Signing-Private-Key aus IDB (über e2eKeys.js init persistiert).
- * Returns null wenn Keypair nicht initialisiert ist.
- */
-async function loadSigningPrivKey() {
-  const saved = await idbGet(IDB_SIG_KEYPAIR);
-  if (!saved?.priv) return null;
-  try {
-    return await crypto.subtle.importKey(
-      'jwk', saved.priv,
-      { name: 'ECDSA', namedCurve: 'P-256' },
-      false, ['sign']
-    );
-  } catch {
-    return null;
-  }
-}
+// loadSigningPrivKey wird zentral aus e2eKeys.js bezogen — sie liefert den
+// non-extractable CryptoKey (mit Legacy-JWK-Migration on-the-fly).
+// Spec-Hardening 2026-05-02 H1.
 
 /**
  * Signiert eine Message mit dem Device-Private-Key.

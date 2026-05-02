@@ -155,8 +155,15 @@ export async function handleChatSend(request, env) {
     return json(request, { error: "deviceId invalid" }, 400);
   }
 
-  // Rotation-Index aus Body
-  const rotationIndex = (typeof body.rotationIndex === "number" && Number.isInteger(body.rotationIndex) && body.rotationIndex >= 0)
+  // Rotation-Index aus Body. Upper-Bound 1_000_000 = ca. 1000 Rotationen pro
+  // Tag über 3 Jahre — astronomisch über jedem realen Use-Case.
+  const ROT_MAX = 1_000_000;
+  const rotationIndex = (
+    typeof body.rotationIndex === "number"
+    && Number.isInteger(body.rotationIndex)
+    && body.rotationIndex >= 0
+    && body.rotationIndex <= ROT_MAX
+  )
     ? body.rotationIndex
     : 0;
 

@@ -224,6 +224,10 @@ export async function handleContactRoutes(request, env, path, params) {
           return json(request, { error: "Not authenticated" }, 401);
         }
 
+        // Rate-limit: 30/min reicht für legitime UX, schützt gegen Spam-Mutations
+        const rlOk = await rateLimit(env, `contacts_accept:${session.handle}`, 60_000, 30);
+        if (!rlOk) return json(request, { error: "Too many requests" }, 429);
+
         const me = String(session.handle || "").toLowerCase();
 
         const body = await readJson(request);
@@ -274,6 +278,9 @@ export async function handleContactRoutes(request, env, path, params) {
           return json(request, { error: "Not authenticated" }, 401);
         }
 
+        const rlOk = await rateLimit(env, `contacts_reject:${session.handle}`, 60_000, 30);
+        if (!rlOk) return json(request, { error: "Too many requests" }, 429);
+
         const me = String(session.handle || "").toLowerCase();
 
         const body = await readJson(request);
@@ -316,6 +323,9 @@ export async function handleContactRoutes(request, env, path, params) {
         if (!session) {
           return json(request, { error: "Not authenticated" }, 401);
         }
+
+        const rlOk = await rateLimit(env, `contacts_remove:${session.handle}`, 60_000, 30);
+        if (!rlOk) return json(request, { error: "Too many requests" }, 429);
 
         const me = String(session.handle || "").toLowerCase();
 
@@ -374,6 +384,9 @@ export async function handleContactRoutes(request, env, path, params) {
       if (request.method === "POST") {
         const session = await requireSession(request, env);
         if (!session) return json(request, { error: "Not authenticated" }, 401);
+
+        const rlOk = await rateLimit(env, `contacts_cancel:${session.handle}`, 60_000, 30);
+        if (!rlOk) return json(request, { error: "Too many requests" }, 429);
 
         const me = String(session.handle || "").toLowerCase();
         const body = await readJson(request);

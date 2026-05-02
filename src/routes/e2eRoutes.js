@@ -2,6 +2,40 @@ import { json, readJson, param, isUUID } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit, isAcceptedContact, pushToUserDO } from '../auth.js';
 
 // ======================================================
+// JWK Validation Helpers (Security-Hardening 2026-05-02)
+// Verhindert dass malformed JWKs gespeichert + an Peers gepusht werden,
+// wo importKey() später unerwartetes Verhalten auslösen könnte.
+// ======================================================
+
+const JWK_BASE64URL = /^[A-Za-z0-9_-]+={0,2}$/;
+
+function _isB64UrlValue(v, minLen = 32, maxLen = 96) {
+  return typeof v === "string"
+      && v.length >= minLen && v.length <= maxLen
+      && JWK_BASE64URL.test(v);
+}
+
+/** EC P-256 Public Key für ECDH (Inbox-Key) */
+function _isValidEcdhPubJwk(jwk) {
+  if (!jwk || typeof jwk !== "object") return false;
+  if (jwk.kty !== "EC") return false;
+  if (jwk.crv !== "P-256") return false;
+  if (!_isB64UrlValue(jwk.x)) return false;
+  if (!_isB64UrlValue(jwk.y)) return false;
+  // Public-Key darf KEIN private-component-Feld haben
+  if (jwk.d !== undefined) return false;
+  return true;
+}
+
+/** EC P-256 Public Key für ECDSA (Sig-Verify) */
+function _isValidEcdsaPubJwk(jwk) {
+  // Strukturell identisch zu ECDH, deshalb dieselbe Validation.
+  // key_ops kann ['verify'] enthalten; das wird nicht enforced (manche Browser
+  // exportieren ohne key_ops).
+  return _isValidEcdhPubJwk(jwk);
+}
+
+// ======================================================
 // E2E ROUTES: /chat/keys/*, /e2e/inbox/*, /e2e/cmk/*
 // ======================================================
 export async function handleE2eRoutes(request, env, path, params) {
@@ -19,6 +53,9 @@ export async function handleE2eRoutes(request, env, path, params) {
 
         const handle = session.handle;
 
+        const rlOk = await rateLimit(env, `chat_keys_upload:${handle}`, 60_000, 10);
+        if (!rlOk) return json(request, { error: "Too many requests" }, 429);
+
         // Body
         const body = await readJson(request);
         if (!body) return json(request, { error: "Invalid JSON" }, 400);
@@ -27,6 +64,11 @@ export async function handleE2eRoutes(request, env, path, params) {
 
         if (!deviceId || typeof deviceId !== "string" || deviceId.length > 64) {
           return json(request, { error: "Missing/invalid deviceId" }, 400);
+        }
+
+        // JWK-Schema-Validation (Security-Hardening)
+        if (!_isValidEcdhPubJwk(jwk)) {
+          return json(request, { error: "Invalid jwk (must be EC P-256 public key)" }, 400);
         }
 
         // Store device public key
@@ -60,6 +102,9 @@ export async function handleE2eRoutes(request, env, path, params) {
         if (!session) return json(request, { error: "Not authenticated" }, 401);
 
         const { handle: me } = session;
+
+        const rlOk = await rateLimit(env, `chat_keys_get:${me}`, 60_000, 30);
+        if (!rlOk) return json(request, { error: "Too many requests" }, 429);
 
         const user = (param(params, "user") || "").toLowerCase();
 
@@ -131,8 +176,14 @@ export async function handleE2eRoutes(request, env, path, params) {
 
         const { jwk, deviceId, sigPub, name } = body;
 
-        if (!jwk || typeof jwk !== "object") {
-          return json(request, { error: "Missing jwk" }, 400);
+        // JWK Schema-Validation (Security-Hardening): nur P-256 EC-Public-Keys
+        // werden akzeptiert. Schützt gegen malformed Payloads die später bei
+        // Peers im importKey() unerwartetes Verhalten auslösen könnten.
+        if (!_isValidEcdhPubJwk(jwk)) {
+          return json(request, { error: "Invalid jwk (must be EC P-256 public key)" }, 400);
+        }
+        if (sigPub !== undefined && sigPub !== null && !_isValidEcdsaPubJwk(sigPub)) {
+          return json(request, { error: "Invalid sigPub (must be EC P-256 public key)" }, 400);
         }
 
         if (
@@ -523,6 +574,16 @@ export async function handleE2eRoutes(request, env, path, params) {
         const myDeviceId = (param(params, "deviceId") || "").trim();
         if (!myDeviceId || myDeviceId.length < 8 || myDeviceId.length > 64) {
           return json(request, { payload: null });
+        }
+
+        // Contact-Check (Security-Hardening): nur akzeptierte Kontakte dürfen
+        // sich gegenseitige CMK-Wraps fetchen. Der Wrap selbst ist ECDH-encrypted
+        // für ein bestimmtes Device, aber die *Existenz* eines Wraps bestätigt
+        // ein Kontakt-Verhältnis. Ohne diesen Check kann ein Angreifer das
+        // Friend-Graph enumerieren.
+        if (!session.isGuest) {
+          const ok = await isAcceptedContact(env, me, from);
+          if (!ok) return json(request, { payload: null });
         }
 
         const cid = [me, from].sort().join(":");

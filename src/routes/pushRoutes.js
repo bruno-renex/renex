@@ -30,6 +30,11 @@ export async function handlePushRoutes(request, env, path) {
     // ── SUBSCRIBE ───────────────────────────────────────
     case "/push/subscribe": {
       if (request.method !== "POST") break;
+      // Rate-limit: 10 subscribe-attempts/Stunde reicht — User registriert
+      // typisch 1× pro Device. Schutz gegen Endpoint-Spam.
+      const okRl = await rateLimit(env, `push_subscribe:${me}`, 3600_000, 10);
+      if (!okRl) return json(request, { error: "Too many requests" }, 429);
+
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
 

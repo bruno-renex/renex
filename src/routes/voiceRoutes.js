@@ -397,6 +397,10 @@ export async function handleVoiceRoutes(request, env, path, params) {
     case "/voice/answer": {
       if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
 
+      if (!(await rateLimit(env, `voice_answer:${me}`, 60_000, 30, { failOpen: false }))) {
+        return json(request, { error: "Too many requests" }, 429);
+      }
+
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
@@ -453,6 +457,11 @@ export async function handleVoiceRoutes(request, env, path, params) {
     case "/voice/ice": {
       if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
 
+      // ICE-Candidates können viele sein pro Call (typisch 5-20). 120/min reicht.
+      if (!(await rateLimit(env, `voice_ice:${me}`, 60_000, 120, { failOpen: false }))) {
+        return json(request, { error: "Too many requests" }, 429);
+      }
+
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
@@ -498,6 +507,10 @@ export async function handleVoiceRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/voice/decline": {
       if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
+
+      if (!(await rateLimit(env, `voice_decline:${me}`, 60_000, 30, { failOpen: false }))) {
+        return json(request, { error: "Too many requests" }, 429);
+      }
 
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);

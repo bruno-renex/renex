@@ -155,6 +155,10 @@ export async function handleGroupRoutes(request, env, path, params) {
       if (request.method !== "POST") break;
       if (isGuest) return json(request, { error: "Not authorized" }, 403);
 
+      if (!(await rateLimit(env, `groups_rename:${me}`, 60_000, 10))) {
+        return json(request, { error: "Too many requests" }, 429);
+      }
+
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
@@ -212,6 +216,10 @@ export async function handleGroupRoutes(request, env, path, params) {
     case "/groups/leave": {
       if (request.method !== "POST") break;
       if (isGuest) return json(request, { error: "Not authorized" }, 403);
+
+      if (!(await rateLimit(env, `groups_leave:${me}`, 60_000, 20))) {
+        return json(request, { error: "Too many requests" }, 429);
+      }
 
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
@@ -347,6 +355,9 @@ export async function handleGroupRoutes(request, env, path, params) {
     // ──────────────────────────────────────────────────
     case "/groups/mark-read": {
       if (request.method !== "POST") break;
+      if (!(await rateLimit(env, `groups_mark_read:${me}`, 60_000, 60))) {
+        return json(request, { error: "Too many requests" }, 429);
+      }
       const { groupId, lastReadTs } = await request.json();
       if (!groupId || !lastReadTs) return json(request, { error: "Missing fields" }, 400);
       // Gäste dürfen nur ihre eigene Gruppe markieren

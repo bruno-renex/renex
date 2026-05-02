@@ -69,6 +69,13 @@ export async function signMessage(ivB64, ctB64, sid, epoch) {
  */
 export async function verifyMessageSig(ivB64, ctB64, sid, epoch, sigB64, pubJwk) {
   try {
+    // Schema-Check vor importKey: kty=EC, crv=P-256, x+y vorhanden, kein 'd'.
+    // Verhindert subtle Bugs falls Peer-Cache stale/malicious Daten enthält.
+    if (!pubJwk || typeof pubJwk !== 'object') return false;
+    if (pubJwk.kty !== 'EC' || pubJwk.crv !== 'P-256') return false;
+    if (typeof pubJwk.x !== 'string' || typeof pubJwk.y !== 'string') return false;
+    if (pubJwk.d !== undefined) return false;  // public key only
+
     const pubKey = await crypto.subtle.importKey(
       'jwk', pubJwk,
       { name: 'ECDSA', namedCurve: 'P-256' },

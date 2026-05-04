@@ -24,3 +24,5 @@ backup-*.sql
 frontend/dist/
 frontend/bundle-stats.html
 .vite/
+vite.config.js.timestamp-*.mjs
+*.timestamp-*.mjs

@@ -265,7 +265,15 @@ describe('encryptBundle / decryptBundle', () => {
     const phrase = generatePhrase();
     const salt = randomSalt();
     const key = await deriveMasterKey(phrase, salt);
-    const blob = await encryptBundle({ v: 999, ts: 1, cmks: {}, gsks: {} }, key);
+    // encryptBundle stempelt v auf 1 oder 2 (recovery.js:202) — den Pfad zur
+    // Version-Validation in decryptBundle erreicht man nur, indem der Blob
+    // direkt aus rohem AES-GCM-Ciphertext mit v=999 im Plaintext gebaut wird.
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const plaintext = new TextEncoder().encode(JSON.stringify({ v: 999, ts: 1, cmks: {}, gsks: {} }));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+    const blob = new Uint8Array(iv.length + ct.byteLength);
+    blob.set(iv, 0);
+    blob.set(new Uint8Array(ct), iv.length);
     await expect(decryptBundle(blob, key)).rejects.toThrow('unsupported_bundle_version');
   }, 10_000);
 });

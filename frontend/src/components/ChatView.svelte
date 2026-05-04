@@ -5,9 +5,40 @@
 <script>
   import { chatStore } from '../stores/chat.svelte.js';
   import { i18nStore } from '../stores/i18n.svelte.js';
+  import { userStore } from '../stores/user.svelte.js';
   import ChatHeader from './ChatHeader.svelte';
   import MessageBubble from './MessageBubble.svelte';
   import ChatInput from './ChatInput.svelte';
+
+  let lang_for_delete = $derived(i18nStore.lang);
+  let myHandle = $derived(userStore.myUser);
+
+  async function handleDelete(msg) {
+    const confirmText = lang_for_delete.confirmDelete || 'Diese Nachricht wirklich löschen?';
+    if (!confirm(confirmText)) return;
+    const r = await chatStore.deleteMessage(msg.id);
+    if (!r.ok) {
+      alert((lang_for_delete.deleteFailed || 'Löschen fehlgeschlagen') + (r.error ? ': ' + r.error : ''));
+    }
+  }
+
+  async function handleReact(msg, emoji) {
+    await chatStore.toggleReaction(msg.id, emoji);
+  }
+
+  /**
+   * Springt zur Bubble mit der gegebenen Message-ID, scrollt sie ins Sicht-
+   * feld und blitzt sie kurz auf. Wenn die ID nicht in der aktuellen Liste
+   * existiert (z.B. zu alte Message außerhalb des geladenen Fensters), no-op.
+   */
+  function handleJumpTo(msgId) {
+    if (!messagesEl) return;
+    const target = messagesEl.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('jump-highlight');
+    setTimeout(() => target.classList.remove('jump-highlight'), 1500);
+  }
 
   let lang = $derived(i18nStore.lang);
   let chat = $derived(chatStore.selectedChat);
@@ -76,6 +107,12 @@
             <MessageBubble
               message={item}
               showSender={chat.type === "group"}
+              myHandle={myHandle}
+              onReply={(m) => chatStore.setReplyingTo(m)}
+              onEdit={chat.type === "dm" ? (m) => chatStore.setEditing(m) : null}
+              onDelete={(m) => handleDelete(m)}
+              onReact={(m, e) => handleReact(m, e)}
+              onJumpTo={handleJumpTo}
             />
           {/if}
         {/each}

@@ -1,5 +1,5 @@
 import { json, readJson, param, isUUID } from '../utils.js';
-import { requireSession, requireAnySession, rateLimit, isAcceptedContact, pushToUserDO } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, revokeAllSessions } from '../auth.js';
 import { verifyWebAuthnAssertion, createWebAuthnChallenge } from '../helpers/webauthnVerify.js';
 
 // ======================================================
@@ -490,6 +490,38 @@ export async function handleE2eRoutes(request, env, path, params) {
         ).bind(handle).all();
         const remaining = (remainingRows.results || []).map(r => r.device_id);
         await env.RENEX_KV.put(`e2e:inbox:index:${handle}`, JSON.stringify(remaining));
+
+        // Audit-Fix 2026-05-03: bei reason='user' zusätzlich:
+        // (1) Alle wrapped CMKs für das geleakte deviceId löschen — sonst
+        //     könnte der Angreifer mit valid Session via /e2e/cmk/fetch
+        //     historische Wraps abrufen.
+        // (2) Alle Sessions des Users invalidieren — Sessions sind nicht
+        //     device-bound, also können wir nicht selektiv die des geleakten
+        //     Devices invalidieren. Heavy-handed aber security-clean: User
+        //     muss auf allen Devices neu einloggen (Passkey).
+        // Bei reason='self'/'auto': beides skippen — kein Compromise, UX-OK.
+        if (reason === 'user') {
+          // (1) Wrapped CMKs für jeden Kontakt cleanen
+          try {
+            const contactRows = await env.RENEX_DB.prepare(
+              "SELECT contact_handle FROM contacts WHERE user_handle = ? AND status = 'accepted'"
+            ).bind(handle).all();
+            const contacts = (contactRows.results || []).map(r => r.contact_handle);
+            await Promise.all(contacts.map(c => {
+              const cid = [handle, c].sort().join(":");
+              return env.RENEX_KV.delete(`e2e:cmk:${cid}:${deviceId}`).catch(() => {});
+            }));
+          } catch (e) {
+            console.warn("CMK-wrap cleanup für revoked device fehlgeschlagen (non-fatal):", e?.message);
+          }
+
+          // (2) Alle User-Sessions invalidieren
+          try {
+            await revokeAllSessions(env, handle);
+          } catch (e) {
+            console.warn("revokeAllSessions bei device-revoke fehlgeschlagen (non-fatal):", e?.message);
+          }
+        }
 
         // device_removed-Push NUR bei reason='user' (Sicherheits-Aktion → CMK-Rotation)
         // 'self' = Logout-Cleanup, Device ist nicht kompromittiert → keine Rotation nötig.

@@ -6,13 +6,29 @@
   import { chatStore } from '../stores/chat.svelte.js';
   import { i18nStore } from '../stores/i18n.svelte.js';
   import { voiceStore } from '../stores/voice.svelte.js';
+  import { profileCache } from '../stores/profileCache.svelte.js';
 
   let lang = $derived(i18nStore.lang);
   let chat = $derived(chatStore.selectedChat);
 
+  // Display-Name reaktiv aus profileCache ziehen — überschreibt das beim selectChat
+  // gesetzte chat.name sobald der Fetch zurückkommt. Gruppen behalten ihren Namen.
+  let displayName = $derived.by(() => {
+    if (!chat) return null;
+    if (chat.type === 'dm' && chat.peer) return profileCache.get(chat.peer);
+    return null;
+  });
+
+  let headerName = $derived(
+    chat?.type === 'dm' && chat.peer
+      ? (displayName ? `${displayName} · @${chat.peer}` : `@${chat.peer}`)
+      : (chat?.name || '')
+  );
+
   let initials = $derived.by(() => {
-    if (!chat?.name) return "?";
-    return chat.name
+    const src = displayName || chat?.peer || chat?.name || '';
+    if (!src) return "?";
+    return src
       .replace(/^@/, "")
       .split(/[\s._-]+/)
       .map(p => p[0])
@@ -29,7 +45,7 @@
     if (!chat || chat.type !== "dm") return;
     voiceStore.startCall({
       handle: chat.peer || chat.key,
-      displayName: chat.name?.split(" · ")[0] || null,
+      displayName: displayName || null,
     }, { withVideo: false });
   }
 
@@ -37,7 +53,7 @@
     if (!chat || chat.type !== "dm") return;
     voiceStore.startCall({
       handle: chat.peer || chat.key,
-      displayName: chat.name?.split(" · ")[0] || null,
+      displayName: displayName || null,
     }, { withVideo: true });
   }
 </script>
@@ -64,7 +80,7 @@
     </div>
 
     <div class="info">
-      <div class="name">{chat.name}</div>
+      <div class="name">{headerName}</div>
       <div class="status">
         {#if chat.type === 'group'}
           {chat.memberCount || 0} {lang.members || "Mitglieder"}

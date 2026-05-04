@@ -24,10 +24,13 @@ import {
   EPOCH_MS, dmSessionId,
   deriveSessionKeyBytes, deriveSessionKeyBytesForRotation,
   deriveMessageKey,
-  getRotationMap, findCmkForRotationIndex,
+  getRotationMap, findCmkForRotationIndex, appendToRotationMap,
 } from './session.js';
 import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
 import { signMessage, verifyMessageSig } from './messageSig.js';
+import {
+  ensureMyGSK, getOrRequestPeerGSK, importGskAesKey,
+} from './groupCrypto.js';
 
 // LRU für SK-Bytes pro (sid, rotationIndex) — vermeidet Re-Derivation pro Message
 // Bei vielen Rotation-Indices (Multi-Device + älteren Konversationen) wäre 50 zu klein.
@@ -63,9 +66,17 @@ function _skCacheSet(sid, rotation, sk) {
 const _decryptCache = new Map();
 const DECRYPT_CACHE_MAX = 1000;
 function _decryptCacheGet(msgId) { return _decryptCache.get(msgId) || null; }
-function _decryptCacheSet(msgId, text, verified) {
+/**
+ * Decrypt-Cache für eine einzelne Message invalidieren — z.B. nach einem
+ * Edit-Event, damit ein anschließender Chat-Reload die EDITIERTE Version
+ * decryptet, nicht die gecachte alte.
+ */
+export function invalidateDecryptCacheFor(msgId) {
+  if (msgId) _decryptCache.delete(msgId);
+}
+function _decryptCacheSet(msgId, text, verified, replyText = null) {
   if (_decryptCache.has(msgId)) _decryptCache.delete(msgId);
-  _decryptCache.set(msgId, { text, verified });
+  _decryptCache.set(msgId, { text, verified, replyText });
   if (_decryptCache.size > DECRYPT_CACHE_MAX) {
     _decryptCache.delete(_decryptCache.keys().next().value);
   }
@@ -298,16 +309,17 @@ export async function ensureSecureDmSession(myHandle, peerHandle) {
  * @param {object} msg - normalized message mit ivB64/ctB64 (oder iv_b64/ct_b64), sid, epoch, sig, deviceId, from, ts, rotationIndex
  * @param {string} myHandle
  * @param {string} peerHandle
- * @returns {Promise<{text: string|null, verified: boolean|null}>}
+ * @returns {Promise<{text: string|null, verified: boolean|null, replyText?: string|null}>}
  *   text=null → konnte nicht decryptet werden
  *   verified=true → Sig korrekt, =false → Sig falsch (Tampering!), =null → Sig nicht prüfbar (kein sigPub)
+ *   replyText → Decryptete Reply-Preview, null wenn keine vorhanden / decrypt failed
  */
 export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
   // Cache-Hit — text + verified werden zusammen gespeichert damit ein 2.
   // _decryptAllE2E-Lauf (z.B. nach device_added) den verified-State nicht löscht.
   if (msg.id) {
     const cached = _decryptCacheGet(msg.id);
-    if (cached) return { text: cached.text, verified: cached.verified };
+    if (cached) return { text: cached.text, verified: cached.verified, replyText: cached.replyText, _cached: true };
   }
 
   // Hard-Stop: Peer hat cmk_unavailable gesendet → KV-Fetch sparen.
@@ -333,8 +345,12 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
   // Helper: gegebenes CMK durchprobieren über alle Epoch-Toleranzen
   async function tryDecryptWithCMK(cmkBytes) {
     let cmkForDerive = cmkBytes;
-    if (rotationIndex > 0) {
-      const map = await getRotationMap(sid);
+    // Rotation-Map IMMER konsultieren wenn nicht-leer — auch bei rotation_index=0.
+    // Begründung: nach einer Rotation hat die Map einen archivierten Old-CMK mit
+    // fromIndex=0; Messages aus der Vor-Rotation-Zeit haben rotation_index=0, müssen
+    // aber mit dem ARCHIVIERTEN CMK decrypted werden, nicht mit dem (neuen) Active.
+    const map = await getRotationMap(sid);
+    if (map.length > 0) {
       const historicCmk = findCmkForRotationIndex(map, rotationIndex);
       if (historicCmk) cmkForDerive = historicCmk;
     }
@@ -376,6 +392,20 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
   const { decrypted, ep, skBytes } = attempt;
   _skCacheSet(sid, rotationIndex, skBytes);
 
+  // Reply-Preview entschlüsseln, wenn vorhanden — selbe mk wie Hauptbody.
+  // Fehler hier sind nicht-fatal: Hauptmessage bleibt sichtbar, Preview einfach leer.
+  let replyText = null;
+  const replyIv = msg.replyIv || msg.reply_iv;
+  const replyCt = msg.replyCt || msg.reply_ct;
+  if (typeof replyIv === 'string' && typeof replyCt === 'string') {
+    try {
+      const mkReply = await deriveMessageKey(skBytes, sid, ep);
+      replyText = await e2eDecrypt(mkReply, replyIv, replyCt);
+    } catch {
+      replyText = null;
+    }
+  }
+
   // Sig-Verify — Tampering-Schutz für ALLE Messages außer von DIESEM Device.
   // Eigene Messages von ANDEREN eigenen Devices werden ebenfalls verifiziert
   // (Multi-Device-Selbstkonsistenz: ein kompromittiertes eigenes Device könnte
@@ -413,8 +443,8 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
     }
   }
 
-  if (msg.id) _decryptCacheSet(msg.id, decrypted, verified);
-  return { text: decrypted, verified };
+  if (msg.id) _decryptCacheSet(msg.id, decrypted, verified, replyText);
+  return { text: decrypted, verified, replyText };
 }
 
 // ======================================================
@@ -424,9 +454,14 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
 /**
  * E2E-encryptet + signiert + sendet eine DM-Message via /chat/send.
  *
+ * @param {string} myHandle
+ * @param {string} peerHandle
+ * @param {string} plaintext
+ * @param {{id: string, from: string, text: string}} [replyTo] - Quote-Reply auf eine andere Message.
+ *   `text` wird mit derselben mk wie der Hauptbody verschlüsselt → Preview ist E2E-geschützt.
  * @returns {Promise<{ok: boolean, message?: object, error?: string}>}
  */
-export async function sendEncryptedDm(myHandle, peerHandle, plaintext) {
+export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo = null) {
   try {
     const cmk = await ensureSecureDmSession(myHandle, peerHandle);
     if (!cmk) {
@@ -434,10 +469,21 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext) {
     }
 
     const sid = dmSessionId(myHandle, peerHandle);
-    let skBytes = _skCacheGet(sid, 0);
+
+    // Aktueller rotation_index aus der Map (falls Rotation passiert ist).
+    // Map-Last-Eintrag enthält den höchsten fromIndex = derjenige für den
+    // neue Sends. Bei Initial-Setup ohne Rotation: Map leer → rotIdx=0.
+    const map = await getRotationMap(sid);
+    const rotationIndex = map.length > 0
+      ? map[map.length - 1].fromIndex
+      : 0;
+
+    let skBytes = _skCacheGet(sid, rotationIndex);
     if (!skBytes) {
-      skBytes = await deriveSessionKeyBytes(cmk, sid);
-      _skCacheSet(sid, 0, skBytes);
+      skBytes = rotationIndex > 0
+        ? await deriveSessionKeyBytesForRotation(cmk, sid, rotationIndex)
+        : await deriveSessionKeyBytes(cmk, sid);
+      _skCacheSet(sid, rotationIndex, skBytes);
     }
 
     const epoch = Math.floor(Date.now() / EPOCH_MS);
@@ -447,26 +493,165 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext) {
     const sig = await signMessage(ivB64, ctB64, sid, epoch);
     const deviceId = getDeviceId();
 
-    const r = await apiFetch('/chat/send', {
-      method: 'POST',
-      body: {
-        to: peerHandle,
-        e2e: true,
-        v: 2,
-        sid,
-        epoch,
-        ivB64,
-        ctB64,
-        sig,
-        deviceId,
-      },
-    });
+    const body = {
+      to: peerHandle,
+      e2e: true,
+      v: 2,
+      sid,
+      epoch,
+      ivB64,
+      ctB64,
+      sig,
+      deviceId,
+    };
+
+    // rotation_index nur mitschicken wenn > 0 (Default 0 schadet nicht, aber
+    // unnötiges Body-Field für die Mehrheit der Sends).
+    if (rotationIndex > 0) {
+      body.rotationIndex = rotationIndex;
+    }
+
+    if (replyTo && replyTo.id && typeof replyTo.text === 'string') {
+      // Preview auf max 200 Zeichen kappen — verhindert riesige reply_ct in DB
+      const previewText = replyTo.text.length > 200
+        ? replyTo.text.slice(0, 200) + '…'
+        : replyTo.text;
+      const enc = await e2eEncrypt(mk, previewText);
+      body.replyToId = replyTo.id;
+      body.replyFrom = replyTo.from;
+      body.replyIv = enc.ivB64;
+      body.replyCt = enc.ctB64;
+    }
+
+    const r = await apiFetch('/chat/send', { method: 'POST', body });
 
     if (!r.ok) return { ok: false, error: r.error || 'send_failed' };
     return { ok: true, message: r.data?.message };
   } catch (e) {
     captureException(e, { context: 'sendEncryptedDm', peerHandle });
     return { ok: false, error: e.message || 'unknown' };
+  }
+}
+
+/**
+ * Editiert eine eigene E2E-DM-Message: encrypted neuen Plaintext mit der mk
+ * der Original-Message (gleiche sid + epoch + rotationIndex) und schickt
+ * `{iv, ct}` als JSON-String an `/chat/message/edit`. Das Backend setzt
+ * `edited_message` + `edited_at` und broadcastet `message_edited` an Peer/Group.
+ *
+ * @param {string} myHandle
+ * @param {string} peerHandle
+ * @param {object} originalMsg - Raw-Backend-Message mit sid, epoch, rotation_index
+ * @param {string} msgId
+ * @param {string} newPlaintext
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+export async function editEncryptedDm(myHandle, peerHandle, originalMsg, msgId, newPlaintext) {
+  try {
+    const cmk = await ensureSecureDmSession(myHandle, peerHandle);
+    if (!cmk) return { ok: false, error: 'no_cmk' };
+
+    const sid = originalMsg.sid || dmSessionId(myHandle, peerHandle);
+    const rotationIndex = typeof originalMsg.rotation_index === 'number'
+      ? originalMsg.rotation_index
+      : (typeof originalMsg.rotationIndex === 'number' ? originalMsg.rotationIndex : 0);
+    const epoch = typeof originalMsg.epoch === 'number'
+      ? originalMsg.epoch
+      : Math.floor((originalMsg.ts || Date.now()) / EPOCH_MS);
+
+    let cmkForDerive = cmk;
+    // Map IMMER konsultieren (nicht nur rotation_index>0) — die Original-Message
+    // wurde mit dem CMK encrypted, das damals active war. Nach einer Rotation
+    // ist das in der Map archiviert mit fromIndex=0. Edit muss mit demselben
+    // CMK arbeiten, sonst kann der Empfänger es nicht decrypten.
+    {
+      const map = await getRotationMap(sid);
+      if (map.length > 0) {
+        const historicCmk = findCmkForRotationIndex(map, rotationIndex);
+        if (historicCmk) cmkForDerive = historicCmk;
+      }
+    }
+    let skBytes = _skCacheGet(sid, rotationIndex);
+    if (!skBytes) {
+      skBytes = await deriveSessionKeyBytesForRotation(cmkForDerive, sid, rotationIndex);
+      _skCacheSet(sid, rotationIndex, skBytes);
+    }
+
+    const mk = await deriveMessageKey(skBytes, sid, epoch);
+    const { ivB64, ctB64 } = await e2eEncrypt(mk, newPlaintext);
+    // Neue Sig über (neue iv, neue ct, sid, epoch). Ohne diese würde sig-verify
+    // beim Empfänger fehlschlagen (Sig in DB-Row gehört zur ORIGINAL-iv/ct, nicht
+    // zur editierten) → falsche "Manipulation möglich"-Warnung.
+    const sig = await signMessage(ivB64, ctB64, sid, epoch);
+
+    // Backend erwartet `ciphertext` als JSON-String mit {iv, ct, sig}.
+    // rotationIndex wird optional separat als Body-Field mitgegeben.
+    const ciphertext = JSON.stringify({ iv: ivB64, ct: ctB64, sig });
+    const r = await apiFetch('/chat/message/edit', {
+      method: 'POST',
+      body: { id: msgId, ciphertext, rotationIndex },
+    });
+
+    if (!r.ok) return { ok: false, error: r.error || 'edit_failed' };
+    // Decrypt-Cache invalidieren, damit nachfolgende _decryptOne-Calls nicht den alten Text liefern
+    _decryptCache.delete(msgId);
+    return { ok: true };
+  } catch (e) {
+    captureException(e, { context: 'editEncryptedDm', peerHandle });
+    return { ok: false, error: e.message || 'unknown' };
+  }
+}
+
+/**
+ * Decrypted das ciphertext-Feld eines `message_edited`-Events.
+ * Format: `ciphertext` ist JSON-String `{iv, ct, rotationIndex?}`.
+ *
+ * @returns {Promise<string|null>} Plaintext oder null bei Decrypt-Fehler
+ */
+export async function decryptEditedMessage(event, originalMsg, myHandle, peerHandle) {
+  try {
+    let parsed;
+    try { parsed = JSON.parse(event.ciphertext || ''); } catch { return null; }
+    const ivB64 = parsed.iv;
+    const ctB64 = parsed.ct;
+    if (typeof ivB64 !== 'string' || typeof ctB64 !== 'string') return null;
+
+    const sid = originalMsg.sid || dmSessionId(myHandle, peerHandle);
+    const rotationIndex = typeof event.rotationIndex === 'number'
+      ? event.rotationIndex
+      : (typeof parsed.rotationIndex === 'number' ? parsed.rotationIndex : 0);
+    const epoch = typeof originalMsg.epoch === 'number'
+      ? originalMsg.epoch
+      : Math.floor((originalMsg.ts || Date.now()) / EPOCH_MS);
+
+    let cmk = await getCMKIfExists(peerHandle);
+    if (!cmk) {
+      cmk = await tryFetchAndUnwrapCMK(peerHandle, { storeIfFresh: true });
+      if (!cmk) return null;
+    }
+    let cmkForDerive = cmk;
+    // Map IMMER konsultieren (nicht nur rotation_index>0) — siehe oben in
+    // editEncryptedDm/decryptIncomingMessage.
+    {
+      const map = await getRotationMap(sid);
+      if (map.length > 0) {
+        const historicCmk = findCmkForRotationIndex(map, rotationIndex);
+        if (historicCmk) cmkForDerive = historicCmk;
+      }
+    }
+    const skBytes = await deriveSessionKeyBytesForRotation(cmkForDerive, sid, rotationIndex);
+
+    for (const ep of [epoch, epoch - 1, epoch + 1]) {
+      try {
+        const mk = await deriveMessageKey(skBytes, sid, ep);
+        const text = await e2eDecrypt(mk, ivB64, ctB64);
+        if (typeof text === 'string') return text;
+      } catch {}
+    }
+    return null;
+  } catch (e) {
+    captureException(e, { context: 'decryptEditedMessage', peerHandle });
+    return null;
   }
 }
 
@@ -559,6 +744,134 @@ export async function redistributeCMKToPeer(myHandle, peerHandle, newDeviceInfo 
   } catch (e) {
     captureException(e, { context: 'redistributeCMKToPeer', peerHandle });
     return { ok: false, distributed: 0 };
+  }
+}
+
+/**
+ * Mirror-Rotation auf der Empfänger-Seite: wird gerufen wenn ein Peer ein eigenes
+ * Device als kompromittiert markiert hat (`device_removed` mit `reason='user'`).
+ * Wir spiegeln dann auf unserer Seite die Rotation, die der Peer eben gemacht hat:
+ *
+ *   1. Old local CMK in unsere Rotation-Map archivieren (Pre-Rotation-Messages
+ *      bleiben decryptbar via fromIndex=0)
+ *   2. Neuen CMK aus KV holen — Peer hat ihn dort frisch hochgeladen für unser
+ *      Device. Mit Retry-Backoff gegen KV-Eventual-Consistency (~bis ~60s).
+ *      Bug-13-Schutz wird hier BEWUSST überschrieben: nach einem device_removed
+ *      mit reason='user' WISSEN wir, dass das KV-CMK das neue ist und das lokale
+ *      veraltet ist. Force-Overwrite ist hier korrekt.
+ *   3. Active CMK ersetzen, neuen Eintrag in der Map mit fromIndex = serverMax+1
+ *
+ * Race-Hinweis: Peer's `redistributeCMKToPeer` und unser KV-Read laufen unabhängig.
+ * Cloudflare KV propagiert eventually consistent. Daher Retry mit zunehmenden
+ * Delays.
+ *
+ * @returns {Promise<{ok: boolean, newFromIndex?: number, reason?: string}>}
+ */
+export async function mirrorRotateCMKForPeer(myHandle, peerHandle) {
+  try {
+    const oldCmk = await getCMKIfExists(peerHandle);
+    if (!oldCmk) {
+      // Wir hatten ohnehin keinen lokalen CMK — beim nächsten Decrypt holt
+      // tryFetchAndUnwrapCMK den neuen mit storeIfFresh=true. Nichts zu tun.
+      return { ok: false, reason: 'no_local_cmk' };
+    }
+
+    const sid = dmSessionId(myHandle, peerHandle);
+
+    // 1. Old CMK archivieren (idempotent — appendToRotationMap filtert
+    // gleichen fromIndex). Wenn map leer: fromIndex=0 ist der initiale Slot.
+    const mapBefore = await getRotationMap(sid);
+    if (mapBefore.length === 0) {
+      await appendToRotationMap(sid, 0, oldCmk);
+    }
+
+    // 2. KV-Fetch mit Retry-Backoff. Wir lesen DIREKT die wrapped Payload statt
+    // tryFetchAndUnwrapCMK weil wir explizit überschreiben wollen + wissen wann
+    // wir aufgeben sollen.
+    let newCmk = null;
+    const delays = [0, 1000, 3000, 8000, 20000];  // 0s, 1s, 3s, 8s, 20s = ~32s
+    const cmkEquals = (a, b) =>
+      a && b && a.length === b.length && a.every((v, i) => v === b[i]);
+    // Vorsicht-Check: KV könnte einen STALE wrap halten (z.B. Initial-CMK von
+    // Peer hochgeladen vor irgendwelchen Rotations). Dieser CMK ist evtl. schon
+    // in unserer Map archiviert. Wir akzeptieren NUR CMKs die UNBEKANNT sind —
+    // weder aktiv noch in der Map.
+    const isHistorical = (bytes) =>
+      mapBefore.some(e => {
+        const eb = e?.cmkBytes;
+        if (!Array.isArray(eb) || eb.length !== bytes.length) return false;
+        return bytes.every((b, i) => b === eb[i]);
+      });
+
+    for (const delay of delays) {
+      if (delay > 0) await new Promise(r => setTimeout(r, delay));
+      try {
+        const myDeviceId = getDeviceId();
+        const r = await apiFetch(
+          `/e2e/cmk/fetch?from=${encodeURIComponent(peerHandle)}&deviceId=${encodeURIComponent(myDeviceId)}`
+        );
+        if (!r.ok || !r.data?.payload) continue;
+
+        const { fromDeviceId, ivB64, ctB64 } = r.data.payload;
+        if (!fromDeviceId || !ivB64 || !ctB64) continue;
+
+        let senderJwk = await findSenderDeviceJwk(peerHandle, fromDeviceId);
+        if (!senderJwk) {
+          const devs = await fetchPeerDevices(peerHandle);
+          senderJwk = devs.find(d => d.deviceId === fromDeviceId)?.jwk || null;
+        }
+        if (!senderJwk) continue;
+
+        const fetched = await unwrapCMKFromPeer(ivB64, ctB64, senderJwk);
+        if (!(fetched instanceof Uint8Array) || fetched.length !== 32) continue;
+
+        // Skip wenn fetched == lokal-active → KV hat noch nicht propagiert, retry
+        if (cmkEquals(fetched, oldCmk)) continue;
+
+        // Skip wenn fetched bereits in der Map ist → das ist ein historischer
+        // CMK (z.B. Initial-CMK den Peer mal uploaded hat), KEIN neuer post-
+        // Rotation-CMK. Sonst würde mirror-rotate fälschlich auf das alte CMK
+        // zurückspringen.
+        if (isHistorical(fetched)) continue;
+
+        // Wirklich neu: nicht active, nicht in Map.
+        newCmk = fetched;
+        break;
+      } catch (e) {
+        // Network-Glitch o.ä. — retry-fähig
+      }
+    }
+
+    if (!newCmk) {
+      // Geben auf: Peer hat (noch) keinen neuen CMK hochgeladen, oder KV ist
+      // langsam. Lokale Map hat oldCmk@0 — Decrypt von alten Messages bleibt OK.
+      // Beim nächsten Send des Peers + Decrypt-Fail-Fallback wird KV nochmal
+      // gefragt — siehe decryptIncomingMessage Step 2.
+      return { ok: false, reason: 'kv_no_new_cmk' };
+    }
+
+    // 3. Server-known max rotation_index (für korrekten newFromIndex)
+    let serverMaxIdx = 0;
+    try {
+      const rr = await apiFetch(`/chat/rotation-index?peer=${encodeURIComponent(peerHandle)}`);
+      if (rr.ok && typeof rr.data?.rotationIndex === 'number') {
+        serverMaxIdx = rr.data.rotationIndex;
+      }
+    } catch {}
+
+    const mapAfter = await getRotationMap(sid);
+    const localMaxIdx = mapAfter.reduce((m, e) => Math.max(m, e.fromIndex), 0);
+    const newFromIndex = Math.max(serverMaxIdx, localMaxIdx) + 1;
+
+    // 4. Map updaten + active CMK ersetzen
+    await appendToRotationMap(sid, newFromIndex, newCmk);
+    await importAndStoreCMKFromPeer(peerHandle, newCmk);
+
+    console.log(`🔁 Mirror-Rotation für ${peerHandle}: fromIndex=${newFromIndex}`);
+    return { ok: true, newFromIndex };
+  } catch (e) {
+    captureException(e, { context: 'mirrorRotateCMKForPeer', peerHandle });
+    return { ok: false, reason: 'exception' };
   }
 }
 
@@ -656,4 +969,164 @@ export function notifyCmkArrived(peerHandle) {
 export function clearChatPipelineCaches() {
   _skCache.clear();
   _decryptCache.clear();
+}
+
+// ======================================================
+// Group-E2E (Phase 1C) — Sender-Keys-Pattern
+// ======================================================
+
+/**
+ * E2E-encryptet + sendet eine Gruppen-Nachricht via /chat/send.
+ * - GSK pro Sender (lokal). Encrypt: AES-GCM(GSK, plaintext).
+ * - sid = groupId (UUID), epoch = current time-bucket — analog DM-Sig-Format.
+ *
+ * @param {string} myHandle
+ * @param {string} groupId
+ * @param {string[]} memberHandles - alle aktiven Members (für Distribution beim Erst-Send)
+ * @param {string} plaintext
+ * @param {{id: string, from: string, text: string}} [replyTo]
+ */
+export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plaintext, replyTo = null) {
+  try {
+    const gskBytes = await ensureMyGSK(groupId, memberHandles);
+    if (!gskBytes) return { ok: false, error: 'no_gsk' };
+
+    const gskKey = await importGskAesKey(gskBytes);
+    const epoch = Math.floor(Date.now() / EPOCH_MS);
+    const sid = String(groupId);
+
+    const { ivB64, ctB64 } = await e2eEncrypt(gskKey, plaintext);
+    const sig = await signMessage(ivB64, ctB64, sid, epoch);
+    const deviceId = getDeviceId();
+
+    const body = {
+      to: myHandle,             // Backend braucht gültigen Member; Self-Push wird via pushToGroupMembers excluded.
+      convoId: groupId,
+      e2e: true,
+      v: 2,
+      sid,
+      epoch,
+      ivB64,
+      ctB64,
+      sig,
+      deviceId,
+    };
+
+    if (replyTo && replyTo.id && typeof replyTo.text === 'string') {
+      const previewText = replyTo.text.length > 200
+        ? replyTo.text.slice(0, 200) + '…'
+        : replyTo.text;
+      const enc = await e2eEncrypt(gskKey, previewText);
+      body.replyToId = replyTo.id;
+      body.replyFrom = replyTo.from;
+      body.replyIv = enc.ivB64;
+      body.replyCt = enc.ctB64;
+    }
+
+    const r = await apiFetch('/chat/send', { method: 'POST', body });
+    if (!r.ok) return { ok: false, error: r.error || 'send_failed' };
+    return { ok: true, message: r.data?.message };
+  } catch (e) {
+    captureException(e, { context: 'sendEncryptedGroup', groupId });
+    return { ok: false, error: e.message || 'unknown' };
+  }
+}
+
+/**
+ * Decrypted eine eingehende Group-E2E-Message.
+ * Sender-Keys: lookup GSK des `msg.from`. Wenn fehlt → triggert request_gsk +
+ * gibt {text:null} zurück (Caller retryt mit Backoff).
+ *
+ * @returns {Promise<{text: string|null, verified: boolean|null, replyText?: string|null}>}
+ */
+export async function decryptIncomingGroupMessage(msg, myHandle, groupId) {
+  try {
+    if (msg.id) {
+      const cached = _decryptCacheGet(msg.id);
+      if (cached) return { text: cached.text, verified: cached.verified, replyText: cached.replyText, _cached: true };
+    }
+
+    const ivB64 = msg.ivB64 || msg.iv_b64;
+    const ctB64 = msg.ctB64 || msg.ct_b64;
+    if (typeof ivB64 !== 'string' || typeof ctB64 !== 'string') {
+      return { text: null, verified: null };
+    }
+
+    const senderHandle = String(msg.from || '').toLowerCase();
+    if (!senderHandle) return { text: null, verified: null };
+
+    // Sender-GSK auflösen — eigene Sends mit lokal-cached MyGSK; Peer-Sends mit cached PeerGSK.
+    let gskBytes = null;
+    if (senderHandle === String(myHandle).toLowerCase()) {
+      const { getMyGSK } = await import('./groupCrypto.js');
+      gskBytes = await getMyGSK(groupId);
+    } else {
+      gskBytes = await getOrRequestPeerGSK(groupId, senderHandle);
+    }
+    if (!gskBytes) return { text: null, verified: null };
+
+    const gskKey = await importGskAesKey(gskBytes);
+    const sid = msg.sid || String(groupId);
+    const baseEpoch = typeof msg.epoch === 'number'
+      ? msg.epoch
+      : Math.floor((msg.ts || Date.now()) / EPOCH_MS);
+
+    let decrypted = null;
+    let usedEpoch = baseEpoch;
+    for (const ep of [baseEpoch, baseEpoch - 1, baseEpoch + 1]) {
+      try {
+        decrypted = await e2eDecrypt(gskKey, ivB64, ctB64);
+        if (typeof decrypted === 'string') { usedEpoch = ep; break; }
+      } catch {}
+    }
+    if (typeof decrypted !== 'string') {
+      return { text: null, verified: null };
+    }
+
+    let replyText = null;
+    const replyIv = msg.replyIv || msg.reply_iv;
+    const replyCt = msg.replyCt || msg.reply_ct;
+    if (typeof replyIv === 'string' && typeof replyCt === 'string') {
+      try {
+        replyText = await e2eDecrypt(gskKey, replyIv, replyCt);
+      } catch { replyText = null; }
+    }
+
+    // Sig-Verify (Tampering-Schutz). Skip für Self-Sends von DIESEM Device.
+    let verified = null;
+    const senderDeviceId = msg.deviceId || msg.device_id;
+    const myDeviceId = getDeviceId();
+    const isFromMyCurrentDevice = senderHandle === String(myHandle).toLowerCase() && senderDeviceId === myDeviceId;
+    if (!isFromMyCurrentDevice && senderDeviceId && msg.sig) {
+      let sigPub = await getSigPubForDevice(senderHandle, senderDeviceId);
+      if (!sigPub) {
+        try {
+          const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(senderHandle)}`);
+          if (r.ok && Array.isArray(r.data?.devices)) {
+            await storePeerDevices(senderHandle, r.data.devices);
+            sigPub = r.data.devices.find(d => d.deviceId === senderDeviceId)?.sigPub || null;
+          }
+        } catch {}
+      }
+      if (sigPub) {
+        try {
+          verified = await verifyMessageSig(ivB64, ctB64, sid, usedEpoch, msg.sig, sigPub);
+          if (verified === false) {
+            console.error(
+              `🚨 Group-Sig-Verify FAILED — id=${String(msg.id).slice(0, 8)} ` +
+              `from=${senderHandle} group=${String(groupId).slice(0, 8)}`
+            );
+          }
+        } catch (e) {
+          captureException(e, { context: 'verifyGroupMessageSig', from: senderHandle });
+        }
+      }
+    }
+
+    if (msg.id) _decryptCacheSet(msg.id, decrypted, verified, replyText);
+    return { text: decrypted, verified, replyText };
+  } catch (e) {
+    captureException(e, { context: 'decryptIncomingGroupMessage', groupId });
+    return { text: null, verified: null };
+  }
 }

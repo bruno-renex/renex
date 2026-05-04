@@ -49,16 +49,103 @@
   });
 
   function onAccept() { voiceStore.acceptCall(); }
-  function onDecline() { voiceStore.endCall(); }
+  function onDecline() { voiceStore.declineCall(); }
   function onHangup() { voiceStore.endCall(); }
   function onToggleMute() { voiceStore.toggleMute(); }
   function onToggleVideo() { voiceStore.toggleVideo(); }
   function onToggleSpeaker() { voiceStore.toggleSpeaker(); }
+  function onTogglePtt() { voiceStore.togglePttMode(); }
+
+  let pttMode = $derived(voiceStore.pttMode);
+  let pttPressed = $derived(voiceStore.pttPressed);
+  let isCallActive = $derived(state === 'active' || state === 'connecting');
+
+  // Spacebar-Hold = Push-to-Talk (nur wenn pttMode aktiv + Call läuft).
+  // Repeat-Events bei gehaltener Taste werden gefiltert (event.repeat).
+  // Wir respect-en Eingabefelder: wenn focus auf input/textarea → space normal eintippen.
+  $effect(() => {
+    if (!pttMode || !isCallActive) return;
+    const isTextInput = (el) => {
+      if (!el) return false;
+      const tag = el.tagName?.toLowerCase();
+      return tag === 'input' || tag === 'textarea' || el.isContentEditable;
+    };
+    const onKeyDown = (e) => {
+      if (e.code !== 'Space' || e.repeat) return;
+      if (isTextInput(document.activeElement)) return;
+      e.preventDefault();
+      voiceStore.setPttPressed(true);
+    };
+    const onKeyUp = (e) => {
+      if (e.code !== 'Space') return;
+      if (isTextInput(document.activeElement)) return;
+      e.preventDefault();
+      voiceStore.setPttPressed(false);
+    };
+    // Wenn Tab in Hintergrund geht (visibility) → release auch
+    const onBlur = () => voiceStore.setPttPressed(false);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+      voiceStore.setPttPressed(false);
+    };
+  });
+
+  // Touch-Hold-Handler für mobile (PTT-Button)
+  function onPttHoldDown(e) {
+    e.preventDefault();
+    voiceStore.setPttPressed(true);
+  }
+  function onPttHoldUp(e) {
+    e.preventDefault();
+    voiceStore.setPttPressed(false);
+  }
+
+  // Remote-Audio-Element: voiceStore pushed neuen MediaStream sobald
+  // RTCPeerConnection.ontrack feuert. autoPlay + playsInline für iOS Safari.
+  let remoteAudioEl = $state(null);
+  let _unsubRemote = null;
+
+  $effect(() => {
+    if (!remoteAudioEl) return;
+    _unsubRemote = voiceStore.onRemoteStream((stream) => {
+      // srcObject ist nicht reactive über Svelte — manuell setzen
+      remoteAudioEl.srcObject = stream || null;
+      if (stream) {
+        // Best effort: bei iOS muss play() nach User-Gesture aufgerufen werden.
+        // Da Accept/Start eine User-Action sind, ist der AudioContext schon
+        // unlocked — play() sollte ohne NotAllowedError gehen.
+        const p = remoteAudioEl.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch((e) => console.warn('remote audio play() failed:', e?.message));
+        }
+      }
+    });
+    return () => {
+      if (_unsubRemote) { _unsubRemote(); _unsubRemote = null; }
+    };
+  });
 </script>
 
 {#if isInCall}
+  <!-- Remote-Audio: hidden, autoplay sobald srcObject gesetzt wird.
+       Liegt außerhalb der visible-card damit es auch bei state-Änderungen erhalten bleibt. -->
+  <audio bind:this={remoteAudioEl} autoplay playsinline style="display:none;"></audio>
+
   <div class="voice-overlay" class:incoming-ringing={state === 'ringing' && direction === 'incoming'}>
     <div class="overlay-content">
+      {#if voiceStore.isReconnecting}
+        <div class="reconnect-banner">
+          <span class="reconnect-spinner"></span>
+          {lang.reconnecting || "Verbindung wird wiederhergestellt…"}
+        </div>
+      {:else if voiceStore.errorMsg}
+        <div class="error-banner">⚠️ {voiceStore.errorMsg}</div>
+      {/if}
       <!-- Peer Info -->
       <div class="peer-info">
         <div class="peer-avatar pulse-{state === 'ringing' ? 'on' : 'off'}">
@@ -136,6 +223,28 @@
             </svg>
           </button>
 
+          <button
+            class="btn-control btn-secondary"
+            class:on={pttMode}
+            onclick={onTogglePtt}
+            aria-label={lang.pttToggle || 'Push-to-Talk Modus'}
+            title={lang.pttToggle || 'Push-to-Talk Modus'}
+          >
+            {#if pttMode}
+              <!-- Lock-Closed (PTT aktiv = nur sprechen wenn gehalten) -->
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            {:else}
+              <!-- Lock-Open (Open-Mic) -->
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+              </svg>
+            {/if}
+          </button>
+
           <button class="btn-control btn-decline" onclick={onHangup} aria-label="Hangup">
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" transform="rotate(135 12 12)"/>
@@ -150,11 +259,114 @@
           </button>
         {/if}
       </div>
+
+      <!-- Push-to-Talk-Hold-Banner: nur sichtbar wenn PTT aktiv im laufenden Call.
+           Spacebar gehalten ODER Touch auf den Banner gehalten = Mic an. -->
+      {#if pttMode && isCallActive}
+        <button
+          class="ptt-hold"
+          class:speaking={pttPressed}
+          onpointerdown={onPttHoldDown}
+          onpointerup={onPttHoldUp}
+          onpointerleave={onPttHoldUp}
+          oncontextmenu={(e) => e.preventDefault()}
+          aria-label={lang.pttHold || 'Halten zum Sprechen'}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+          </svg>
+          <span class="ptt-hold-label">
+            {pttPressed
+              ? (lang.pttSpeaking || 'Aufnahme läuft…')
+              : (lang.pttHold || 'Halten zum Sprechen (Leertaste)')}
+          </span>
+        </button>
+      {/if}
     </div>
   </div>
 {/if}
 
 <style>
+  .error-banner {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid var(--status-error, #ef4444);
+    color: var(--status-error, #ef4444);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .reconnect-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid var(--status-warning, #f59e0b);
+    color: var(--status-warning, #f59e0b);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+
+  .reconnect-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: reconnect-spin 0.8s linear infinite;
+  }
+
+  @keyframes reconnect-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Push-to-Talk Hold-Banner: groß, klar, drückbar */
+  .ptt-hold {
+    margin: 24px auto 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 80%;
+    max-width: 320px;
+    min-height: 56px;
+    padding: 14px 20px;
+    border-radius: 28px;
+    border: 2px solid var(--text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;  /* iOS Safari long-press hijack vermeiden */
+    transition: background 0.1s, border-color 0.1s, color 0.1s, transform 0.05s;
+  }
+
+  .ptt-hold:hover {
+    border-color: var(--text-secondary);
+  }
+
+  .ptt-hold:active,
+  .ptt-hold.speaking {
+    background: var(--accent-voice);
+    border-color: var(--accent-voice);
+    color: #07070a;
+    transform: scale(0.98);
+    box-shadow: 0 0 24px var(--accent-voice);
+  }
+
+  .ptt-hold-label {
+    font-feature-settings: "tnum";
+  }
   .voice-overlay {
     position: fixed;
     inset: 0;

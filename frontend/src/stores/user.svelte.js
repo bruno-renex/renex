@@ -12,6 +12,7 @@
 
 import { get, set, remove } from '../lib/storage.js';
 import { setUser as sentrySetUser } from '../lib/sentry.js';
+import { profileCache } from './profileCache.svelte.js';
 
 // Reactive State
 let _myUser = $state(get("my_user") || null);
@@ -51,11 +52,15 @@ export const userStore = {
     _isGuest = !!h && h.startsWith("guest_");
     set("my_user", h);
     sentrySetUser(h ? { id: h } : null);
+    // Eigenen DN im profileCache vor-priming, damit eigene Bubbles + Group-Sender-Labels
+    // sofort den Namen zeigen statt @handle bis Lazy-Fetch zurückkommt.
+    if (h) profileCache.set(h, _displayName);
   },
 
   setDisplayName(name) {
     _displayName = name || null;
     set("display_name", name || null);
+    if (_myUser) profileCache.set(_myUser, _displayName);
   },
 
   clear() {
@@ -65,6 +70,8 @@ export const userStore = {
     remove("my_user");
     remove("display_name");
     sentrySetUser(null);
+    // Logout: anderer User auf demselben Browser bekäme sonst stale Profile.
+    profileCache.clear();
     // Note: device_id:<handle>-Einträge bleiben — pro User stabil, damit
     // re-login desselben Users denselben deviceId behält. Nur user-handle wird
     // gecleart, nicht die per-user deviceIds.

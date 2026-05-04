@@ -18,8 +18,8 @@ set -e
 
 APP_DIR="/Users/brunohochstrasser/Library/Mobile Documents/com~apple~CloudDocs/16.03. renex Kopie/app.renex"
 DIST="$APP_DIR/frontend/dist"
-LEGACY="$APP_DIR/renex-legacy"  # Static Assets (sw.js, icons, manifest, _headers, etc.)
-PAGES_PROJECT="renex-static"     # Production Pages-Project (gleiche wie Vanilla nutzte)
+PUBLIC="$APP_DIR/frontend/public"  # Vite kopiert public/ automatisch in dist/ — Source-of-Truth für Static Assets
+PAGES_PROJECT="renex-static"        # Production Pages-Project
 
 cd "$APP_DIR"
 
@@ -30,8 +30,8 @@ if [ "$1" != "--skip-tests" ]; then
 fi
 
 # ── 2. Version berechnen ───────────────────────────
-# Quelle der Wahrheit: legacy/version.json (für Backwards-Compat mit alten PWAs)
-VERSION_FILE="$LEGACY/version.json"
+# Quelle der Wahrheit: frontend/public/version.json (Vite-public → wird auto in dist kopiert)
+VERSION_FILE="$PUBLIC/version.json"
 CURRENT=$(python3 -c "
 import json
 d = json.load(open('$VERSION_FILE'))
@@ -77,29 +77,12 @@ if [ ! -d "$DIST" ]; then
   exit 1
 fi
 
-# ── 5. Static Assets aus /renex-legacy nach dist kopieren ──
-# Svelte-Build erzeugt nur HTML/JS/CSS. Static Assets wie sw.js, icons,
-# manifest.json, _headers, _redirects bleiben aus dem Legacy-Verzeichnis.
-echo ""
-echo "▶ Static Assets aus /renex-legacy kopieren…"
-for f in sw.js manifest.json _headers _redirects version.json colors.css renex-logo.svg; do
-  [ -f "$LEGACY/$f" ] && cp "$LEGACY/$f" "$DIST/$f"
-done
-[ -d "$LEGACY/icons" ] && cp -r "$LEGACY/icons" "$DIST/icons"
-
-# Auch Static-Pages (impressum, datenschutz, agb, feedback, etc.) kopieren
-for d in impressum datenschutz agb feedback chat join terms privacy; do
-  [ -d "$LEGACY/$d" ] && cp -r "$LEGACY/$d" "$DIST/$d"
-done
-
-# version.json mit neuer Version
-python3 -c "
-import json
-path = '$DIST/version.json'
-d = json.load(open(path))
-d['version'] = '$NEW'
-open(path, 'w').write(json.dumps(d, indent=2) + '\n')
-"
+# ── 5. Static Assets ───────────────────────────────
+# Vite kopiert frontend/public/ automatisch in dist/ (sw.js, manifest.json,
+# _headers, _redirects, version.json, icons/, sub-pages/). Kein manueller cp
+# mehr nötig — Source-of-Truth ist frontend/public/.
+# version.json wurde oben (Schritt 3) bereits in $PUBLIC aktualisiert,
+# Vite hat im Build die aktuelle Version nach $DIST/version.json kopiert.
 
 # ── 6. Deploy Backend ──────────────────────────────
 echo ""
@@ -115,4 +98,4 @@ echo ""
 echo "✅ Deploy fertig! Version $NEW ist live."
 echo "   → Frontend: https://app.renex.id (Svelte)"
 echo "   → Backend:  https://api.renex.id"
-echo "   → Vanilla-Archive: /renex-legacy/ (rollback siehe /renex-legacy/_DEPRECATED.md)"
+echo "   → Static Assets: frontend/public/  (Vanilla-Code-Reference: /renex-legacy/)"

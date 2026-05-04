@@ -50,6 +50,14 @@ export default {
   tabChats:             "Kontakte & Chats",
   tabGroups:            "Gruppen",
   tabContacts:          "Kontakte",
+  tabVoice:             "Anrufe",
+
+  // ── Voice / Calls ────────────────────────────────────
+  callIncoming:         "Eingehender Anruf…",
+  callRinging:          "Klingelt…",
+  callConnecting:       "Verbindet…",
+  callEnded:            "Beendet",
+  callMissed:           "Verpasst",
 
   // ── Gruppen ──────────────────────────────────────────
   groupNamePlaceholder: "Gruppenname",
@@ -184,6 +192,16 @@ export default {
   messagePlaceholder:   "Nachricht…",
   sendBtn:              "Senden",
   newMessagesSuffix:    " neue Nachrichten ↓",
+  replyingTo:           "Antwort an",
+  cancel:               "Abbrechen",
+  editingMessage:       "Nachricht bearbeiten",
+  confirmDelete:        "Diese Nachricht wirklich löschen?",
+  deleteFailed:         "Löschen fehlgeschlagen",
+  editFailed:           "Bearbeiten fehlgeschlagen",
+  pttToggle:            "Push-to-Talk Modus",
+  pttHold:              "Halten zum Sprechen (Leertaste)",
+  pttSpeaking:          "Aufnahme läuft…",
+  reconnecting:         "Verbindung wird wiederhergestellt…",
 
   // ── chat.js (dynamic strings) ────────────────────────
   noChatPartner:      "Kein Chat-Partner gewählt",
@@ -298,6 +316,24 @@ export default {
   joinErrorTitle:          "Fehler beim Beitreten",
   joinErrorRetry:          "Bitte erneut versuchen.",
   networkErrorRetry:       "Netzwerkfehler. Bitte erneut versuchen.",
+
+  // ── Geräte-Verwaltung (Multi-Device) ──────────────────
+  devicesLabel:            "Geräte",
+  devicesTitle:            "Geräte verwalten",
+  devicesActive:           "Geräte aktiv",
+  devicesEmpty:            "Keine aktiven Geräte.",
+  devicesLoadFailed:       "Geräte konnten nicht geladen werden",
+  devicesUpgradeHint:      "Upgrade auf Pro für 10 Geräte",
+  deviceCurrent:           "AKTUELL",
+  deviceUnnamed:           "Unbenanntes Gerät",
+  deviceLastSeen:          "zuletzt",
+  deviceSyncing:           "synchronisiert…",
+  deviceLogoutBtn:         "Sitzung beenden",
+  deviceRevokeBtn:         "Entfernen",
+  deviceLogoutConfirm:     "Diese Sitzung wirklich beenden?",
+  deviceRevokeConfirm:     "Gerät entfernen? Diese Aktion ist endgültig. Alle Konversationen werden mit neuen Schlüsseln re-verschlüsselt.",
+  deviceRevokeFailed:      "Entfernen fehlgeschlagen",
+  deviceAutoRevokeHint:    "Geräte werden nach 30 Tagen Inaktivität automatisch entfernt.",
 
   // ── Passkey-Verwaltung ────────────────────────────────
   passkeysLabel:           "Passkeys",

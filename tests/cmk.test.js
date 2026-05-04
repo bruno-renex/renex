@@ -40,7 +40,9 @@ async function setupUserAndKeys(handle = 'alice') {
     };
   }
   globalThis.localStorage.setItem('my_user', handle);
-  globalThis.localStorage.setItem('device_id', 'dev_test_' + handle);
+  // Per-User-skoped Storage-Key (siehe e2eKeys.js getDeviceId — Bug 13 Fix).
+  // Legacy `device_id` würde ignoriert sobald `my_user` gesetzt ist.
+  globalThis.localStorage.setItem(`device_id:${handle.toLowerCase()}`, 'dev_test_' + handle);
 
   // ECDH-Keypair generieren + in IDB ablegen (analog zu initE2EKeys)
   const pair = await crypto.subtle.generateKey(

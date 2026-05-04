@@ -13,6 +13,7 @@
 
 import { get, set } from '../lib/storage.js';
 import { apiFetch } from '../lib/api.js';
+import { profileCache } from './profileCache.svelte.js';
 
 const SECTIONS = ["chats", "groups", "voice"];
 
@@ -55,10 +56,12 @@ export const inboxStore = {
   get filteredContacts() {
     if (!_searchChats) return _contacts;
     const q = _searchChats.toLowerCase();
-    return _contacts.filter(c =>
-      (c.handle || "").toLowerCase().includes(q) ||
-      (c.displayName || "").toLowerCase().includes(q)
-    );
+    return _contacts.filter(c => {
+      const handle = (c.handle || "").toLowerCase();
+      // displayName aus profileCache ziehen (falls schon gefetcht) — sonst nur Handle-Match.
+      const dn = (profileCache.get(c.handle) || "").toLowerCase();
+      return handle.includes(q) || dn.includes(q);
+    });
   },
 
   get filteredGroups() {
@@ -104,6 +107,15 @@ export const inboxStore = {
         _contacts = accepted;
         _pendingIn = pendingIn;
         _pendingOut = pendingOut;
+
+        // Display-Names für alle Kontakte (accepted + pending) im Hintergrund laden.
+        // Reaktiv: sobald ein DN ankommt, re-rendert die Liste automatisch via profileCache.
+        const allHandles = [
+          ...accepted.map(x => x.handle),
+          ...pendingIn.map(x => x.handle),
+          ...pendingOut.map(x => x.handle),
+        ];
+        profileCache.prefetch(allHandles);
       }
     } finally {
       _isLoading = false;

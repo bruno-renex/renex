@@ -21,10 +21,18 @@
   import { heartbeat } from './lib/multidevice.js';
   import { getRecoveryStatus } from './lib/recovery.js';
   import { uploadInboxKeyIfNeeded } from './lib/e2eKeys.js';
-  import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded } from './lib/chatPipeline.js';
+  import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer } from './lib/chatPipeline.js';
   import { bootstrapBundleRestore } from './lib/cmkBundleSync.js';
   import { clearCachedMasterKey } from './lib/masterKey.js';
-  import { getCMKIfExists } from './lib/cmk.js';
+  import { getCMKIfExists, rotateCMKForPeer } from './lib/cmk.js';
+  import {
+    handleIncomingGSKMessage, handleIncomingRequestGSK,
+    getMyGSK, getPeerGSK, storeMyGSKForOwnDevices, sendMyGSKToMember,
+    rotateMyGSK, deleteAllGSKsForGroup, deletePeerGSK,
+    fetchMyGSKFromKV,
+  } from './lib/groupCrypto.js';
+  import { captureException } from './lib/sentry.js';
+  import { apiFetch } from './lib/api.js';
   import LoginModal from './components/LoginModal.svelte';
   import IconStrip from './components/IconStrip.svelte';
   import InboxList from './components/InboxList.svelte';
@@ -36,6 +44,19 @@
 
   let sessionState = $derived(sessionStore.state);
   let myUser = $derived(userStore.myUser);
+
+  // Debug-Hook: macht die wichtigsten Stores + Crypto-Funktionen für die Browser-
+  // Console verfügbar. Nicht für reguläre App-Logik nutzen — nur für manuelle Tests
+  // (z.B. CMK-Rotation triggern ohne echtes device_removed-Event).
+  // Production-OK: kein PII, keine Secrets. Funktionen prüfen Auth via apiFetch.
+  if (typeof window !== 'undefined') {
+    window.__renex = {
+      stores: { userStore, inboxStore, chatStore, voiceStore, sessionStore },
+      cmk: { rotateCMKForPeer, getCMKIfExists, redistributeCMKToPeer, mirrorRotateCMKForPeer },
+      gsk: { getMyGSK, getPeerGSK, rotateMyGSK, fetchMyGSKFromKV, deleteAllGSKsForGroup },
+      sync: { bootstrapBundleRestore },
+    };
+  }
 
   // Show/hide logic
   let showApp     = $derived(!!myUser && (sessionState === 'authed' || sessionState === 'guest' || sessionState === 'checking' || sessionState === 'idle'));
@@ -114,11 +135,99 @@
           }
           return;
         }
+        if (msg.type === "message_deleted") {
+          chatStore.handleMessageDeleted(msg);
+          return;
+        }
+        if (msg.type === "message_edited") {
+          void chatStore.handleMessageEdited(msg);
+          return;
+        }
+        if (msg.type === "reaction_updated") {
+          chatStore.handleReactionUpdated(msg);
+          return;
+        }
+        // Group-E2E (Phase 1C): GSK-Distribution + Anfrage-Pattern.
+        if (msg.type === "gsk") {
+          void handleIncomingGSKMessage(msg).then(stored => {
+            if (stored) {
+              console.log(`🔑 GSK von ${msg.from} für group=${String(msg.groupId || msg.convoId || '').slice(0,8)} gespeichert`);
+              // Gerade arrivierte GSK könnte einen anstehenden Group-Decrypt entlocken.
+              // Decrypt-Loop läuft per setTimeout-Backoff und greift beim nächsten Tick.
+            }
+          });
+          return;
+        }
+        if (msg.type === "request_gsk") {
+          void handleIncomingRequestGSK(msg).then(ok => {
+            if (ok) console.log(`📨 request_gsk von ${msg.from} → eigene GSK gesendet`);
+          });
+          return;
+        }
         if (!msg.type || msg.type === "message") {
           chatStore.receiveMessage(msg);
         }
       })
     );
+
+    // Group-Membership-Events: Cache invalidieren + GSK-Rotation triggern.
+    _wsUnsubs.push(
+      ws.on("group_member_joined", (msg) => {
+        console.log("👥 group_member_joined", msg);
+        const me = userStore.myUser;
+        const groupId = msg.groupId;
+        if (!me || !groupId) return;
+        chatStore.invalidateGroupMembers(groupId);
+        // Wenn ICH der Joinende bin: nichts zu tun (eigene GSK kommt via /e2e/group-gsk/fetch
+        // beim ersten Send, oder via request_gsk wenn ich Peer-GSKs brauche).
+        if (msg.handle && msg.handle.toLowerCase() === me) return;
+
+        // Andernfalls: ich bin schon Member → meine eigene GSK an den neuen Member
+        // senden, damit er meine zukünftigen Sends (und alte mit gleichem GSK) lesen kann.
+        void (async () => {
+          const myGsk = await getMyGSK(groupId);
+          if (!myGsk) return;  // Ich habe noch nie in der Gruppe gesendet → nichts zu verteilen.
+          await sendMyGSKToMember(groupId, myGsk, msg.handle.toLowerCase());
+        })();
+      })
+    );
+
+    const memberLeaveHandler = (msg) => {
+      console.log("👥 member-leave", msg);
+      const me = userStore.myUser;
+      const groupId = msg.groupId;
+      const leaver = (msg.handle || '').toLowerCase();
+      if (!me || !groupId || !leaver) return;
+      chatStore.invalidateGroupMembers(groupId);
+
+      // Wenn ICH der Leaver bin: alle GSKs für diese Gruppe lokal löschen.
+      if (leaver === me) {
+        void deleteAllGSKsForGroup(groupId);
+        return;
+      }
+
+      // Sonst: Leaver-GSK lokal droppen (sein lokal-cached Wert ist obsolet) +
+      // EIGENE GSK rotieren, damit der Leaver zukünftige Messages nicht mehr lesen
+      // kann (er hat den alten Wert noch lokal). Verteilen an alle verbleibenden Members.
+      void (async () => {
+        await deletePeerGSK(groupId, leaver);
+        const myGsk = await getMyGSK(groupId);
+        if (!myGsk) return;  // Nie in der Gruppe gesendet → keine Rotation nötig.
+
+        try {
+          const r = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
+          if (!r.ok || !Array.isArray(r.data?.members)) return;
+          const members = r.data.members
+            .map(m => String(m.member_handle || '').toLowerCase())
+            .filter(h => h && h !== me);
+          await rotateMyGSK(groupId, members);
+        } catch (e) {
+          captureException(e, { context: 'rotate-on-member-leave', groupId });
+        }
+      })();
+    };
+    _wsUnsubs.push(ws.on("group_member_left", memberLeaveHandler));
+    _wsUnsubs.push(ws.on("group_member_removed", memberLeaveHandler));
 
     _wsUnsubs.push(
       ws.on("device_added", (msg) => {
@@ -137,6 +246,21 @@
           if (contacts.length > 0) {
             void redistributeCMKsForSelfDeviceAdded(me, contacts, newDeviceInfo);
           }
+          // Group-GSK: für jede Gruppe in der ich Member bin, eigene GSK
+          // (falls vorhanden) für das neue eigene Device per KV ablegen.
+          // Backend-Endpoint /e2e/group-gsk/store wrapped neu auf alle eigenen
+          // Devices, inklusive des neu hinzugekommenen.
+          void (async () => {
+            const groups = inboxStore.groups || [];
+            for (const g of groups) {
+              try {
+                const gsk = await getMyGSK(g.id);
+                if (gsk) await storeMyGSKForOwnDevices(g.id, gsk);
+              } catch (e) {
+                captureException(e, { context: 'gsk-self-device-add', groupId: g.id });
+              }
+            }
+          })();
         } else if (msg.from) {
           void redistributeCMKToPeer(me, msg.from, newDeviceInfo);
         }
@@ -146,9 +270,63 @@
     _wsUnsubs.push(
       ws.on("device_removed", (msg) => {
         console.log("🗑️ device_removed", msg);
-        // Bei Self-Revoke des aktuellen Devices: Logout
+        // Bei Self-Revoke des AKTUELLEN Devices: Logout (wir sind das gerade
+        // entfernte Device — nichts mehr zu rotieren, einfach raus).
         if (msg.deviceId === userStore.deviceId && msg.reason !== 'self') {
           sessionStore.logout();
+          return;
+        }
+
+        // CMK-Rotation bei `reason='user'` (echtes Security-Event, Memory §4.4):
+        // Das geleakte Device hatte alle CMKs lokal — ALLE zukünftigen Messages
+        // müssen mit neuen CMKs encrypted werden. Alte Messages bleiben lesbar
+        // weil die alten CMKs in die rotation map archiviert werden.
+        // Bei `self` (Logout-Cleanup) und `auto` (30d Inaktivität): KEINE Rotation
+        // — Forward-Secrecy nur bei echtem Security-Event, sonst Cron-Storm.
+        if (msg.reason !== 'user') return;
+
+        const me = userStore.myUser;
+        if (!me) return;
+
+        if (msg.from === me) {
+          // ICH habe ein eigenes Device als kompromittiert markiert (von einem
+          // ANDEREN meiner Devices — sonst wäre der Logout-Pfad oben aktiv
+          // gewesen). Für JEDE DM einen neuen CMK generieren + redistributen.
+          // Achtung: das Removed Device ist bereits aus der KV/D1 entfernt
+          // (Backend-side); wrapCMKForInboxDevices nimmt nur noch aktive Devices
+          // → der alte CMK ist auf dem geleakten Device tot.
+          void (async () => {
+            const contacts = (inboxStore.contacts || []).map(c => c.handle).filter(Boolean);
+            console.log(`🔁 Self-Revoke: rotiere CMK für ${contacts.length} DMs`);
+            for (const peer of contacts) {
+              try {
+                const r = await rotateCMKForPeer(me, peer);
+                if (r?.ok) {
+                  await redistributeCMKToPeer(me, peer);
+                }
+              } catch (e) {
+                captureException(e, { context: 'rotate-on-self-revoke', peer });
+              }
+            }
+          })();
+        } else if (msg.from && msg.from !== me) {
+          // Peer hat ein eigenes Device als kompromittiert markiert. Wir spiegeln
+          // die Rotation lokal: Old CMK in unsere Map archivieren, neuen CMK aus
+          // KV holen (Peer hat ihn frisch hochgeladen für unser Device), active
+          // ersetzen. Das stellt Forward-Secrecy symmetric auch auf unserer Seite
+          // her — sonst würden zukünftige Sends mit dem alten CMK encrypted, das
+          // das geleakte Device kannte.
+          void (async () => {
+            console.log(`🔁 Peer-Revoke (${msg.from}): mirror-rotation triggern`);
+            try {
+              const r = await mirrorRotateCMKForPeer(me, msg.from);
+              if (!r.ok) {
+                console.warn(`Mirror-Rotation für ${msg.from} skipped: ${r.reason}`);
+              }
+            } catch (e) {
+              captureException(e, { context: 'mirror-rotate-on-peer-revoke', peer: msg.from });
+            }
+          })();
         }
       })
     );
@@ -169,6 +347,33 @@
         })
       );
     }
+
+    // ── Voice/WebRTC-Signaling-Events ────────────────────
+    // Backend pushed bei /voice/ring|answer|ice|hangup|decline|cancel.
+    // voiceStore orchestriert RTCPeerConnection.
+    _wsUnsubs.push(ws.on("voice:ring", (msg) => {
+      console.log("📞 voice:ring", msg.from, msg.callId);
+      void voiceStore.receiveCall(msg);
+    }));
+    _wsUnsubs.push(ws.on("voice:answer", (msg) => {
+      console.log("📞 voice:answer", msg.callId);
+      void voiceStore._handleAnswer(msg);
+    }));
+    _wsUnsubs.push(ws.on("voice:ice", (msg) => {
+      void voiceStore._handleIce(msg);
+    }));
+    _wsUnsubs.push(ws.on("voice:hangup", (msg) => {
+      console.log("📞 voice:hangup", msg.callId);
+      void voiceStore._handlePeerEnd(msg, "hangup");
+    }));
+    _wsUnsubs.push(ws.on("voice:decline", (msg) => {
+      console.log("📞 voice:decline", msg.callId);
+      void voiceStore._handlePeerEnd(msg, "decline");
+    }));
+    _wsUnsubs.push(ws.on("voice:cancel", (msg) => {
+      console.log("📞 voice:cancel", msg.callId);
+      void voiceStore._handlePeerEnd(msg, "cancel");
+    }));
 
     // E2E Inbox-Key Upload + Heartbeat — sequenziell aber non-blocking
     // (Phase 1A.6 Migration aus renex-legacy/js/e2e.js).

@@ -7,6 +7,7 @@
   import { i18nStore } from '../stores/i18n.svelte.js';
   import { chatStore } from '../stores/chat.svelte.js';
   import { voiceStore } from '../stores/voice.svelte.js';
+  import { profileCache } from '../stores/profileCache.svelte.js';
   import ContactItem from './ContactItem.svelte';
   import PushBanner from './PushBanner.svelte';
   import AddContactModal from './AddContactModal.svelte';
@@ -37,11 +38,14 @@
     : null);
 
   function selectChat(contact) {
+    // Display-Name aus profileCache (synchron). Falls noch nicht geladen → Background-Fetch
+    // läuft schon via inboxStore.loadContacts; ChatHeader rendert reaktiv neu.
+    const dn = profileCache.get(contact.handle);
     chatStore.selectChat({
       type: "dm",
       key: contact.handle,
       peer: contact.handle,
-      name: contact.displayName ? `${contact.displayName} · @${contact.handle}` : `@${contact.handle}`,
+      name: dn ? `${dn} · @${contact.handle}` : `@${contact.handle}`,
       isOnline: contact.isOnline,
     });
   }
@@ -120,11 +124,12 @@
         {:else}
           <ul>
             {#each chats as c (c.handle)}
+              {@const dn = profileCache.get(c.handle)}
               <li>
                 <ContactItem
-                  name={c.displayName ? `${c.displayName} · @${c.handle}` : `@${c.handle}`}
+                  name={dn ? `${dn} · @${c.handle}` : `@${c.handle}`}
                   subtitle={c.lastMessage || ""}
-                  initials={c.handle?.slice(0, 2).toUpperCase()}
+                  initials={(dn || c.handle || '').slice(0, 2).toUpperCase()}
                   unreadCount={inboxStore.unreadFor(c.handle)}
                   isOnline={c.isOnline}
                   isActive={selectedKey === "dm:" + c.handle}
@@ -230,7 +235,7 @@
                   {/if}
                 </div>
                 <div class="call-info">
-                  <div class="call-name">{call.peer.displayName || call.peer.handle}</div>
+                  <div class="call-name">{call.peer.displayName || profileCache.get(call.peer.handle) || call.peer.handle}</div>
                   <div class="call-meta">
                     {#if call.missed}
                       {lang.callMissed || "Verpasst"}

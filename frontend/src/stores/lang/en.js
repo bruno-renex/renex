@@ -50,6 +50,14 @@ export default {
   tabChats:             "Contacts & Chats",
   tabGroups:            "Groups",
   tabContacts:          "Contacts",
+  tabVoice:             "Calls",
+
+  // ── Voice / Calls ────────────────────────────────────
+  callIncoming:         "Incoming call…",
+  callRinging:          "Ringing…",
+  callConnecting:       "Connecting…",
+  callEnded:            "Ended",
+  callMissed:           "Missed",
 
   // ── Groups ───────────────────────────────────────────
   groupNamePlaceholder: "Group name",
@@ -184,6 +192,16 @@ export default {
   messagePlaceholder:   "Message…",
   sendBtn:              "Send",
   newMessagesSuffix:    " new messages ↓",
+  replyingTo:           "Replying to",
+  cancel:               "Cancel",
+  editingMessage:       "Editing message",
+  confirmDelete:        "Really delete this message?",
+  deleteFailed:         "Delete failed",
+  editFailed:           "Edit failed",
+  pttToggle:            "Push-to-Talk mode",
+  pttHold:              "Hold to talk (Spacebar)",
+  pttSpeaking:          "Recording…",
+  reconnecting:         "Reconnecting…",
 
   // ── chat.js (dynamic strings) ────────────────────────
   noChatPartner:      "No chat partner selected",
@@ -298,6 +316,24 @@ export default {
   joinErrorTitle:          "Error joining",
   joinErrorRetry:          "Please try again.",
   networkErrorRetry:       "Network error. Please try again.",
+
+  // ── Device Management (Multi-Device) ─────────────────
+  devicesLabel:            "Devices",
+  devicesTitle:            "Manage devices",
+  devicesActive:           "devices active",
+  devicesEmpty:            "No active devices.",
+  devicesLoadFailed:       "Could not load devices",
+  devicesUpgradeHint:      "Upgrade to Pro for 10 devices",
+  deviceCurrent:           "CURRENT",
+  deviceUnnamed:           "Unnamed device",
+  deviceLastSeen:          "last seen",
+  deviceSyncing:           "syncing…",
+  deviceLogoutBtn:         "Sign out",
+  deviceRevokeBtn:         "Remove",
+  deviceLogoutConfirm:     "End this session?",
+  deviceRevokeConfirm:     "Remove device? This is permanent. All conversations will be re-encrypted with new keys.",
+  deviceRevokeFailed:      "Failed to remove",
+  deviceAutoRevokeHint:    "Devices are automatically removed after 30 days of inactivity.",
 
   // ── Passkey Management ───────────────────────────────
   passkeysLabel:           "Passkeys",

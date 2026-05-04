@@ -303,6 +303,71 @@ export async function deleteCMK(peerHandle) {
   await idbDelete(cmkIdbKey(peerHandle));
 }
 
+/**
+ * Rotiert das CMK für eine DM (Forward Secrecy bei Device-Compromise).
+ *
+ * Trigger: User-Revoke eines eigenen Devices mit `reason='user'` — das geleakte
+ * Device hatte das alte CMK lokal. Neue Messages müssen mit neuem CMK encrypted
+ * werden, alte müssen weiterhin lesbar bleiben.
+ *
+ * Ablauf:
+ *   1. Old CMK in rotation map archivieren (Decrypt von alten Messages)
+ *   2. Neuen CMK random generieren
+ *   3. Active CMK = neu (cmk:me:peer überschrieben)
+ *   4. Neuen Eintrag in map mit fromIndex = max(server-known, local-max) + 1
+ *
+ * Bei `reason='self'`/`'auto'` NICHT rufen — Memory-Spec §4.4: Forward Secrecy
+ * nur bei echtem Security-Event, sonst Cron-Storm.
+ *
+ * @param {string} myHandle
+ * @param {string} peerHandle
+ * @returns {Promise<{ok: boolean, newCmk?: Uint8Array, newFromIndex?: number, reason?: string}>}
+ */
+export async function rotateCMKForPeer(myHandle, peerHandle) {
+  // Lazy-Imports um circular dep mit session.js zu vermeiden
+  const { dmSessionId, getRotationMap, appendToRotationMap } = await import('./session.js');
+  const { apiFetch } = await import('./api.js');
+
+  // 1. Aktuellen CMK laden — muss existieren, sonst keine Rotation sinnvoll
+  const oldCmk = await getCMKIfExists(peerHandle);
+  if (!oldCmk) {
+    return { ok: false, reason: 'no_local_cmk' };
+  }
+
+  const sid = dmSessionId(myHandle, peerHandle);
+
+  // 2. Old CMK archivieren wenn map leer (initial archival mit fromIndex=0)
+  let map = await getRotationMap(sid);
+  if (map.length === 0) {
+    await appendToRotationMap(sid, 0, oldCmk);
+    map = await getRotationMap(sid);  // re-load to include new entry
+  }
+
+  // 3. Server-known max rotation_index — für Sync zwischen Multi-Device
+  let serverMaxIdx = 0;
+  try {
+    const r = await apiFetch(`/chat/rotation-index?peer=${encodeURIComponent(peerHandle)}`);
+    if (r.ok && typeof r.data?.rotationIndex === 'number') {
+      serverMaxIdx = r.data.rotationIndex;
+    }
+  } catch {}
+
+  const localMaxIdx = map.reduce((max, e) => Math.max(max, e.fromIndex), 0);
+  const newFromIndex = Math.max(serverMaxIdx, localMaxIdx) + 1;
+
+  // 4. Neuen CMK generieren (kryptographisch random)
+  const newCmk = crypto.getRandomValues(new Uint8Array(32));
+
+  // 5. Neuen Eintrag in map (für Decrypt von messages mit rotation_index >= newFromIndex)
+  await appendToRotationMap(sid, newFromIndex, newCmk);
+
+  // 6. Active CMK ersetzen (importAndStoreCMKFromPeer triggert auch bundle-sync)
+  await importAndStoreCMKFromPeer(peerHandle, newCmk);
+
+  console.log(`🔁 CMK rotiert für ${peerHandle}: fromIndex=${newFromIndex}`);
+  return { ok: true, newCmk, newFromIndex };
+}
+
 // ======================================================
 // Peer-Device-Cache
 // ======================================================

@@ -11,6 +11,7 @@
   import { i18nStore } from '../stores/i18n.svelte.js';
   import { apiFetch } from '../lib/api.js';
   import { captureException } from '../lib/sentry.js';
+  import { profileCache } from '../stores/profileCache.svelte.js';
 
   let { isOpen = $bindable(false) } = $props();
 
@@ -60,8 +61,15 @@
       });
 
       if (r.ok) {
-        userStore.setDisplayName(r.data?.display_name || newValue);
-        close();
+        const finalDn = r.data?.display_name || newValue;
+        userStore.setDisplayName(finalDn);
+        // Profile-Cache des eigenen Handles direkt aktualisieren — sonst zeigen
+        // andere Surfaces (eigene Reply-Bubbles, Group-Sender-Label) bis zum
+        // TTL-Ablauf den alten Wert.
+        if (userStore.myUser) profileCache.set(userStore.myUser, finalDn);
+        // Direkt schließen — close() würde wegen `isSaving === true`-Guard
+        // (Backdrop-Schutz) hier no-op sein. Modal explizit zumachen.
+        isOpen = false;
       } else if (r.status === 400 && r.data?.error === "too_long") {
         errorMsg = lang.displayNameTooLong || "Anzeigename ist zu lang (max 32 Zeichen)";
       } else if (r.status === 429) {

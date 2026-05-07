@@ -186,6 +186,7 @@ export default {
   autoDeleteSet:           (label) => `✅ Auto-Delete: ${label}`,
   autoDeleteProposal:      (label) => `📤 Propuesta enviada: ${label}`,
   autoDeleteProposalIncoming: "propone Auto-Delete:",
+  autoDeleteWaitingForPeer: "Esperando confirmación:",
   autoDeletePending:       "Pendiente",
   autoDeleteDmHint:        "Ambos deben aceptar. Se enviará una propuesta al contacto.",
   autoDeleteGroupHint:     "Cualquier miembro puede cambiar. Todos reciben un mensaje del sistema.",

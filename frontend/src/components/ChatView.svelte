@@ -6,12 +6,57 @@
   import { chatStore } from '../stores/chat.svelte.js';
   import { i18nStore } from '../stores/i18n.svelte.js';
   import { userStore } from '../stores/user.svelte.js';
+  import { autoDeleteStore, autoDeleteLabel } from '../stores/autoDelete.svelte.js';
+  import { toastStore } from '../stores/toast.svelte.js';
   import ChatHeader from './ChatHeader.svelte';
   import MessageBubble from './MessageBubble.svelte';
   import ChatInput from './ChatInput.svelte';
 
   let lang_for_delete = $derived(i18nStore.lang);
   let myHandle = $derived(userStore.myUser);
+
+  // ── Auto-Delete Inline-Banner (DM-Konsens) ─────────────
+  // Persistent über den Messages — User muss aktiv akzeptieren oder ablehnen,
+  // statt nur einen ephemeren Toast zu sehen. Unterscheidet:
+  //  - Empfänger (proposedBy ≠ me): [Akzeptieren] [Ablehnen]
+  //  - Sender (proposedBy === me): Wait-Status mit Cancel
+  let adSetting = $derived(autoDeleteStore.getFor(chatStore.selectedChat));
+  let isPending = $derived(adSetting?.status === 'pending');
+  let isPendingFromPeer = $derived(
+    isPending && adSetting?.proposedBy && adSetting.proposedBy !== myHandle
+  );
+  let isPendingByMe = $derived(
+    isPending && adSetting?.proposedBy && adSetting.proposedBy === myHandle
+  );
+  let adBannerBusy = $state(false);
+
+  async function acceptAd() {
+    if (adBannerBusy) return;
+    adBannerBusy = true;
+    try {
+      const r = await autoDeleteStore.accept(chatStore.selectedChat);
+      if (!r.ok) toastStore.push(r.error || 'Fehler', { kind: 'error' });
+    } finally { adBannerBusy = false; }
+  }
+
+  async function declineAd() {
+    if (adBannerBusy) return;
+    adBannerBusy = true;
+    try {
+      const r = await autoDeleteStore.decline(chatStore.selectedChat);
+      if (!r.ok) toastStore.push(r.error || 'Fehler', { kind: 'error' });
+    } finally { adBannerBusy = false; }
+  }
+
+  async function cancelAd() {
+    if (adBannerBusy) return;
+    adBannerBusy = true;
+    try {
+      // Cancel = Sender zieht eigenen Vorschlag zurück. Backend nutzt action='cancel'.
+      const r = await autoDeleteStore.decline(chatStore.selectedChat);
+      if (!r.ok) toastStore.push(r.error || 'Fehler', { kind: 'error' });
+    } finally { adBannerBusy = false; }
+  }
 
   async function handleDelete(msg) {
     const confirmText = lang_for_delete.confirmDelete || 'Diese Nachricht wirklich löschen?';
@@ -89,6 +134,40 @@
     </div>
   {:else}
     <ChatHeader />
+
+    {#if isPendingFromPeer}
+      <div class="ad-banner ad-banner-incoming" role="region" aria-label="Auto-Delete Vorschlag">
+        <div class="ad-banner-icon">⏱</div>
+        <div class="ad-banner-body">
+          <div class="ad-banner-title">
+            <strong>@{adSetting.proposedBy}</strong>
+            {lang.autoDeleteProposalIncoming || 'schlägt Auto-Delete vor:'}
+            <strong>{autoDeleteLabel(adSetting.days, lang)}</strong>
+          </div>
+          <div class="ad-banner-actions">
+            <button class="ad-btn ok" onclick={acceptAd} disabled={adBannerBusy}>
+              {lang.accept || 'Akzeptieren'}
+            </button>
+            <button class="ad-btn no" onclick={declineAd} disabled={adBannerBusy}>
+              {lang.decline || 'Ablehnen'}
+            </button>
+          </div>
+        </div>
+      </div>
+    {:else if isPendingByMe}
+      <div class="ad-banner ad-banner-outgoing" role="status">
+        <div class="ad-banner-icon">📤</div>
+        <div class="ad-banner-body">
+          <div class="ad-banner-title">
+            {(lang.autoDeleteWaitingForPeer || 'Wartet auf Bestätigung:')}
+            <strong>{autoDeleteLabel(adSetting.days, lang)}</strong>
+          </div>
+        </div>
+        <button class="ad-btn-small" onclick={cancelAd} disabled={adBannerBusy} title={lang.cancel || 'Abbrechen'}>
+          ✕
+        </button>
+      </div>
+    {/if}
 
     <div class="messages-wrapper" bind:this={messagesEl}>
       {#if isLoading}
@@ -224,5 +303,97 @@
     padding: 3px 10px;
     border-radius: 10px;
     font-weight: 600;
+  }
+
+  /* ── Auto-Delete Inline-Banner ─────────────────────── */
+  .ad-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+    font-size: 13px;
+  }
+  .ad-banner-incoming {
+    background: var(--accent-voice-dim);
+    border-bottom-color: var(--accent-voice);
+  }
+  .ad-banner-outgoing {
+    background: var(--bg-panel-alt);
+  }
+  .ad-banner-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+  .ad-banner-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ad-banner-title {
+    color: var(--text-primary);
+    line-height: 1.35;
+  }
+  .ad-banner-title strong {
+    color: var(--accent-voice);
+    font-weight: 700;
+  }
+  .ad-banner-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .ad-btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .ad-btn:hover:not(:disabled) {
+    background: var(--bg-panel-alt);
+  }
+  .ad-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+  }
+  .ad-btn.ok {
+    border-color: var(--accent-voice);
+    color: var(--accent-voice);
+  }
+  .ad-btn.ok:hover:not(:disabled) {
+    background: var(--accent-voice);
+    color: var(--bg-body);
+  }
+  .ad-btn.no {
+    border-color: var(--status-error);
+    color: var(--status-error);
+  }
+  .ad-btn.no:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.08);
+  }
+  .ad-btn-small {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .ad-btn-small:hover:not(:disabled) {
+    background: var(--bg-panel);
+    color: var(--text-primary);
   }
 </style>

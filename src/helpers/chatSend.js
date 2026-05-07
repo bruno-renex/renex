@@ -576,7 +576,9 @@ export async function handleChatSend(request, env) {
               type: "message",
               convoId: cid,
               from: me,
-              url: `/chat?with=${encodeURIComponent(cid)}&name=${encodeURIComponent(groupName)}`,
+              // Svelte-PWA-Root: /?group=<id>. Vorher: /chat?... (Vanilla-Seite,
+              // löst false-positive Gast-Recovery aus bei konvertierten Usern).
+              url: `/?group=${encodeURIComponent(cid)}&name=${encodeURIComponent(groupName)}`,
               e2e: !!msg.e2e,
             },
           });
@@ -613,7 +615,9 @@ export async function handleChatSend(request, env) {
                 type: "message",
                 convoId: cid,
                 from: me,
-                url: `/chat?with=${encodeURIComponent(me)}`,
+                // Svelte-PWA-Root: /?with=<peer>. Vorher: /chat?... (Vanilla-Seite,
+                // löst false-positive Gast-Recovery aus bei konvertierten Usern).
+                url: `/?with=${encodeURIComponent(me)}`,
                 e2e: !!msg.e2e,
               },
             });

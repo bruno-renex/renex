@@ -126,19 +126,26 @@ self.addEventListener("notificationclick", (event) => {
     // App öffnen/fokussieren mit Auto-Call-Flag — voiceUI.js pickt
     // den ?call=1 Query-Param beim Laden/Navigieren auf und startet
     // den Anruf erneut (Offer wird neu verhandelt).
-    const targetUrl = data?.url || `/chat/?with=${encodeURIComponent(data?.from || "")}&call=1`;
+    // Svelte-Root statt /chat/ (Vanilla-Seite löste false-positive
+    // Gast-Recovery für konvertierte User aus).
+    const targetUrl = data?.url || `/?with=${encodeURIComponent(data?.from || "")}&call=1`;
     event.waitUntil(openOrFocus(targetUrl));
     return;
   }
 
-  // Default: App öffnen / fokussieren
-  const targetUrl = data.url || "/inbox.html";
+  // Default: App öffnen / fokussieren — Svelte-Root, nicht Vanilla /inbox.html.
+  const targetUrl = data.url || "/";
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((windowClients) => {
-      // Bereits offenen Tab fokussieren
+      // Bereits offenen Tab fokussieren — Svelte-Root + Legacy-Pfade tolerieren
+      // (während des Vanilla-Cutover-Übergangs).
       for (const client of windowClients) {
         try {
-          if (new URL(client.url).pathname.startsWith("/inbox") || new URL(client.url).pathname.startsWith("/chat")) {
+          const pathname = new URL(client.url).pathname;
+          const isAppPath = pathname === "/" || pathname === ""
+            || pathname.startsWith("/inbox")
+            || pathname.startsWith("/chat");
+          if (isAppPath) {
             return client.focus().then(() => {
               client.postMessage({ type: "navigate", url: targetUrl });
             });
@@ -164,7 +171,10 @@ async function openOrFocus(targetUrl) {
     for (const client of windowClients) {
       try {
         const pathname = new URL(client.url).pathname;
-        if (pathname.startsWith("/inbox") || pathname.startsWith("/chat")) {
+        const isAppPath = pathname === "/" || pathname === ""
+          || pathname.startsWith("/inbox")
+          || pathname.startsWith("/chat");
+        if (isAppPath) {
           await client.focus();
           client.postMessage({ type: "navigate", url: targetUrl });
           return;

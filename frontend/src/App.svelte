@@ -211,16 +211,64 @@
       (inboxStore.contacts || []).map(c => c.handle).filter(Boolean)
     );
 
-    // Nach erfolgreichem Convert oder Invite-Accept: direkt den Chat mit dem
-    // Inviter öffnen (sonst hat der User eine leere ChatView trotz vollem Inbox).
-    const openInviter = convertedInviter || acceptedInviter;
-    if (openInviter) {
-      chatStore.selectChat({
-        type: 'dm',
-        key: openInviter,
-        peer: openInviter,
-        name: `@${openInviter}`,
-        isOnline: true,
+    // Push-Notification-Deep-Link: SW öffnet die PWA mit /?with=<peer> (DM)
+    // oder /?group=<id> (Group). Helper extrahiert Params, öffnet Chat,
+    // räumt URL auf. Wird sowohl beim Bootstrap (Cold-Open via Notification)
+    // als auch bei sw-postMessage 'navigate' (PWA war bereits offen) gerufen.
+    const handleDeepLink = (url) => {
+      try {
+        const u = url ? new URL(url, location.origin) : location;
+        const p = new URLSearchParams(u.search);
+        const dmPeer = p.get('with');
+        const groupId = p.get('group');
+        const groupName = p.get('name');
+        if (dmPeer && /^[a-z0-9_]+$/i.test(dmPeer)) {
+          chatStore.selectChat({
+            type: 'dm',
+            key: dmPeer.toLowerCase(),
+            peer: dmPeer.toLowerCase(),
+            name: `@${dmPeer.toLowerCase()}`,
+          });
+          return true;
+        }
+        if (groupId && /^[0-9a-f-]{36}$/i.test(groupId)) {
+          chatStore.selectChat({
+            type: 'group',
+            key: groupId,
+            name: groupName ? decodeURIComponent(groupName) : 'Group',
+          });
+          return true;
+        }
+      } catch {}
+      return false;
+    };
+
+    // Cold-Boot: zuerst Push-Deep-Link prüfen, sonst Convert/Invite-Inviter.
+    const handledByDeepLink = handleDeepLink();
+    if (!handledByDeepLink) {
+      const openInviter = convertedInviter || acceptedInviter;
+      if (openInviter) {
+        chatStore.selectChat({
+          type: 'dm',
+          key: openInviter,
+          peer: openInviter,
+          name: `@${openInviter}`,
+        });
+      }
+    } else {
+      // Query-Params nach Verarbeitung aus der URL entfernen (sonst öffnet
+      // jeder Reload erneut den Push-Chat).
+      try { history.replaceState({}, '', location.pathname); } catch {}
+    }
+
+    // Warm-Open: SW-postMessage 'navigate' bei bereits laufender PWA. SW
+    // ruft das, wenn der User eine Notification anklickt während ein Tab
+    // schon offen ist (focus statt openWindow).
+    if (typeof navigator !== 'undefined' && navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener('message', (e) => {
+        if (e.data?.type === 'navigate' && typeof e.data.url === 'string') {
+          handleDeepLink(e.data.url);
+        }
       });
     }
 

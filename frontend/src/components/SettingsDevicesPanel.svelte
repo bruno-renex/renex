@@ -176,7 +176,7 @@
                 class:logout-style={isCurrent}
                 disabled={busyDeviceId === d.deviceId}
                 onclick={() => onRevoke(d)}
-                aria-label={isCurrent ? 'Logout' : 'Revoke device'}
+                aria-label={isCurrent ? (lang.deviceLogoutBtn || 'Sign out') : (lang.deviceRevokeBtn || 'Remove')}
               >
                 {#if busyDeviceId === d.deviceId}
                   <span class="spinner-sm"></span>

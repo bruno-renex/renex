@@ -197,11 +197,27 @@ async function _uploadWithRetry(url, body) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (res.ok) return true;
+      if (res.ok) return { ok: true };
       // 4xx (außer 429) = harter Fehler, kein Retry sinnvoll
       if (res.status >= 400 && res.status < 500 && res.status !== 429) {
         console.warn('📮 Upload: harter Fehler', res.status, '— kein Retry');
-        return false;
+        // 409 device_limit_reached: Body durchreichen damit UI Modal anzeigen kann
+        if (res.status === 409) {
+          try {
+            const data = await res.json();
+            if (data?.error === 'device_limit_reached') {
+              return {
+                ok: false,
+                deviceLimit: {
+                  currentDevices: data.currentDevices,
+                  maxDevices: data.maxDevices,
+                  upgradeAvailable: data.upgradeAvailable === true,
+                },
+              };
+            }
+          } catch {}
+        }
+        return { ok: false };
       }
       console.warn(`📮 Upload Versuch ${attempt + 1} fehlgeschlagen (${res.status}) — retry in ${UPLOAD_RETRY_DELAYS_MS[attempt]}ms`);
     } catch (e) {
@@ -234,7 +250,7 @@ async function _uploadWithRetry(url, body) {
       }
     })();
   }
-  return false;
+  return { ok: false };
 }
 
 // ======================================================
@@ -248,7 +264,7 @@ async function _uploadWithRetry(url, body) {
  *
  * Spec: docs/MULTI_DEVICE.md §4.1
  *
- * @returns {Promise<boolean>} true bei Erfolg
+ * @returns {Promise<{ok: boolean, deviceLimit?: {currentDevices: number, maxDevices: number, upgradeAvailable: boolean}}>}
  */
 export async function uploadInboxKeyIfNeeded() {
   try {
@@ -258,13 +274,13 @@ export async function uploadInboxKeyIfNeeded() {
     const deviceId = getDeviceId();
     if (!deviceId) {
       console.warn('📮 Inbox-Key: kein deviceId');
-      return false;
+      return { ok: false };
     }
 
     const pubKey = await loadPublicKey();
     if (!pubKey) {
       console.warn('📮 Inbox-Key: kein PublicKey');
-      return false;
+      return { ok: false };
     }
 
     const jwk    = await crypto.subtle.exportKey('jwk', pubKey);
@@ -276,6 +292,6 @@ export async function uploadInboxKeyIfNeeded() {
     });
   } catch (e) {
     captureException(e, { context: 'uploadInboxKeyIfNeeded' });
-    return false;
+    return { ok: false };
   }
 }

@@ -60,10 +60,27 @@ export async function handleContactRoutes(request, env, path, params) {
           ORDER BY COALESCE(last_ts, 0) DESC
         `).bind(handle, handle, handle, handle, now).all();
 
+        // Display-Names parallel aus KV holen (eliminiert N x /users/<h>/profile-Calls
+        // im Frontend beim App-Boot). Profile-KV ist Hot-Path, billig.
+        const dnPairs = await Promise.all(
+          (results || []).map(async (r) => {
+            const raw = await env.RENEX_KV.get(`profile:${r.contact_handle}`);
+            if (!raw) return [r.contact_handle, null];
+            try {
+              const p = JSON.parse(raw);
+              return [r.contact_handle, p?.display_name || null];
+            } catch {
+              return [r.contact_handle, null];
+            }
+          })
+        );
+        const dnMap = Object.fromEntries(dnPairs);
+
         const body = JSON.stringify({
           contacts: results.map(r => ({
             handle: r.contact_handle,
             display_handle: r.display_handle || r.contact_handle,
+            display_name: dnMap[r.contact_handle] || null,
             status: r.status,
             direction: r.direction ?? undefined,
             last_ts: r.last_ts || null,

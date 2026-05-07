@@ -564,7 +564,8 @@
 <body>
 <div id="chat-wrapper">
 <div id="chat-header" style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border-panel);background:var(--bg-panel);gap:8px;">
-  <button onclick="(window.parent !== window && typeof window.parent.closeChatPanel === 'function') ? window.parent.closeChatPanel() : window.location.href='/inbox/'" style="background:none;border:none;color:var(--accent);font-size:15px;cursor:pointer;padding:4px 8px;border-radius:6px;">←</button>
+  <button id="back-btn" onclick="(window.parent !== window && typeof window.parent.closeChatPanel === 'function') ? window.parent.closeChatPanel() : window.location.href='/inbox/'" style="background:none;border:none;color:var(--accent);font-size:15px;cursor:pointer;padding:4px 8px;border-radius:6px;">←</button>
+  <div id="guest-brand" style="display:none;font-size:14px;font-weight:800;letter-spacing:0.18em;color:var(--text-primary);user-select:none;padding:4px 8px;">RENE<span style="color:var(--accent-voice,#38BDF8);">X</span></div>
   <div style="position:relative;flex:1;display:flex;justify-content:center;">
     <button id="chat-menu-btn" style="background:none;border:none;color:inherit;font-size:16px;font-weight:600;cursor:pointer;padding:4px 12px;border-radius:8px;display:flex;flex-direction:column;align-items:center;transition:background 0.15s;">
       <span id="chat-with"></span>

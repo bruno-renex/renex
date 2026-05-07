@@ -58,8 +58,23 @@ const CALL_STATE_TTL = 60;
 const HANDLE_RE = /^[a-z0-9_]{1,30}$/;
 
 // Sanity-Limits (verhindern Missbrauch des Relay-Kanals)
-const MAX_SDP_BYTES = 32 * 1024;   // SDP typischerweise 3–8 KB
-const MAX_ICE_BYTES = 2 * 1024;    // ICE-Candidate <500 B
+const MAX_SDP_BYTES = 32 * 1024;   // SDP typischerweise 3–8 KB (für room-Pfad, Klartext)
+const MAX_ICE_BYTES = 2 * 1024;    // ICE-Candidate <500 B (für room-Pfad, Klartext)
+// CMK-encrypted SDP/ICE (1:1 calls): base64-Inflation + AES-GCM-Tag
+// → großzügigere Limits. Backend sieht den Klartext nicht.
+const MAX_SDP_EC_BYTES = 64 * 1024;
+const MAX_ICE_EC_BYTES = 4 * 1024;
+
+// Validiert dass `ec` ein voiceCrypto-Envelope ist: { v: 1, iv: string, ct: string }
+// und unter dem Größenlimit bleibt. iv und ct sind base64-encoded.
+function isVoiceEnvelope(ec, maxTotalBytes) {
+  if (!ec || typeof ec !== "object") return false;
+  if (ec.v !== 1) return false;
+  if (typeof ec.iv !== "string" || ec.iv.length < 12 || ec.iv.length > 32) return false;
+  if (typeof ec.ct !== "string" || ec.ct.length === 0) return false;
+  if (ec.ct.length + ec.iv.length > maxTotalBytes) return false;
+  return true;
+}
 
 function isHandle(h) {
   return typeof h === "string" && HANDLE_RE.test(h);
@@ -309,15 +324,27 @@ export async function handleVoiceRoutes(request, env, path, params) {
       const to     = String(body.to || "").toLowerCase();
       const callId = String(body.callId || "");
       const sdp    = body.sdp;
+      const auth   = body.auth;  // {fp, sig, fromDeviceId} — DTLS-Fingerprint signiert mit Sender-Sigkey (gegen Backend-MITM)
 
       if (!isHandle(to))    return json(request, { error: "Invalid 'to'" }, 400);
       if (!isCallId(callId)) return json(request, { error: "Invalid 'callId'" }, 400);
       if (to === me)        return json(request, { error: "Cannot call yourself" }, 400);
-      if (!sdp || typeof sdp !== "object" || sdp.type !== "offer" || typeof sdp.sdp !== "string") {
+      // 1:1-Calls: sdp.ec ist CMK-encrypted Envelope. Backend sieht Klartext-SDP nicht.
+      if (!sdp || typeof sdp !== "object" || sdp.type !== "offer") {
         return json(request, { error: "Invalid 'sdp' (expected offer)" }, 400);
       }
-      if (sdp.sdp.length > MAX_SDP_BYTES) {
-        return json(request, { error: "SDP too large" }, 413);
+      if (!isVoiceEnvelope(sdp.ec, MAX_SDP_EC_BYTES)) {
+        return json(request, { error: "Invalid or oversized 'sdp.ec'" }, 400);
+      }
+      // auth-Field optional aber wenn gesetzt: Schema validieren (Größe-Limit als
+      // Anti-DoS, Inhalt nur passthrough — Backend prüft NICHT die Signatur).
+      if (auth !== undefined) {
+        if (!auth || typeof auth !== "object" ||
+            typeof auth.fp !== "string" || auth.fp.length > 256 ||
+            typeof auth.sig !== "string" || auth.sig.length > 200 ||
+            typeof auth.fromDeviceId !== "string" || auth.fromDeviceId.length > 64) {
+          return json(request, { error: "Invalid 'auth'" }, 400);
+        }
       }
 
       // Kontakt-Check (nur gegenseitige Kontakte dürfen sich anrufen)
@@ -364,6 +391,7 @@ export async function handleVoiceRoutes(request, env, path, params) {
         from: me,
         callId,
         sdp,
+        ...(auth ? { auth } : {}),
         startedAt,
       }));
 
@@ -406,12 +434,24 @@ export async function handleVoiceRoutes(request, env, path, params) {
 
       const callId = String(body.callId || "");
       const sdp    = body.sdp;
+      const auth   = body.auth;  // {fp, sig, fromDeviceId} — gegen Backend-MITM
 
       if (!isCallId(callId)) return json(request, { error: "Invalid 'callId'" }, 400);
-      if (!sdp || typeof sdp !== "object" || sdp.type !== "answer" || typeof sdp.sdp !== "string") {
+      // 1:1-Calls: sdp.ec ist CMK-encrypted Envelope.
+      if (!sdp || typeof sdp !== "object" || sdp.type !== "answer") {
         return json(request, { error: "Invalid 'sdp' (expected answer)" }, 400);
       }
-      if (sdp.sdp.length > MAX_SDP_BYTES) return json(request, { error: "SDP too large" }, 413);
+      if (!isVoiceEnvelope(sdp.ec, MAX_SDP_EC_BYTES)) {
+        return json(request, { error: "Invalid or oversized 'sdp.ec'" }, 400);
+      }
+      if (auth !== undefined) {
+        if (!auth || typeof auth !== "object" ||
+            typeof auth.fp !== "string" || auth.fp.length > 256 ||
+            typeof auth.sig !== "string" || auth.sig.length > 200 ||
+            typeof auth.fromDeviceId !== "string" || auth.fromDeviceId.length > 64) {
+          return json(request, { error: "Invalid 'auth'" }, 400);
+        }
+      }
 
       // Source of truth: call_log (D1, stark konsistent)
       const call = await getCallForUser(env, callId, me);
@@ -444,6 +484,7 @@ export async function handleVoiceRoutes(request, env, path, params) {
         from: me,
         callId,
         sdp,
+        ...(auth ? { auth } : {}),
         answeredAt,
       }));
 
@@ -471,15 +512,12 @@ export async function handleVoiceRoutes(request, env, path, params) {
 
       if (!isHandle(to))     return json(request, { error: "Invalid 'to'" }, 400);
       if (!isCallId(callId)) return json(request, { error: "Invalid 'callId'" }, 400);
+      // 1:1-Calls: candidate.ec ist CMK-encrypted Envelope (verbirgt host-IPs etc.)
       if (!candidate || typeof candidate !== "object") {
         return json(request, { error: "Invalid 'candidate'" }, 400);
       }
-      try {
-        if (JSON.stringify(candidate).length > MAX_ICE_BYTES) {
-          return json(request, { error: "Candidate too large" }, 413);
-        }
-      } catch {
-        return json(request, { error: "Invalid 'candidate'" }, 400);
+      if (!isVoiceEnvelope(candidate.ec, MAX_ICE_EC_BYTES)) {
+        return json(request, { error: "Invalid or oversized 'candidate.ec'" }, 400);
       }
 
       // Source of truth: call_log (D1, stark konsistent)

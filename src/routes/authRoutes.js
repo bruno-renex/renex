@@ -1,5 +1,5 @@
 import { json, readJson, base64url, base64urlToString, base64urlToArrayBuffer, decodeCBOR, corsHeaders } from '../utils.js';
-import { requireSession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions } from '../auth.js';
+import { requireSession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions, verifyTurnstile } from '../auth.js';
 import { handleLoginFinish } from '../helpers/loginFinish.js';
 import { readCredentials, writeCredentials, MAX_PASSKEYS } from '../helpers/credentials.js';
 
@@ -61,7 +61,7 @@ export async function handleAuthRoutes(request, env, path, params) {
         const body = await readJson(request);
         if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
-        const { handle } = body;
+        const { handle, cfTurnstileToken } = body;
 
         const h = (handle || "").toLowerCase();
 
@@ -99,6 +99,22 @@ export async function handleAuthRoutes(request, env, path, params) {
             id: c.credential_id,
             transports: ["internal", "hybrid", "usb", "ble", "nfc"]
           }));
+        } else {
+          // Neu-Registrierung: Turnstile-Verifikation Pflicht.
+          // Anti-Bot vor Beta-Wellen — Add-Passkey-Pfad (existingCreds + Session)
+          // braucht es nicht, da User schon authentifiziert ist.
+          // env.TURNSTILE_SECRET fehlt im Dev → Skip mit Warnung.
+          if (env.TURNSTILE_SECRET) {
+            if (!cfTurnstileToken || typeof cfTurnstileToken !== 'string') {
+              return json(request, { error: "Captcha required", code: "captcha_required" }, 400);
+            }
+            const turnstileOk = await verifyTurnstile(cfTurnstileToken, ip, env);
+            if (!turnstileOk) {
+              return json(request, { error: "Captcha verification failed", code: "captcha_failed" }, 403);
+            }
+          } else {
+            console.warn("⚠️  TURNSTILE_SECRET not configured — skipping captcha for register");
+          }
         }
 
         // Challenge erzeugen

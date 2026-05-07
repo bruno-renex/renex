@@ -22,6 +22,7 @@
   let selectedHandles = $state(new Set());
   let isSubmitting = $state(false);
   let errorMsg = $state("");
+  let memberSearch = $state("");
 
   $effect(() => {
     if (isOpen) {
@@ -29,6 +30,7 @@
       groupName = "";
       selectedHandles = new Set();
       errorMsg = "";
+      memberSearch = "";
       setTimeout(() => {
         document.getElementById("cg-name-input")?.focus();
       }, 50);
@@ -39,6 +41,27 @@
   let trimmedName = $derived(groupName.trim());
   let canProceedToStep2 = $derived(trimmedName.length >= 2 && trimmedName.length <= 50);
   let canCreate = $derived(canProceedToStep2 && selectedHandles.size > 0 && !isSubmitting);
+
+  // Step 2: Live-Filter auf Handle + DisplayName
+  let filteredContacts = $derived.by(() => {
+    const q = memberSearch.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter(c => {
+      const h = (c.handle || "").toLowerCase();
+      const dn = (c.displayName || "").toLowerCase();
+      return h.includes(q) || dn.includes(q);
+    });
+  });
+
+  // Selected-Chips: nachschlagen aus contacts, fallback auf nur Handle
+  let selectedContactList = $derived.by(() => {
+    const out = [];
+    for (const h of selectedHandles) {
+      const c = contacts.find(x => x.handle === h);
+      out.push(c ? c : { handle: h, displayName: null });
+    }
+    return out;
+  });
 
   function close() {
     if (isSubmitting) return;
@@ -78,9 +101,8 @@
       });
 
       if (r.ok) {
-        // Refresh group list
-        await inboxStore.loadGroups();
-        close();
+        isOpen = false;
+        inboxStore.loadGroups().catch((e) => captureException(e, { context: "loadGroups after createGroup" }));
       } else {
         errorMsg = r.data?.error || lang.groupCreateFailed || "Gruppen-Erstellung fehlgeschlagen";
       }
@@ -166,8 +188,38 @@
             <p class="hint-sm">{lang.addContactsFirst || "Füge zuerst Kontakte hinzu."}</p>
           </div>
         {:else}
+          {#if selectedContactList.length > 0}
+            <div class="chips-row">
+              {#each selectedContactList as c (c.handle)}
+                <span class="chip">
+                  <span class="chip-label">{c.displayName ? c.displayName : `@${c.handle}`}</span>
+                  <button
+                    class="chip-x"
+                    onclick={() => toggleMember(c.handle)}
+                    type="button"
+                    aria-label="Remove {c.handle}"
+                  >×</button>
+                </span>
+              {/each}
+            </div>
+          {/if}
+
+          <input
+            type="text"
+            class="search-input"
+            placeholder={lang.searchContactsPlaceholder || "Kontakte suchen…"}
+            bind:value={memberSearch}
+            autocomplete="off"
+            spellcheck="false"
+          />
+
           <div class="member-list">
-            {#each contacts as c (c.handle)}
+            {#if filteredContacts.length === 0}
+              <div class="empty-contacts">
+                <p>{lang.noContactsMatch || "Keine Kontakte gefunden."}</p>
+              </div>
+            {/if}
+            {#each filteredContacts as c (c.handle)}
               <button
                 class="member-item"
                 class:selected={selectedHandles.has(c.handle)}
@@ -337,11 +389,68 @@
     font-size: 13px;
   }
 
+  .chips-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+    max-height: 84px;
+    overflow-y: auto;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 4px 3px 10px;
+    background: var(--accent-voice-dim);
+    border: 1px solid var(--accent-voice);
+    border-radius: 14px;
+    font-size: 12px;
+    color: var(--accent-voice);
+    max-width: 180px;
+  }
+
+  .chip-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chip-x {
+    background: transparent;
+    border: none;
+    color: var(--accent-voice);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .chip-x:hover {
+    background: rgba(56, 189, 248, 0.2);
+    color: var(--text-primary);
+  }
+
+  .search-input {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+    margin-bottom: 8px;
+    box-sizing: border-box;
+  }
+  .search-input:focus { border-color: var(--accent-voice); outline: none; }
+
   .member-list {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-height: 320px;
+    max-height: 280px;
     overflow-y: auto;
     padding-right: 4px;
   }

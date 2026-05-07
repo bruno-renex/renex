@@ -53,7 +53,6 @@
   function onHangup() { voiceStore.endCall(); }
   function onToggleMute() { voiceStore.toggleMute(); }
   function onToggleVideo() { voiceStore.toggleVideo(); }
-  function onToggleSpeaker() { voiceStore.toggleSpeaker(); }
   function onTogglePtt() { voiceStore.togglePttMode(); }
 
   let pttMode = $derived(voiceStore.pttMode);
@@ -105,6 +104,13 @@
     voiceStore.setPttPressed(false);
   }
 
+  // Avatar-Pulse-Effekt aus dem Audio-Level: bei active call zeigt der Avatar
+  // wer gerade spricht. remoteLevel = peer redet (peer-avatar pulses).
+  // Threshold 0.04 damit Hintergrund-Rauschen nicht ständig pulst.
+  let activeAudioLevel = $derived(state === 'active' ? voiceStore.remoteLevel : 0);
+  let avatarScale = $derived(1 + Math.min(0.18, activeAudioLevel * 0.4));
+  let avatarGlow = $derived(activeAudioLevel > 0.04 ? activeAudioLevel : 0);
+
   // Remote-Audio-Element: voiceStore pushed neuen MediaStream sobald
   // RTCPeerConnection.ontrack feuert. autoPlay + playsInline für iOS Safari.
   let remoteAudioEl = $state(null);
@@ -143,12 +149,30 @@
           <span class="reconnect-spinner"></span>
           {lang.reconnecting || "Verbindung wird wiederhergestellt…"}
         </div>
+      {:else if voiceStore.isConnectionDegraded}
+        <div class="degraded-banner">
+          <span class="reconnect-spinner"></span>
+          {lang.connectionDegraded || "Verbindung schwach…"}
+        </div>
+      {:else if voiceStore.errorMsg?.startsWith?.('mitm_')}
+        <!-- Security-Warning: getrennte UI weil semantisch ≠ normaler Fehler.
+             fp_mismatch: SDP wurde unterwegs modifiziert.
+             bad_signature/no_sigpub: signature konnte nicht verifyt werden. -->
+        <div class="mitm-banner">
+          {voiceStore.errorMsg.includes('fp_mismatch')
+            ? (lang.voiceMitmFp || '🚨 Audio-Verschlüsselung kompromittiert. Anruf abgebrochen.')
+            : (lang.voiceMitmSig || '🚨 Anrufer-Signatur ungültig. Anruf abgebrochen.')}
+        </div>
       {:else if voiceStore.errorMsg}
         <div class="error-banner">⚠️ {voiceStore.errorMsg}</div>
       {/if}
       <!-- Peer Info -->
       <div class="peer-info">
-        <div class="peer-avatar pulse-{state === 'ringing' ? 'on' : 'off'}">
+        <div
+          class="peer-avatar pulse-{state === 'ringing' ? 'on' : 'off'}"
+          class:speaking={avatarGlow > 0}
+          style="--avatar-scale: {avatarScale}; --avatar-glow: {avatarGlow};"
+        >
           {initials}
         </div>
         <div class="peer-name">{peer?.displayName || peer?.handle || "Unknown"}</div>
@@ -210,18 +234,11 @@
             </svg>
           </button>
 
-          <button
-            class="btn-control btn-secondary"
-            class:on={voiceStore.isSpeakerOn}
-            onclick={onToggleSpeaker}
-            aria-label="Speaker"
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-            </svg>
-          </button>
+          <!-- Speaker-Toggle entfernt (B18 / Phase 1B):
+               iOS Safari/PWA hat KEINE Browser-API für Earpiece/Loudspeaker-Switch.
+               Android Chrome: setSinkId nur für enumerierte Geräte (Headphones, BT),
+               nicht für nativen Speaker-Toggle. Re-introduce in Phase 1C+ wenn
+               ein echter Device-Picker (BT-Headset etc.) gebaut wird. -->
 
           <button
             class="btn-control btn-secondary"
@@ -300,7 +317,32 @@
     text-align: center;
   }
 
-  .reconnect-banner {
+  /* Avatar-Pulse aus Audio-Level (#5): Avatar skaliert + glüht mit Peer-Sprachlautstärke.
+     CSS-Custom-Properties --avatar-scale (1..1.18) und --avatar-glow (0..1)
+     werden inline gesetzt aus voiceStore.remoteLevel. */
+  .peer-avatar.speaking {
+    transform: scale(var(--avatar-scale, 1));
+    box-shadow: 0 0 calc(20px + 30px * var(--avatar-glow, 0)) var(--accent-voice);
+    transition: transform 0.06s ease-out, box-shadow 0.06s ease-out;
+  }
+
+  /* MITM-Banner: prominenter, persistent — User soll das nicht überlesen */
+  .mitm-banner {
+    background: var(--status-error, #ef4444);
+    border: 2px solid #fff;
+    color: #fff;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 18px;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
+    text-align: center;
+    box-shadow: 0 0 24px rgba(239, 68, 68, 0.6);
+  }
+
+  .reconnect-banner,
+  .degraded-banner {
     display: flex;
     align-items: center;
     justify-content: center;

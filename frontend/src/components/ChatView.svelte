@@ -62,8 +62,11 @@
   // Group messages by date for divider
   let groupedMessages = $derived.by(() => {
     const result = [];
+    const seenIds = new Set();
     let lastDate = null;
     for (const msg of messages) {
+      if (msg.id && seenIds.has(msg.id)) continue;
+      if (msg.id) seenIds.add(msg.id);
       const d = new Date(msg.ts);
       const dateStr = d.toLocaleDateString("de-CH", { day: "numeric", month: "short", year: "numeric" });
       if (dateStr !== lastDate) {
@@ -109,7 +112,7 @@
               showSender={chat.type === "group"}
               myHandle={myHandle}
               onReply={(m) => chatStore.setReplyingTo(m)}
-              onEdit={chat.type === "dm" ? (m) => chatStore.setEditing(m) : null}
+              onEdit={(m) => chatStore.setEditing(m)}
               onDelete={(m) => handleDelete(m)}
               onReact={(m, e) => handleReact(m, e)}
               onJumpTo={handleJumpTo}

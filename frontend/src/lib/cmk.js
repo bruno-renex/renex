@@ -143,6 +143,43 @@ function getMyHandle() {
   return (localStorage.getItem('my_user') || '').toLowerCase();
 }
 
+/**
+ * Re-encryptet ein gespeichertes CMK-Blob für eine neue Identität.
+ *
+ * Background: Der Storage-Key ist HKDF-derived aus `renex:storage:<me>:<peer>`.
+ * Beim Guest-Convert wechselt `me` (Self-Seite) bzw. `peer` (Inviter-Seite),
+ * also auch der Storage-Key. Ein reines Umbenennen des IDB-Keys ohne
+ * Re-Encryption führt zu CMK_DECRYPT_FAILED.
+ *
+ * Probiert mehrere alte Storage-Keys (per-pair, per-user, global) — defensiv
+ * gegen Legacy-Storage-Layer. Returnt `null` wenn keiner passt.
+ *
+ * @param {{ivB64: string, ctB64: string}} blob
+ * @param {string} oldMe
+ * @param {string} oldPeer
+ * @param {string} newMe
+ * @param {string} newPeer
+ * @returns {Promise<{ivB64: string, ctB64: string}|null>}
+ */
+export async function reEncryptCmkBlobForRename(blob, oldMe, oldPeer, newMe, newPeer) {
+  if (!blob || !blob.ivB64 || !blob.ctB64) return null;
+
+  const oldPerPair = await getDeviceStorageKey(oldMe, oldPeer);
+  const oldPerUser = await getDeviceStorageKey(oldMe);
+  const oldGlobal  = await getDeviceStorageKey(null);
+  const newPerPair = await getDeviceStorageKey(newMe, newPeer);
+
+  for (const sk of [oldPerPair, oldPerUser, oldGlobal]) {
+    try {
+      const cmkBytes = await decryptFromStorage(sk, blob.ivB64, blob.ctB64);
+      if (cmkBytes instanceof Uint8Array && cmkBytes.length === 32) {
+        return await encryptForStorage(newPerPair, cmkBytes);
+      }
+    } catch {}
+  }
+  return null;
+}
+
 function cmkIdbKey(peerHandle) {
   const me = getMyHandle();
   const peer = String(peerHandle || '').toLowerCase();

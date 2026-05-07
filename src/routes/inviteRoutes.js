@@ -10,9 +10,23 @@ import { requireSession, requireGuestSession, getGuestToken, rateLimit, GUEST_TO
 //   POST /invite/ping     → msg_count aktualisieren + verbleibende Zeit prüfen
 // ======================================================
 
-const GUEST_EXPIRY_MS    = 48 * 60 * 60 * 1000;
-const GUEST_SESSION_MS   = 24 * 60 * 60 * 1000;
-const GUEST_MSG_LIMIT    = 20;
+const GUEST_EXPIRY_MS         = 48 * 60 * 60 * 1000;       // DM-Invite: 48h
+const GROUP_INVITE_EXPIRY_MS  = 7 * 24 * 60 * 60 * 1000;   // Gruppen-Invite: 7 Tage (Onboarding läuft länger)
+const GUEST_SESSION_MS        = 24 * 60 * 60 * 1000;
+const GUEST_MSG_LIMIT         = 20;
+
+// Helper: prüft ob ein User noch Mitglied der Konversation ist (DM oder Gruppe).
+// Bei Gruppen: conversation_members-Tabelle. Bei DMs: handle muss in convo_id stehen.
+async function _isStillMember(env, convoId, convoType, handle) {
+  if (!convoId) return true;  // template-only DM-Invite (noch kein convoId) → trivial OK
+  if (convoType === "dm") {
+    return convoId.split(":").includes(handle);
+  }
+  const m = await env.RENEX_DB.prepare(
+    "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ? LIMIT 1"
+  ).bind(convoId, handle).first();
+  return !!m;
+}
 
 export async function handleInviteRoutes(request, env, path, params) {
 
@@ -64,7 +78,8 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     const now       = Date.now();
     const token     = generateGuestToken();
-    const expiresAt = now + GUEST_EXPIRY_MS;
+    // Gruppen-Invites laufen länger — Mass-Onboarding braucht mehr Zeit als 48h.
+    const expiresAt = now + (convoType === "group" ? GROUP_INVITE_EXPIRY_MS : GUEST_EXPIRY_MS);
 
     await env.RENEX_DB.prepare(
       `INSERT INTO guest_sessions
@@ -79,6 +94,44 @@ export async function handleInviteRoutes(request, env, path, params) {
       expiresAt,
       msgLimit: GUEST_MSG_LIMIT,
     });
+  }
+
+  // ────────────────────────────────────────────────────
+  // POST /invite/revoke
+  // Inviter (= created_by) widerruft seinen eigenen Invite-Link.
+  // Body: { token }
+  // Effekt: Token wird sofort ungültig — selbst wenn expires_at noch in der Zukunft.
+  // ────────────────────────────────────────────────────
+  if (path === "/invite/revoke" && request.method === "POST") {
+    const session = await requireSession(request, env);
+    if (!session || session.isGuest) return json(request, { error: "Not authenticated" }, 401);
+    const me = session.handle;
+
+    let body;
+    try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
+
+    const { token } = body;
+    if (!token || !GUEST_TOKEN_RE.test(token)) {
+      return json(request, { error: "Invalid token" }, 400);
+    }
+
+    // Nur die Template-Row (guest_handle leer/__used__) löschen, nicht aktive
+    // Gast-Sessions, die diesem Token-Pattern folgen könnten.
+    const row = await env.RENEX_DB.prepare(
+      "SELECT created_by, guest_handle FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
+    ).bind(token).first();
+
+    if (!row) return json(request, { error: "Invite not found" }, 404);
+    // Ownership: nur der Ersteller darf widerrufen
+    if (row.created_by !== me) return json(request, { error: "Not authorized" }, 403);
+
+    // Sofort als verbraucht markieren — /invite/info + /invite/join + /invite/accept
+    // werden ab jetzt 410 zurückgeben.
+    await env.RENEX_DB.prepare(
+      "UPDATE guest_sessions SET guest_handle = '__used__' WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
+    ).bind(token).run();
+
+    return json(request, { ok: true });
   }
 
   // ────────────────────────────────────────────────────
@@ -150,6 +203,12 @@ export async function handleInviteRoutes(request, env, path, params) {
     }
     if (Date.now() > row.expires_at)  return json(request, { valid: false, reason: "expired" }, 410);
 
+    // Inviter-Membership-Check: wenn created_by die Gruppe/DM verlassen hat,
+    // soll der Link nicht mehr funktionieren — auch wenn das Token-Template noch frisch ist.
+    if (!(await _isStillMember(env, row.convo_id, row.convo_type, row.created_by))) {
+      return json(request, { valid: false, reason: "inviter_left" }, 410);
+    }
+
     // Anzeigenamen der Konversation ermitteln
     let displayName = row.created_by + "'s Chat";
     if (row.convo_type === "group" && row.convo_id) {
@@ -174,9 +233,10 @@ export async function handleInviteRoutes(request, env, path, params) {
   // Kein Account nötig — erzeugt eine Gast-Session und setzt das Cookie
   // ────────────────────────────────────────────────────
   if (path === "/invite/join" && request.method === "POST") {
-    // Rate Limit: 5 Joins pro Minute pro IP
+    // Rate Limit: 20 Joins pro Minute pro IP — höher gewählt als bei DM (5),
+    // weil Gruppen-Onboarding aus dem gleichen Office-/WG-WLAN entsteht.
     const ip   = request.headers.get("CF-Connecting-IP") || "unknown";
-    const rlOk = await rateLimit(env, `invite_join:${ip}`, 60_000, 5);
+    const rlOk = await rateLimit(env, `invite_join:${ip}`, 60_000, 20);
     if (!rlOk) return json(request, { error: "Rate limit exceeded" }, 429);
 
     let body;
@@ -224,6 +284,12 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     if (!inviteRow)                        return json(request, { error: "Invite not found" }, 404);
     if (Date.now() > inviteRow.expires_at) return json(request, { error: "Invite expired" }, 410);
+
+    // Inviter-Membership-Check: hat created_by die Gruppe verlassen oder den DM-Kontakt
+    // entfernt → Link soll nicht mehr nutzbar sein. Verhindert Hintertür für Ex-Member.
+    if (!(await _isStillMember(env, inviteRow.convo_id, inviteRow.convo_type, inviteRow.created_by))) {
+      return json(request, { error: "Inviter is no longer a member", code: "inviter_left" }, 410);
+    }
 
     // ── Neue unabhängige Session erzeugen (Option B: jeder Join = eigene Session) ─
     const now            = Date.now();
@@ -350,6 +416,135 @@ export async function handleInviteRoutes(request, env, path, params) {
         "Set-Cookie":   cookieVal,
         ...corsHeaders(request),
       },
+    });
+  }
+
+  // ────────────────────────────────────────────────────
+  // POST /invite/accept
+  // Eingeloggter Real-User akzeptiert einen Invite-Link.
+  // Pendant zu /invite/join (das Gast-Sessions erzeugt).
+  // Body: { token }
+  // Erstellt bidirektionale Kontakt-Einträge + DM-Convo (oder Group-Mitgliedschaft)
+  // und benachrichtigt den Inviter live via WebSocket.
+  // ────────────────────────────────────────────────────
+  if (path === "/invite/accept" && request.method === "POST") {
+    const session = await requireSession(request, env);
+    if (!session || session.isGuest) {
+      return json(request, { error: "Real account required" }, 401);
+    }
+    const me = session.handle;
+
+    // Rate Limit: 10 Accepts pro Minute pro User (verhindert Bot-Sprays)
+    const rlOk = await rateLimit(env, `invite_accept:${me}`, 60_000, 10);
+    if (!rlOk) return json(request, { error: "Rate limit exceeded" }, 429);
+
+    let body;
+    try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
+
+    const { token } = body;
+    if (!token || !GUEST_TOKEN_RE.test(token)) {
+      return json(request, { error: "Invalid token" }, 400);
+    }
+
+    // Invite-Template-Row laden — DM: muss frei sein, Gruppe: __used__ ist OK
+    const inviteRow = await env.RENEX_DB.prepare(
+      "SELECT * FROM guest_sessions WHERE token = ?"
+    ).bind(token).first();
+
+    if (!inviteRow) return json(request, { error: "Invite not found", code: "not_found" }, 404);
+    if (Date.now() > inviteRow.expires_at) {
+      return json(request, { error: "Invite expired", code: "expired" }, 410);
+    }
+    // Eigene Invites kann man nicht akzeptieren
+    if (inviteRow.created_by === me) {
+      return json(request, { error: "Cannot accept own invite", code: "own_invite" }, 400);
+    }
+    // DM: nur unbenutzte Templates → bereits konsumiert (durch Gast oder anderen User) → 410
+    if (inviteRow.convo_type === "dm" && inviteRow.guest_handle === "__used__") {
+      return json(request, { error: "Invite already used", code: "already_used" }, 410);
+    }
+    // Inviter-Membership-Check: created_by darf die Convo nicht verlassen haben.
+    if (!(await _isStillMember(env, inviteRow.convo_id, inviteRow.convo_type, inviteRow.created_by))) {
+      return json(request, { error: "Inviter is no longer a member", code: "inviter_left" }, 410);
+    }
+
+    const acceptTs = Date.now();
+    const inviter  = inviteRow.created_by;
+    let finalConvoId = inviteRow.convo_id;
+    let isGroup = inviteRow.convo_type === "group";
+
+    if (!isGroup) {
+      // ── DM-Pfad ────────────────────────────────────────────────────────
+      finalConvoId = dmConvoId(inviter, me);
+
+      // Convo + Members (idempotent — falls schon Kontakt, nichts kaputt machen)
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversations (id, type, name, created_at, created_by)
+         VALUES (?, 'dm', NULL, ?, ?)`
+      ).bind(finalConvoId, acceptTs, inviter).run();
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+         VALUES (?, ?, 'member', ?)`
+      ).bind(finalConvoId, inviter, acceptTs).run();
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+         VALUES (?, ?, 'member', ?)`
+      ).bind(finalConvoId, me, acceptTs).run();
+
+      // DM-Token als verbraucht markieren (analog zu /invite/join)
+      await env.RENEX_DB.prepare(
+        "UPDATE guest_sessions SET guest_handle = '__used__' WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '')"
+      ).bind(token).run();
+    } else {
+      // ── Gruppen-Pfad ───────────────────────────────────────────────────
+      // me als Member eintragen (idempotent)
+      await env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO conversation_members (convo_id, member_handle, role, joined_at)
+         VALUES (?, ?, 'member', ?)`
+      ).bind(finalConvoId, me, acceptTs).run();
+      // Gruppen-Token bleibt frei (Multi-Use), kein __used__-Marker
+      await env.RENEX_KV.delete(`grp_members:${finalConvoId}`).catch(() => {});
+    }
+
+    // Bidirektionale Kontakte zwischen me und inviter
+    await env.RENEX_DB.prepare(
+      `INSERT OR IGNORE INTO contacts (user_handle, contact_handle, display_handle, status, direction, created_at, updated_at)
+       VALUES (?, ?, ?, 'accepted', 'out', ?, ?)`
+    ).bind(inviter, me, me, acceptTs, acceptTs).run();
+    await env.RENEX_DB.prepare(
+      `INSERT OR IGNORE INTO contacts (user_handle, contact_handle, display_handle, status, direction, created_at, updated_at)
+       VALUES (?, ?, ?, 'accepted', 'in', ?, ?)`
+    ).bind(me, inviter, inviter, acceptTs, acceptTs).run();
+
+    // ETag-Bumps für beide Seiten — Inboxes laden neu
+    await env.RENEX_KV.put(`contacts_v:${inviter}`, String(acceptTs));
+    await env.RENEX_KV.put(`contacts_v:${me}`,      String(acceptTs));
+
+    // System-Message in Convo
+    await env.RENEX_DB.prepare(
+      `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+       VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+    ).bind(crypto.randomUUID(), finalConvoId, me, acceptTs, `👤 ${me} joined the chat`).run();
+
+    // Live-Event an Inviter (analog zum guest_joined-Event)
+    const acceptEvent = {
+      id: crypto.randomUUID(),
+      type: "invite_accepted",
+      groupId: finalConvoId,
+      handle: me,
+      ts: acceptTs,
+    };
+    if (isGroup) {
+      await pushToGroupMembers(env, env.RENEX_DB, finalConvoId, me, acceptEvent);
+    } else {
+      await pushToUserDO(env, inviter, acceptEvent);
+    }
+
+    return json(request, {
+      ok: true,
+      convoId:       finalConvoId,
+      convoType:     inviteRow.convo_type,
+      inviterHandle: inviter,
     });
   }
 

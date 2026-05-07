@@ -11,6 +11,7 @@
     unreadCount?: number,    // Badge
     isOnline?: boolean,      // Grüner Online-Punkt
     isActive?: boolean,      // Currently selected
+    dimmed?: boolean,        // Ausgegraut (z.B. Kontakt ohne Chat-Aktivität)
     onclick?: () => void
   }} */
   let {
@@ -21,6 +22,7 @@
     unreadCount = 0,
     isOnline = false,
     isActive = false,
+    dimmed = false,
     onclick = () => {}
   } = $props();
 
@@ -39,6 +41,7 @@
   class="contact-item"
   class:active={isActive}
   class:has-unread={unreadCount > 0}
+  class:dimmed={dimmed}
   {onclick}
   type="button"
 >
@@ -154,6 +157,18 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .contact-item.dimmed .name {
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+  .contact-item.dimmed .avatar {
+    opacity: 0.55;
+  }
+  .contact-item.dimmed .subtitle {
+    font-style: italic;
+    opacity: 0.8;
   }
 
   .unread-badge {

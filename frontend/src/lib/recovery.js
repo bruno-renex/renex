@@ -25,14 +25,17 @@ import { captureException } from './sentry.js';
 const BIP39_STRENGTH_BITS = 128;  // → 12 Wörter
 const BIP39_WORD_COUNT    = 12;
 
-// ── PBKDF2-Konstanten (Spec §4.2) ─────────────────────────
-const PBKDF2_ITERATIONS = 600_000;
-const PBKDF2_HASH       = 'SHA-256';
-const MASTER_KEY_BITS   = 256;
+// ── PBKDF2-Konstanten (Spec §4.2, §4.5) ───────────────────
+// SECURITY: Änderung dieser Konstanten verändert die Brute-Force-Resistenz.
+// Test tests/recoveryConstants.test.js lockt sie — Update der Tests + Spec
+// und Security-Review Pflicht bei jeder Änderung.
+export const PBKDF2_ITERATIONS = 600_000;
+export const PBKDF2_HASH       = 'SHA-256';
+export const MASTER_KEY_BITS   = 256;
 
 // ── AES-GCM-Konstanten ────────────────────────────────────
-const AES_IV_SIZE       = 12;   // 96 bits — Standard für AES-GCM
-const SALT_SIZE         = 16;   // 128 bits
+export const AES_IV_SIZE       = 12;   // 96 bits — Standard für AES-GCM
+export const SALT_SIZE         = 16;   // 128 bits
 
 // ======================================================
 // Phrase: Generierung + Validierung

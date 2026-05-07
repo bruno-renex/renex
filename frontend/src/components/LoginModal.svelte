@@ -8,6 +8,8 @@
   import { sessionStore } from '../stores/session.svelte.js';
   import { loginWithPasskey, validateHandle } from '../lib/passkey.js';
   import { captureException } from '../lib/sentry.js';
+  import { renderTurnstile, preloadTurnstileScript } from '../lib/turnstile.js';
+  import { isGuestConvertPending, performGuestConvert, clearPendingGuestConvert } from '../lib/guestConvert.js';
 
   // Recovery-Login wird im Parent (App.svelte) gerendert, damit das Modal
   // nach Passkey-Auth nicht unmountet (LoginModal selbst verschwindet sobald myUser gesetzt).
@@ -23,11 +25,55 @@
   let statusMessage = $state("");
   let statusType = $state(""); // "" | "info" | "error" | "success"
 
+  // Turnstile (Anti-Bot bei Neu-Registrierung)
+  let turnstileEl = $state(null);
+  let cfTurnstileToken = $state(null);
+  let _turnstileHandle = null;
+
   // Derived: handle valid?
   let validation = $derived(validateHandle(handle));
   let canSubmit = $derived(
     validation.ok && consentChecked && !isSubmitting
   );
+
+  // Turnstile-API-Skript schon beim Modal-Open vorladen (im Hintergrund).
+  // Render des Widgets bleibt lazy (s.u.) — aber wenn das Skript dann gebraucht
+  // wird, ist es bereits im Browser-Cache: spart 300-800 ms beim ersten Render.
+  // Idempotent: zweiter Aufruf returnt die existierende Promise.
+  $effect(() => {
+    void preloadTurnstileScript().catch((e) => {
+      captureException(e, { context: 'turnstile.preload' });
+    });
+  });
+
+  // Turnstile lazy rendern — erst wenn Handle valid + Consent gesetzt.
+  // So bleibt das Widget unsichtbar solange der User nicht submitten will.
+  // Dank Preload (oben) ist der eigentliche render() dann instant.
+  $effect(() => {
+    if (!turnstileEl) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const h = await renderTurnstile(turnstileEl, {
+          onToken: (t) => { if (!cancelled) cfTurnstileToken = t; },
+          onExpired: () => { if (!cancelled) cfTurnstileToken = null; },
+          onError: () => { if (!cancelled) cfTurnstileToken = null; },
+          theme: 'dark',
+        });
+        if (cancelled) { h.dispose(); return; }
+        _turnstileHandle = h;
+      } catch (e) {
+        // Turnstile-Load-Fail (z.B. CDN blocked) — Submit klappt dann nur für
+        // existing users (login). Neu-Registrierung scheitert mit captcha_required.
+        captureException(e, { context: 'turnstile.load' });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      cfTurnstileToken = null;
+      if (_turnstileHandle) { _turnstileHandle.dispose(); _turnstileHandle = null; }
+    };
+  });
 
   function setStatus(message, type = "info") {
     statusMessage = message;
@@ -49,6 +95,7 @@
       setStatus(lang.loginAuthenticating || "Authentifiziere…", "info");
       const result = await loginWithPasskey(handle, {
         termsAccepted: consentChecked,
+        cfTurnstileToken,
       });
 
       // Erfolg: User-Store updaten + Session prüfen
@@ -60,6 +107,12 @@
         "success"
       );
 
+      // Convert-Datenmodell wird in App.svelte $effect verarbeitet (überlebt
+      // LoginModal-Unmount). Hier nur: bei Login statt Register obsolete Daten cleanen.
+      if (result.status !== "registered" && isGuestConvertPending()) {
+        clearPendingGuestConvert();
+      }
+
       // Session re-check (setzt korrekten State)
       await sessionStore.check();
     } catch (e) {
@@ -70,6 +123,14 @@
         case "terms_required":  userMsg = lang.consentRequired || "AGB akzeptieren"; break;
         case "user_cancelled":  userMsg = lang.passkeyCancelled || "Abgebrochen"; break;
         case "webauthn_failed": userMsg = lang.passkeyFailed || "Passkey-Fehler"; break;
+        case "captcha_required":
+        case "captcha_failed":
+          userMsg = lang.captchaRequired || "Bitte Captcha lösen";
+          // Token könnte verbraucht sein — Widget reset für neuen Versuch
+          if (_turnstileHandle) {
+            try { _turnstileHandle.reset(); cfTurnstileToken = null; } catch {}
+          }
+          break;
         default:
           userMsg = lang.loginFailed || "Login fehlgeschlagen";
           captureException(e, { handle, code });
@@ -120,6 +181,13 @@
           <a href="/datenschutz/" target="_blank" rel="noopener">{lang.consentPrivacy || "Datenschutzerklärung"}</a>{lang.consentSuffix || "."}
         </span>
       </label>
+
+      <!-- Turnstile-Widget (Anti-Bot bei Neu-Registrierung).
+           Lazy: erst rendern wenn Handle valid + AGB akzeptiert (User wird wahrscheinlich submitten).
+           Existing-User-Login braucht keinen Token (Backend skipt Verifikation). -->
+      {#if validation.ok && consentChecked}
+        <div class="turnstile-row" bind:this={turnstileEl}></div>
+      {/if}
 
       <button
         type="submit"
@@ -327,6 +395,12 @@
     text-align: center;
     font-size: 12px;
     min-height: 18px;
+  }
+
+  .turnstile-row {
+    display: flex;
+    justify-content: center;
+    min-height: 65px; /* reserviert Platz, vermeidet Layout-Sprung beim Lazy-Load */
   }
 
   .status-info    { color: var(--text-muted); }

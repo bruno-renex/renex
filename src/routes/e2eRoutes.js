@@ -1,4 +1,4 @@
-import { json, readJson, param, isUUID } from '../utils.js';
+import { json, readJson, param, isUUID, checkCsrf } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, revokeAllSessions } from '../auth.js';
 import { verifyWebAuthnAssertion, createWebAuthnChallenge } from '../helpers/webauthnVerify.js';
 
@@ -40,6 +40,12 @@ function _isValidEcdsaPubJwk(jwk) {
 // E2E ROUTES: /chat/keys/*, /e2e/inbox/*, /e2e/cmk/*
 // ======================================================
 export async function handleE2eRoutes(request, env, path, params) {
+  // CSRF: prüft Origin-Header für state-mutierende Requests (POST/DELETE).
+  // Skipt GET/OPTIONS/HEAD automatisch (siehe utils.checkCsrf).
+  // Schützt /e2e/group-gsk/store, /e2e/inbox/upload, /e2e/cmk/store etc.
+  const csrfErr = checkCsrf(request);
+  if (csrfErr) return csrfErr;
+
   switch (path) {
 
     // ======================================================
@@ -279,48 +285,60 @@ export async function handleE2eRoutes(request, env, path, params) {
         // ruft, könnte alten Index ohne neuen Device sehen. Mit Push-Daten kann
         // Frontend retry-bis-deviceId-im-fetch-list machen.
         //
-        // Broadcast nur bei *echten* Adds (siehe `shouldBroadcast` oben). Bei
-        // Re-Uploads bestehender aktiver Devices (Page-Reload etc.) skippen,
-        // sonst flutet jeder Browser-Refresh alle Kontakte mit redundanten Events.
+        // Broadcast nur bei *echten* Adds (siehe `shouldBroadcast` oben) UND
+        // wenn kein recent Broadcast-Lock existiert. Letzteres fängt den Race
+        // wenn mehrere Tabs gleichzeitig booten und alle `preState=null` lesen
+        // bevor das erste INSERT committed → ohne Lock 2-3× Broadcast pro
+        // Page-Reload-Burst, mit Lock genau 1.
+        let didBroadcast = false;
         if (shouldBroadcast) {
-          const pushPayload = {
-            type: "device_added",
-            from: handle,
-            deviceId,
-            jwk,
-            sigPub: sigPub || null,
-            ts: Date.now(),
-          };
+          const lockKey = `dev_added_lock:${handle}:${deviceId}`;
+          const lockExists = await env.RENEX_KV.get(lockKey);
+          if (!lockExists) {
+            // Lock setzen BEVOR Broadcast → falls parallele Requests denselben
+            // KV-Read-Pfad nehmen, nur einer kommt durch.
+            await env.RENEX_KV.put(lockKey, String(now), { expirationTtl: 60 });
+            didBroadcast = true;
 
-          try {
-            const authContacts = await env.RENEX_DB.prepare(
-              "SELECT contact_handle FROM contacts WHERE user_handle = ? AND status = 'accepted' AND contact_handle < ?"
-            ).bind(handle, handle).all();
+            const pushPayload = {
+              type: "device_added",
+              from: handle,
+              deviceId,
+              jwk,
+              sigPub: sigPub || null,
+              ts: now,
+            };
 
-            for (const row of (authContacts.results || [])) {
-              await pushToUserDO(env, row.contact_handle, {
+            try {
+              const authContacts = await env.RENEX_DB.prepare(
+                "SELECT contact_handle FROM contacts WHERE user_handle = ? AND status = 'accepted' AND contact_handle < ?"
+              ).bind(handle, handle).all();
+
+              for (const row of (authContacts.results || [])) {
+                await pushToUserDO(env, row.contact_handle, {
+                  ...pushPayload,
+                  id: crypto.randomUUID(),
+                  to: row.contact_handle,
+                });
+              }
+            } catch (e) {
+              console.warn("device_added push fehlgeschlagen (non-fatal):", e.message);
+            }
+
+            // Self-Push: eigene anderen Devices benachrichtigen
+            try {
+              await pushToUserDO(env, handle, {
                 ...pushPayload,
                 id: crypto.randomUUID(),
-                to: row.contact_handle,
+                to: handle,
               });
+            } catch (e) {
+              console.warn("device_added self-push fehlgeschlagen (non-fatal):", e.message);
             }
-          } catch (e) {
-            console.warn("device_added push fehlgeschlagen (non-fatal):", e.message);
-          }
-
-          // Self-Push: eigene anderen Devices benachrichtigen
-          try {
-            await pushToUserDO(env, handle, {
-              ...pushPayload,
-              id: crypto.randomUUID(),
-              to: handle,
-            });
-          } catch (e) {
-            console.warn("device_added self-push fehlgeschlagen (non-fatal):", e.message);
           }
         }
 
-        return json(request, { ok: true, broadcast: shouldBroadcast });
+        return json(request, { ok: true, broadcast: didBroadcast });
       }
       break;
     }
@@ -453,6 +471,11 @@ export async function handleE2eRoutes(request, env, path, params) {
         const deviceId = String(body.deviceId || "").trim();
         // reason: 'user' (Sicherheits-Aktion → CMK-Rotation) | 'self' (Logout-Cleanup → keine Rotation)
         const reason = body.reason === 'self' ? 'self' : 'user';
+        // actingDeviceId: welches Device die Revoke-Aktion ausführt. Wird als
+        // `initiatedBy` im Self-Push mitgeliefert → nur dieses Device rotiert
+        // CMKs, andere Devices skippen (Multi-Device-Self-Revoke-Race fix).
+        const rawActing = String(body.actingDeviceId || "").trim();
+        const actingDeviceId = (rawActing.length >= 8 && rawActing.length <= 64) ? rawActing : null;
 
         if (!deviceId) return json(request, { error: "deviceId required" }, 400);
 
@@ -547,7 +570,8 @@ export async function handleE2eRoutes(request, env, path, params) {
           }
         }
 
-        // Self-Push immer (eigene Devices müssen die Liste refreshen)
+        // Self-Push immer (eigene Devices müssen die Liste refreshen).
+        // initiatedBy: nur das initiierende Device rotiert CMKs (Race-Fix).
         try {
           await pushToUserDO(env, handle, {
             id: crypto.randomUUID(),
@@ -556,6 +580,7 @@ export async function handleE2eRoutes(request, env, path, params) {
             to: handle,
             deviceId,
             reason,
+            initiatedBy: actingDeviceId,
             ts: now
           });
         } catch (e) {

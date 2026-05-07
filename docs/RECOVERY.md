@@ -170,6 +170,61 @@ output = iv || ciphertext   (concatenated)
 
 **IV-Strategie:** Pro Update neue IV. AES-GCM erfordert IV-Uniqueness pro Key — bei 12-Byte-IV und 1 Update/Tag/User: 2^96 möglich, Kollisionswahrscheinlichkeit verschwindend.
 
+### 4.4 AAD-Binding (v=2, ab 2026-05-02)
+
+Das Bundle ist mit zusätzlichen Authentication Data (AAD) an einen bestimmten **Handle** gebunden:
+
+```
+AAD = "renex:bundle:" + handle.toLowerCase()
+ciphertext = AES-GCM(key, iv, plaintext, additionalData=AAD)
+```
+
+**Bundle-Format-Versionen:**
+
+| `bundle.v` | AAD | Eingeführt | Status |
+|---|---|---|---|
+| 1 | keine | Initial | Legacy — wird beim nächsten Sync auto-upgraded zu v=2 |
+| 2 | `renex:bundle:<handle>` | 2026-05-02 | Current |
+
+**Decrypt-Logik:** versucht v=2 (mit AAD) zuerst; bei Fehler Fallback auf v=1 (ohne AAD). Beide Versionen bleiben permanent supportet.
+
+**Zweck:** Defense-in-depth gegen unwahrscheinliche, aber nicht ausgeschlossene Szenarien:
+- **RNG-Salt-Kollision:** Falls zwei User je einen 16-Byte-Salt mit identischen Bytes ziehen würden (Wahrscheinlichkeit 2^-128 — astronomisch), wäre ohne AAD theoretisch ein Cross-User-Decrypt denkbar. Mit AAD: Auth-Tag matched nur wenn handle stimmt.
+- **Server-Mix-up:** Falls der Server fälschlicherweise einen Bundle-Blob unter falschem Handle ausliefern würde (Bug, nicht angenommen aber abgesichert), schlägt der Decrypt sauber fehl statt mit fremdem Klartext.
+- **Phrase-Wiederverwendung:** Wenn ein User dieselbe Phrase auf zwei Accounts verwendet (vom Spec verboten, aber wer's macht…), sind die Bundles trotzdem cross-Account-isoliert.
+
+### 4.5 Audit-Notes — Constant-Reasoning
+
+Diese Sektion dokumentiert **warum** die Krypto-Konstanten so sind. Ändere keine ohne Review.
+
+| Konstante | Wert | Begründung | Risiko bei Änderung |
+|---|---|---|---|
+| `PBKDF2_ITERATIONS` | `600_000` | OWASP-2023 für PBKDF2-SHA256 mit 16-Byte-Salt. Single-CPU-GPU-Brute-Force eines 12-Wort-BIP39 (~128 bit) bleibt unrentabel. | < 100k → wirtschaftlicher Brute-Force durch Cloud-GPU-Farms möglich; > 1M → UX-Pain (Multi-Sekunden-Wartezeit auf mobilen Geräten). |
+| `PBKDF2_HASH` | `'SHA-256'` | WebCrypto-Standard. Hardware-beschleunigt auf ARM/x86. | SHA-1 ist obsolet; SHA-512 ist 2× langsamer ohne Sicherheitsgewinn bei diesem Iteration-Count. |
+| `MASTER_KEY_BITS` | `256` | AES-256-Standard. PBKDF2-SHA256 liefert nativ 256 Bit. | < 128 → AES-Block-Cipher-Schwellen verletzt. |
+| `SALT_SIZE` | `16` | NIST SP 800-132 Minimum. Auch BIP39-konform für externe Tools. | < 8 → Pre-Computation realistisch; > 16 → keine Sicherheitsverbesserung, mehr R2-Bytes. |
+| `AES_IV_SIZE` | `12` | AES-GCM-Standard (96-bit). NIST SP 800-38D. | Andere Größen verbieten sich für AES-GCM. |
+| `BIP39_STRENGTH_BITS` | `128` | 12-Wort-Phrase, ~128 bit Entropy. | 256 (24 Wörter) wäre sicherer aber UX-Tod beim manuellen Tippen. |
+
+**Salt-Eindeutigkeit (Anti-Mass-Brute-Force):**
+
+Salt ist `randomSalt() = crypto.getRandomValues(16)` pro User, einmalig bei Register erzeugt. Gespeichert als `recovery/<handle>.salt` in R2. Backend lehnt Re-Init ab (`409 salt_exists`).
+
+**Konsequenz:** Pro User ein eigener PBKDF2-Stream. Angreifer mit kompromittiertem R2-Snapshot kann nicht eine einzige Brute-Force-Tabelle für alle User verwenden — er muss pro Handle 600k Iterationen rechnen. Bei 100k Usern × 12-Wort-Brute-Force × 600k PBKDF2-Iter: kosmologisch.
+
+**Phrase-zu-MasterKey: Ablauf (defensive Layer)**
+
+```
+1. User tippt 12-Wort-Phrase
+2. validatePhrase()  — BIP39-Wordlist + Checksum-Check (kein Tippfehler-Pass-through)
+3. normalizePhrase() — lowercase + trim + whitespace-collapse (Unicode-bypass-resistant)
+4. .normalize('NFKD') — BIP39-konforme Unicode-Form (identische Bytes auf allen Plattformen)
+5. PBKDF2(phrase || salt, 600k, SHA256, 256bit) → MasterKey
+6. AES-GCM(MasterKey, iv, plaintext, AAD=`renex:bundle:<handle>`) → Bundle
+```
+
+**Threat-Modell-Notiz:** Die Phrase IST der Account-Recovery-Schlüssel. Verlust = unrecoverable (siehe §2). Speicherung der Phrase im Frontend ist NIE persistent (nur transient in Modal-State, ge-gc-ed bei Modal-Close). Nur die abgeleiteten Master-Key-Bytes werden gecached (`masterKey.js`, mit Device-Storage-Key umverschlüsselt).
+
 ---
 
 ## 5. Sequence-Diagrams

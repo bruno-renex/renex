@@ -17,6 +17,19 @@ import { profileCache } from './profileCache.svelte.js';
 
 const SECTIONS = ["chats", "groups", "voice"];
 
+// Defensiv: Server-Daten dürfen niemals doppelte Keys liefern. Behalte den ersten Treffer.
+function _dedupBy(arr, key) {
+  const seen = new Set();
+  const out = [];
+  for (const x of arr) {
+    const k = x?.[key];
+    if (k == null || seen.has(k)) continue;
+    seen.add(k);
+    out.push(x);
+  }
+  return out;
+}
+
 // Persistierter aktiver Tab (Reload-safe)
 let _activeSection = $state(get("inbox_tab") || "chats");
 
@@ -92,30 +105,36 @@ export const inboxStore = {
         const accepted = [];
         const pendingIn = [];
         const pendingOut = [];
+        // Backend liefert display_name jetzt direkt mit (ab 2026-05) → Cache primen
+        // statt N parallele /users/<h>/profile-Requests beim App-Boot.
+        // Fallback: wenn display_name fehlt (alter Backend-Stand) → prefetch über Profile-Endpoint.
+        const handlesNeedingFetch = [];
         for (const c of r.data.contacts) {
           const item = {
             handle: c.handle,
-            displayName: null,
+            displayName: c.display_name ?? null,
             status: c.status,
             lastSeen: c.last_ts || null,
             direction: c.direction,
           };
+          // Cache primen — wenn Backend display_name liefert, sparen wir den Round-Trip.
+          if (c.display_name !== undefined) {
+            profileCache.set(c.handle, c.display_name);
+          } else {
+            handlesNeedingFetch.push(c.handle);
+          }
           if (c.status === "accepted") accepted.push(item);
           else if (c.status === "pending" && c.direction === "in") pendingIn.push(item);
           else if (c.status === "pending" && c.direction === "out") pendingOut.push(item);
         }
-        _contacts = accepted;
-        _pendingIn = pendingIn;
-        _pendingOut = pendingOut;
+        _contacts = _dedupBy(accepted, "handle");
+        _pendingIn = _dedupBy(pendingIn, "handle");
+        _pendingOut = _dedupBy(pendingOut, "handle");
 
-        // Display-Names für alle Kontakte (accepted + pending) im Hintergrund laden.
-        // Reaktiv: sobald ein DN ankommt, re-rendert die Liste automatisch via profileCache.
-        const allHandles = [
-          ...accepted.map(x => x.handle),
-          ...pendingIn.map(x => x.handle),
-          ...pendingOut.map(x => x.handle),
-        ];
-        profileCache.prefetch(allHandles);
+        // Fallback-Prefetch nur für Handles wo Backend kein display_name geliefert hat.
+        if (handlesNeedingFetch.length > 0) {
+          profileCache.prefetch(handlesNeedingFetch);
+        }
       }
     } finally {
       _isLoading = false;
@@ -139,16 +158,35 @@ export const inboxStore = {
     return r.ok;
   },
 
+  /**
+   * Entfernt einen akzeptierten Kontakt (beidseitig, Backend setzt status='removed').
+   * @returns {Promise<{ok: boolean, error?: string}>}
+   */
+  async removeContact(handle) {
+    if (!handle) return { ok: false, error: 'no_handle' };
+    const r = await apiFetch("/contacts/remove", { method: "POST", body: { contact: handle } });
+    if (r.ok) {
+      // Optimistisch lokal entfernen — refresh holt sich alles re-konsistent
+      _contacts = _contacts.filter(c => c.handle !== handle);
+      await this.loadContacts();
+      return { ok: true };
+    }
+    return { ok: false, error: r.error || 'remove_failed' };
+  },
+
   async loadGroups() {
     _isLoading = true;
     try {
       const r = await apiFetch("/groups/list");
       if (r.ok && Array.isArray(r.data?.groups)) {
-        _groups = r.data.groups.map(g => ({
-          id: g.id,
-          name: g.name || "Unnamed",
-          memberCount: g.member_count || 0,
-        }));
+        _groups = _dedupBy(
+          r.data.groups.map(g => ({
+            id: g.id,
+            name: g.name || "Unnamed",
+            memberCount: g.member_count || 0,
+          })),
+          "id"
+        );
       }
     } finally {
       _isLoading = false;

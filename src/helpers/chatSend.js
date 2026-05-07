@@ -171,7 +171,7 @@ export async function handleChatSend(request, env) {
   // GILT NICHT für Control-Messages (inkl. request_gsk / gsk)
   // Per-Device statt per-User damit parallele Tabs/Devices sich nicht gegenseitig blockieren.
   // Burst-Friendly: 3 messages / 2s pro Device (vorher: 1/2s pro User → unspielbar bei Multi-Tab).
-  if (type !== "cmk_req" && type !== "cmk_unavailable" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk" && type !== "request_gsk") {
+  if (type !== "cmk_req" && type !== "cmk_unavailable" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "cmk_reset" && type !== "auto_delete_set" && type !== "gsk" && type !== "request_gsk") {
     const rlKey = senderDeviceId
       ? `chat_send:${me}:${senderDeviceId}`
       : `chat_send:${me}`;  // Fallback wenn deviceId nicht gesetzt
@@ -189,7 +189,7 @@ export async function handleChatSend(request, env) {
 
   // CONTROL MESSAGE RATE LIMIT (cmk / cmk_req / cmk_unavailable / epoch_rotate / gsk)
   // Max. 20 Key-Exchange-Messages pro Minute pro User
-  if (type === "cmk_req" || type === "cmk_unavailable" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set" || type === "gsk") {
+  if (type === "cmk_req" || type === "cmk_unavailable" || type === "cmk" || type === "epoch_rotate" || type === "cmk_rotate" || type === "cmk_reset" || type === "auto_delete_set" || type === "gsk") {
     const ok = await rateLimit(env, `control_send:${me}`, 60_000, 20);
     if (!ok) {
       return json(request, { error: "Control message rate limit exceeded", retryAfterMs: 60000 }, 429);
@@ -217,7 +217,7 @@ export async function handleChatSend(request, env) {
   }
 
   // E2E Versions-Guard — gilt NUR für echte E2E-Nachrichten
-  if (type !== "cmk_req" && type !== "cmk_unavailable" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk") {
+  if (type !== "cmk_req" && type !== "cmk_unavailable" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "cmk_reset" && type !== "auto_delete_set" && type !== "gsk" && type !== "request_gsk") {
     if (v !== undefined && v !== 2) {
       return json(request, { error: "Unsupported E2E version" }, 400);
     }
@@ -276,7 +276,7 @@ export async function handleChatSend(request, env) {
   }
 
   // Nur echte Chat-Messages brauchen Payload
-  if (!type || (type !== "cmk_req" && type !== "cmk_unavailable" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "auto_delete_set" && type !== "gsk" && type !== "request_gsk")) {
+  if (!type || (type !== "cmk_req" && type !== "cmk_unavailable" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "cmk_reset" && type !== "auto_delete_set" && type !== "gsk" && type !== "request_gsk")) {
     if (!message && !(hasLegacyE2E || hasMultiE2E)) {
       return json(request, { error: "Missing message payload" }, 400);
     }
@@ -301,7 +301,7 @@ export async function handleChatSend(request, env) {
     status: "sent"
   };
 
-  if (type === "cmk" || type === "cmk_req" || type === "cmk_unavailable" || type === "epoch_rotate" || type === "cmk_rotate" || type === "auto_delete_set") {
+  if (type === "cmk" || type === "cmk_req" || type === "cmk_unavailable" || type === "epoch_rotate" || type === "cmk_rotate" || type === "cmk_reset" || type === "auto_delete_set") {
     msg.message = undefined;
     delete msg.status;
   }
@@ -397,10 +397,32 @@ export async function handleChatSend(request, env) {
     msg.message = message;
   }
 
+  // gsk Control-Messages: payloads sind Wraps der GSK pro Recipient-Device
+  // (NICHT verschlüsselte Chat-Bodies → kein e2e=true). Müssen trotzdem
+  // durchgereicht werden, sonst kommt das WS-Event ohne payloads beim
+  // Empfänger an → handleIncomingGSKMessage kann's nicht decrypten.
+  if (type === "gsk" && Array.isArray(payloads) && payloads.length > 0) {
+    const cleaned = [];
+    for (const p of payloads) {
+      if (!p) continue;
+      const { deviceId, ivB64, ctB64, fromDeviceId } = p;
+      if (
+        typeof deviceId !== "string" || deviceId.length < 4 || deviceId.length > 64 ||
+        typeof ivB64 !== "string" || ivB64.length < 16 || ivB64.length > MAX_IV_B64 ||
+        typeof ctB64 !== "string" || ctB64.length < 16 || ctB64.length > MAX_CT_B64
+      ) continue;
+      cleaned.push({ deviceId, ivB64, ctB64, fromDeviceId });
+    }
+    if (cleaned.length > 10) {
+      return json(request, { error: "Too many device payloads" }, 400);
+    }
+    msg.payloads = cleaned;
+  }
+
   // D1 INSERT — Chat-Messages + GSK/request_gsk (für Gast-Polling nötig)
   // CMK/epoch/auto_delete sind reine Signalling-Messages ohne Polling-Bedarf.
   // gsk + request_gsk werden gespeichert damit Gäste (kein WebSocket) sie via /chat/list empfangen.
-  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "cmk_unavailable" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set") {
+  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "cmk_unavailable" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "cmk_reset" && msg.type !== "auto_delete_set") {
     await env.RENEX_DB.prepare(
       `INSERT OR IGNORE INTO messages
          (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id, reply_to_id, reply_from, reply_iv, reply_ct, reply_rotation_index, attachment_key, attachment_type)
@@ -452,8 +474,13 @@ export async function handleChatSend(request, env) {
   // ======================================================
   let wsDeliveredCount = 0;
   if (bodyConvoId) {
-    // Gruppen-Nachricht: an alle Mitglieder ausser Sender (excludes self)
-    await pushToGroupMembers(env, env.RENEX_DB, bodyConvoId, me, msg);
+    // Gruppen-Nachricht: an alle Mitglieder ausser Sender (excludes self).
+    // Bei GSK/request_gsk: bypassCache=true (Defense-in-Depth). Wenn ein
+    // ex-Member kurz zuvor entfernt wurde und KV-Cache noch stale ist, würde
+    // er sonst das gsk-Event empfangen (kann's zwar nicht decrypten, aber
+    // sieht Group-Activity-Metadata). Mit bypass: aktuelle DB-Member-Liste.
+    const isKeyControl = msg.type === "gsk" || msg.type === "request_gsk";
+    await pushToGroupMembers(env, env.RENEX_DB, bodyConvoId, me, msg, isKeyControl ? { bypassCache: true } : undefined);
   } else {
     // DM: an Empfänger
     if (!to || typeof to !== "string") {
@@ -467,7 +494,7 @@ export async function handleChatSend(request, env) {
     // Nur für CHAT-Messages, nicht für Control-Messages (cmk/cmk_req etc.)
     const isChatMsg = !type || (
       type !== "cmk" && type !== "cmk_req" && type !== "cmk_unavailable" &&
-      type !== "epoch_rotate" && type !== "cmk_rotate" &&
+      type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "cmk_reset" &&
       type !== "auto_delete_set"
     );
     if (isChatMsg) {
@@ -478,7 +505,7 @@ export async function handleChatSend(request, env) {
   // ======================================================
   // UNREAD COUNTER (nur DMs — Gruppen haben kein per-Member Tracking)
   // ======================================================
-  if (!isGroupMessage && msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "cmk_unavailable" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
+  if (!isGroupMessage && msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "cmk_unavailable" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "cmk_reset" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
     // Atomares Increment via D1 — kein Read-Modify-Write Race Condition
     await env.RENEX_DB.prepare(
       `INSERT INTO unread_counters (owner, sender, count) VALUES (?, ?, 1)
@@ -490,7 +517,7 @@ export async function handleChatSend(request, env) {
   // WEB PUSH NOTIFICATIONS (wenn User offline / kein WS)
   // Nur für echte Chat-Messages (keine Control-Messages)
   // ======================================================
-  const isControlMsg = msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "cmk_unavailable" || msg.type === "epoch_rotate" || msg.type === "cmk_rotate" || msg.type === "auto_delete_set" || msg.type === "gsk" || msg.type === "request_gsk";
+  const isControlMsg = msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "cmk_unavailable" || msg.type === "epoch_rotate" || msg.type === "cmk_rotate" || msg.type === "cmk_reset" || msg.type === "auto_delete_set" || msg.type === "gsk" || msg.type === "request_gsk";
   if (!isControlMsg) {
     try {
       if (isGroupMessage) {

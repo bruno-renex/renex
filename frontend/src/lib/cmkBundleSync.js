@@ -240,6 +240,28 @@ export async function restoreCmksFromBundle(bundle) {
 }
 
 /**
+ * Checkt ob ein Recovery-Prompt nötig ist beim Boot:
+ * - User ist eingeloggt (Passkey-OK)
+ * - KEIN cached masterKey (z.B. Inkognito, neuer Browser, nach Storage-Wipe)
+ * - Bundle in R2 EXISTIERT (User hatte schon Chats / CMKs)
+ *
+ * Wenn alle drei: User hat Chat-History die ohne Phrase nicht decryptbar ist.
+ * UI sollte einen non-blocking Toast/Banner zeigen mit Recovery-Trigger.
+ *
+ * @returns {Promise<boolean>}
+ */
+export async function checkRecoveryPromptNeeded() {
+  try {
+    const masterKeyBytes = await loadCachedMasterKey();
+    if (masterKeyBytes) return false;  // Schlüssel ist da → kein Prompt nötig
+    const data = await getBundle();
+    return !!(data && data.blob);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Boot-Hook: wenn cached masterKey vorhanden + Bundle in R2 existiert,
  * pull Bundle, decrypt, restore lokal fehlende CMKs.
  *

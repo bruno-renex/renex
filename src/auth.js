@@ -299,13 +299,19 @@ export async function pushToUserDO(env, handle, event) {
 // ── Event an alle Gruppen-Mitglieder pushen ───────────
 // Liest Mitglieder aus KV-Cache (TTL 60s), fällt auf D1 zurück bei Cache-Miss.
 // Parallel via Promise.allSettled — ein offline User blockiert keine anderen.
+//
+// `opts.bypassCache=true` — liest IMMER direkt aus D1 (frische Liste).
+// Notwendig direkt nach `member_left`/`member_removed` (KV-delete dort ist
+// fire-and-forget) und für GSK-Distribution (sicherheitskritisch: ex-member
+// darf keine GSK-Events mehr empfangen).
 const GROUP_MEMBERS_CACHE_TTL = 60; // Sekunden
 
-export async function pushToGroupMembers(env, db, groupId, senderHandle, event) {
+export async function pushToGroupMembers(env, db, groupId, senderHandle, event, opts = {}) {
+  const bypassCache = opts.bypassCache === true;
   let members;
   const cacheKey = `grp_members:${groupId}`;
   try {
-    const cached = await env.RENEX_KV.get(cacheKey);
+    const cached = bypassCache ? null : await env.RENEX_KV.get(cacheKey);
     if (cached) {
       members = JSON.parse(cached);
     } else {
@@ -313,8 +319,11 @@ export async function pushToGroupMembers(env, db, groupId, senderHandle, event) 
         "SELECT member_handle FROM conversation_members WHERE convo_id = ?"
       ).bind(groupId).all();
       members = (rows.results || []).map(r => r.member_handle);
-      // Cache für 60s schreiben (fire-and-forget)
-      env.RENEX_KV.put(cacheKey, JSON.stringify(members), { expirationTtl: GROUP_MEMBERS_CACHE_TTL }).catch(() => {});
+      // Cache nur schreiben wenn wir nicht bypass'ed haben (sonst überschreibt
+      // bypass-Pfad einen frisch invalidierten Cache mit alter Stand).
+      if (!bypassCache) {
+        env.RENEX_KV.put(cacheKey, JSON.stringify(members), { expirationTtl: GROUP_MEMBERS_CACHE_TTL }).catch(() => {});
+      }
     }
   } catch (e) {
     console.warn("pushToGroupMembers: lookup failed", groupId, e);

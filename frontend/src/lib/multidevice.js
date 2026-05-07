@@ -133,9 +133,14 @@ export async function revokeDevice(deviceId, reason = 'user') {
       },
     };
 
+    // actingDeviceId = das Device das die Revoke-Aktion ausführt. Backend nutzt
+    // diesen Wert in der `device_removed`-Self-Push als `initiatedBy` damit
+    // andere Devices wissen wer die Rotation übernimmt → keine parallelen
+    // CMK-Rotationen, die in divergierenden CMKs enden würden.
+    const actingDeviceId = (await import('./e2eKeys.js')).getDeviceId();
     const r = await apiFetch('/e2e/inbox/remove', {
       method: 'POST',
-      body: { deviceId, reason, assertion },
+      body: { deviceId, reason, assertion, actingDeviceId },
     });
     if (r.ok) {
       return { ok: true, remaining: r.data?.remaining ?? 0 };
@@ -154,18 +159,31 @@ export async function revokeDevice(deviceId, reason = 'user') {
 export function formatRelativeTime(ts, locale = 'de-DE') {
   if (!ts) return '—';
   const diff = Date.now() - ts;
-  if (diff < 60_000) return locale.startsWith('de') ? 'jetzt' : 'now';
+  const isDe = locale.startsWith('de');
+  const isEs = locale.startsWith('es');
+
+  if (diff < 60_000) {
+    if (isDe) return 'jetzt';
+    if (isEs) return 'ahora';
+    return 'now';
+  }
   if (diff < 3600_000) {
     const min = Math.floor(diff / 60_000);
-    return locale.startsWith('de') ? `vor ${min}min` : `${min}min ago`;
+    if (isDe) return `vor ${min}min`;
+    if (isEs) return `hace ${min}min`;
+    return `${min}min ago`;
   }
   if (diff < 86400_000) {
     const h = Math.floor(diff / 3600_000);
-    return locale.startsWith('de') ? `vor ${h}h` : `${h}h ago`;
+    if (isDe) return `vor ${h}h`;
+    if (isEs) return `hace ${h}h`;
+    return `${h}h ago`;
   }
   if (diff < 7 * 86400_000) {
     const d = Math.floor(diff / 86400_000);
-    return locale.startsWith('de') ? `vor ${d}d` : `${d}d ago`;
+    if (isDe) return `vor ${d}d`;
+    if (isEs) return `hace ${d}d`;
+    return `${d}d ago`;
   }
   return new Date(ts).toLocaleDateString(locale, {
     day: 'numeric', month: 'short', year: 'numeric',

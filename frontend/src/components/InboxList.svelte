@@ -13,6 +13,8 @@
   import AddContactModal from './AddContactModal.svelte';
   import CreateGroupModal from './CreateGroupModal.svelte';
   import PendingRequestsModal from './PendingRequestsModal.svelte';
+  import InviteLinkModal from './InviteLinkModal.svelte';
+  import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
 
   let lang = $derived(i18nStore.lang);
   let activeSection = $derived(inboxStore.activeSection);
@@ -63,10 +65,23 @@
   let showAddContact = $state(false);
   let showCreateGroup = $state(false);
   let showRequests = $state(false);
+  let showInviteLink = $state(false);
+  let inviteConvoId = $state(null);
+  let inviteGroupName = $state(null);
 
   function openAddContact() { showAddContact = true; }
   function openCreateGroup() { showCreateGroup = true; }
   function openRequests() { showRequests = true; }
+  function openInvite1to1() {
+    inviteConvoId = null;
+    inviteGroupName = null;
+    showInviteLink = true;
+  }
+  function openInviteToGroup(groupId, groupName) {
+    inviteConvoId = groupId;
+    inviteGroupName = groupName;
+    showInviteLink = true;
+  }
 
   // Pending requests count (für Banner)
   let pendingCount = $derived(inboxStore.pendingCount);
@@ -81,6 +96,14 @@
     <div class="list-section">
       <div class="panel-list-header">
         <span class="panel-list-title">{lang.tabChats || "Messages"}</span>
+        <button
+          class="panel-action-btn"
+          onclick={openInvite1to1}
+          title={lang.inviteByLinkTitle || "Per Link einladen (kein Account nötig)"}
+          aria-label="Invite by link"
+        >
+          📨
+        </button>
         <button
           class="panel-action-btn"
           onclick={openAddContact}
@@ -124,15 +147,22 @@
         {:else}
           <ul>
             {#each chats as c (c.handle)}
-              {@const dn = profileCache.get(c.handle)}
+              {@const isGuest = isGuestHandle(c.handle)}
+              {@const dn = isGuest ? guestDisplayName(c.handle) : profileCache.get(c.handle)}
+              {@const hasActivity = !!c.lastSeen}
+              {@const itemName = isGuest
+                ? dn
+                : (dn ? `${dn} · @${c.handle}` : `@${c.handle}`)}
+              {@const initials = ((isGuest ? dn.replace(/^Guest /, '') : (dn || c.handle)) || '').slice(0, 2).toUpperCase()}
               <li>
                 <ContactItem
-                  name={dn ? `${dn} · @${c.handle}` : `@${c.handle}`}
-                  subtitle={c.lastMessage || ""}
-                  initials={(dn || c.handle || '').slice(0, 2).toUpperCase()}
+                  name={itemName}
+                  subtitle={hasActivity ? (c.lastMessage || "") : (lang.noChatYet || "Noch kein Chat")}
+                  {initials}
                   unreadCount={inboxStore.unreadFor(c.handle)}
                   isOnline={c.isOnline}
                   isActive={selectedKey === "dm:" + c.handle}
+                  dimmed={!hasActivity}
                   onclick={() => selectChat(c)}
                 />
               </li>
@@ -261,6 +291,7 @@
 <AddContactModal bind:isOpen={showAddContact} />
 <CreateGroupModal bind:isOpen={showCreateGroup} />
 <PendingRequestsModal bind:isOpen={showRequests} />
+<InviteLinkModal bind:isOpen={showInviteLink} convoId={inviteConvoId} groupName={inviteGroupName} />
 
 <style>
   .panel-list {

@@ -17,9 +17,91 @@ import { apiFetch } from '../lib/api.js';
 import { userStore } from './user.svelte.js';
 import { captureException } from '../lib/sentry.js';
 import {
+  startVoiceTimer,
+  cancelVoiceTimer,
+  isVoiceTimerActive,
+} from '../lib/voiceTimers.js';
+import {
   fetchIceServers, getLocalMedia, createPeerConnection,
   addLocalTracks, cleanupPeerConnection, setLocalAudioMuted,
+  extractDtlsFingerprint, createAudioLevelMeter,
 } from '../lib/voiceRTC.js';
+import { signMessage, verifyMessageSig } from '../lib/messageSig.js';
+import { getDeviceId } from '../lib/e2eKeys.js';
+import { getSigPubForDevice, getCMKIfExists } from '../lib/cmk.js';
+import { ensureSecureDmSession } from '../lib/chatPipeline.js';
+import {
+  encryptSdp, decryptSdp,
+  encryptIce, decryptIce,
+  isVoiceEnvelope,
+} from '../lib/voiceCrypto.js';
+
+/**
+ * Erstellt ein signiertes auth-Objekt für eine Voice-SDP.
+ * Schützt gegen Backend-MITM: Backend sieht zwar SDP+fp+sig, kann aber den
+ * fp nicht ändern weil es kein gültiges sig erzeugen kann (privater Sigkey
+ * ist nur auf dem Sender-Device).
+ *
+ * @returns {Promise<{fp,sig,fromDeviceId}|null>} null wenn fp nicht extrahierbar
+ */
+async function _buildAuth(sdp, callId, sdpType) {
+  const fp = extractDtlsFingerprint(sdp);
+  if (!fp) return null;
+  const fromDeviceId = getDeviceId();
+  // Sig-payload formal stabil: callId|sdpType|fp — bindet fp an den konkreten Call.
+  // signMessage signiert (iv|ct|sid|epoch) — wir nutzen die gleiche Signatur-Logik
+  // mit voice-spezifischen Slots: iv=callId, ct=fp, sid='voice', epoch=0
+  // (epoch=0 weil Voice-Calls keine epoch-rotation haben — ECDSA-P256 ist
+  // nicht epoch-gebunden, eindeutigkeit kommt aus callId).
+  // sdpType (offer/answer) wird in der ct-position mit-eingeflochten.
+  const ctPayload = `${sdpType}:${fp}`;
+  const sig = await signMessage(callId, ctPayload, 'voice', 0);
+  return { fp, sig, fromDeviceId };
+}
+
+/**
+ * Verifiziert ein empfangenes auth-Objekt:
+ *   1. fp im auth muss mit dem fp in der SDP übereinstimmen (sonst hat Backend
+ *      die SDP modifiziert nach der Signierung — MITM-Indiz)
+ *   2. Signatur muss mit dem Public-Sigkey des Sender-Devices verifyen
+ *
+ * @returns {Promise<{ok: boolean, reason?: string}>}
+ */
+async function _verifyAuth(receivedSdp, auth, callId, sdpType, fromHandle) {
+  if (!auth || typeof auth !== 'object') return { ok: false, reason: 'no_auth' };
+  if (typeof auth.fp !== 'string' || typeof auth.sig !== 'string' || typeof auth.fromDeviceId !== 'string') {
+    return { ok: false, reason: 'malformed_auth' };
+  }
+  const sdpFp = extractDtlsFingerprint(receivedSdp);
+  if (!sdpFp) return { ok: false, reason: 'no_sdp_fp' };
+  if (sdpFp !== auth.fp) {
+    // Backend (oder MITM) hat SDP modifiziert nach Signierung — Audio wäre
+    // entschlüsselbar von wem auch immer den modifizierten fp gesetzt hat.
+    return { ok: false, reason: 'fp_mismatch' };
+  }
+  // sigPub des Sender-Devices aus IDB-Cache (ggf. nachgeladen via fetchPeerDevices).
+  // getSigPubForDevice liest aus dem peer-device-cache (storePeerDevices).
+  let sigPub = await getSigPubForDevice(fromHandle, auth.fromDeviceId);
+  if (!sigPub) {
+    // Cache-miss: device evtl. erst kürzlich added → einmal force-fetch
+    const { default: nullDefault } = { default: null };  // satisfy linter
+    void nullDefault;
+    try {
+      const { fetchPeerDevices } = await import('../lib/chatPipeline.js');
+      // fetchPeerDevices ist privat — fallback: api-call selbst
+      const r = await apiFetch(`/e2e/inbox/get?user=${encodeURIComponent(fromHandle)}`);
+      if (r.ok && Array.isArray(r.data?.devices)) {
+        const { storePeerDevices } = await import('../lib/cmk.js');
+        await storePeerDevices(fromHandle, r.data.devices);
+        sigPub = await getSigPubForDevice(fromHandle, auth.fromDeviceId);
+      }
+    } catch {}
+  }
+  if (!sigPub) return { ok: false, reason: 'no_sigpub' };
+  const ctPayload = `${sdpType}:${auth.fp}`;
+  const ok = await verifyMessageSig(callId, ctPayload, 'voice', 0, auth.sig, sigPub);
+  return ok ? { ok: true } : { ok: false, reason: 'bad_signature' };
+}
 
 const STATES = {
   IDLE: 'idle',
@@ -35,7 +117,10 @@ let _peer = $state(null);        // { handle, displayName }
 let _callId = $state(null);
 let _isMuted = $state(false);
 let _isVideoOn = $state(false);
-let _isSpeakerOn = $state(true);
+// Speaker-Toggle entfernt (B18, Phase 1B): keine echte Browser-API für
+// Earpiece↔Loudspeaker-Switch in iOS Safari/PWA, und auf Android nur über
+// setSinkId mit enumerierten Geräten. Wird in Phase 1C+ als Device-Picker
+// re-introduced wenn BT-Headset-Switching nötig wird.
 let _startedAt = $state(0);
 let _history = $state([]);
 let _errorMsg = $state(null);
@@ -52,6 +137,41 @@ let _pttPressed = $state(false);
 let _iceRetryUsed = false;
 let _isReconnecting = $state(false);
 
+// No-Answer-Timeout: 30s — wenn der Call nach 30s noch in RINGING ist, automatisch
+// cancel (caller) / decline (callee). Beides erzeugt missed-call-Eintrag bei Peer.
+// Timer-Verwaltung via voiceTimers.js (testbare Helper-Schicht).
+export const RING_TIMEOUT_MS = 30_000;
+
+// Mid-Call-Reconnect: iceConnectionState='disconnected' bedeutet nicht failed —
+// Browser versucht selbst zu re-connecten. Wenn das nach 5s nicht klappt,
+// triggern wir pc.restartIce() — neue ICE-Gathering-Runde, ohne SDP-Renegotiate.
+// Bei echtem Network-Wechsel (WiFi→5G) hilft das oft. Bei totalem Server-Loss
+// nicht — dann läuft eh der iceConnectionState=failed-Pfad.
+// Timer-Verwaltung via voiceTimers.js (testbare Helper-Schicht).
+export const RESTART_ICE_DELAY_MS = 5_000;
+let _isConnectionDegraded = $state(false);
+
+function _clearRestartIceTimer() {
+  cancelVoiceTimer('restart-ice');
+}
+
+function _clearNoAnswerTimer() {
+  cancelVoiceTimer('no-answer');
+}
+
+function _startNoAnswerTimer(role) {
+  startVoiceTimer('no-answer', RING_TIMEOUT_MS, () => {
+    // Nur greifen wenn noch in RINGING — sonst hat Peer/User schon reagiert
+    if (_state !== STATES.RINGING) return;
+    console.warn(`📞 No-Answer-Timeout nach 30s (${role}) → automatic cancel/decline`);
+    if (role === 'caller') {
+      void voiceStore.endCall();        // sendet /voice/cancel
+    } else {
+      void voiceStore.declineCall();    // sendet /voice/decline
+    }
+  });
+}
+
 // Live-Duration als $derived (re-renders über Interval)
 let _now = $state(Date.now());
 setInterval(() => { _now = Date.now(); }, 1000);
@@ -62,6 +182,16 @@ setInterval(() => { _now = Date.now(); }, 1000);
 let _pc = null;                  // RTCPeerConnection
 let _localStream = null;         // MediaStream (mic)
 let _remoteStream = null;        // MediaStream from peer (set by ontrack)
+let _localMeterDispose = null;   // () => void — stoppt local audio meter
+let _remoteMeterDispose = null;  // () => void — stoppt remote audio meter
+// CMK (32-Byte Uint8Array) für die laufende Call-Session — encryptet alle
+// SDP- und ICE-Bodies. Bei _hardReset cleared (Forward Secrecy: ein gestolzener
+// Memory-Dump würde nur den aktuellen Call leaken, nicht historische CMK-Sicht).
+let _callCmk = null;
+
+// Audio-Levels (0..1). Reactive damit Avatar-Pulse-Animation drauf reagieren kann.
+let _localLevel = $state(0);
+let _remoteLevel = $state(0);
 // Pending ICE-Candidates die vor setRemoteDescription ankamen
 let _pendingRemoteIce = [];
 // Pending ICE-Candidates die wir senden wollen, aber Backend kennt den Call
@@ -79,12 +209,20 @@ function _emitRemoteStream() {
 }
 
 async function _hardReset() {
+  _clearNoAnswerTimer();
+  _clearRestartIceTimer();
+  _isConnectionDegraded = false;
+  if (_localMeterDispose) { try { _localMeterDispose(); } catch {} _localMeterDispose = null; }
+  if (_remoteMeterDispose) { try { _remoteMeterDispose(); } catch {} _remoteMeterDispose = null; }
+  _localLevel = 0;
+  _remoteLevel = 0;
   cleanupPeerConnection(_pc, _localStream);
   _pc = null;
   _localStream = null;
   _remoteStream = null;
   _pendingRemoteIce = [];
   _localIceQueue = null;
+  _callCmk = null;
   _emitRemoteStream();
 }
 
@@ -137,11 +275,23 @@ function _writeHistoryEntry(missed) {
   ].slice(0, 50);
 }
 
-function _sendIceCandidate(cand, callId, peerHandle) {
-  return apiFetch('/voice/ice', {
-    method: 'POST',
-    body: { to: peerHandle, callId, candidate: cand.toJSON ? cand.toJSON() : cand },
-  });
+async function _sendIceCandidate(cand, callId, peerHandle) {
+  if (!_callCmk) {
+    console.warn('📞 ICE-send ohne CMK — skip (call wahrscheinlich am Beenden)');
+    return;
+  }
+  const me = userStore.myUser;
+  const candidateObj = cand.toJSON ? cand.toJSON() : cand;
+  try {
+    const ec = await encryptIce(_callCmk, candidateObj, me, peerHandle, callId);
+    return apiFetch('/voice/ice', {
+      method: 'POST',
+      body: { to: peerHandle, callId, candidate: { ec } },
+    });
+  } catch (e) {
+    captureException(e, { context: 'voice.encryptIce' });
+    console.warn('📞 encryptIce failed:', e?.message);
+  }
 }
 
 async function _flushLocalIceQueue(callId, peerHandle) {
@@ -170,6 +320,31 @@ async function _setupPeerConnection(callId, peerHandle) {
     onTrack: (stream) => {
       _remoteStream = stream;
       _emitRemoteStream();
+      // Audio-Level-Meter für remote stream starten
+      if (_remoteMeterDispose) { try { _remoteMeterDispose(); } catch {} }
+      _remoteMeterDispose = createAudioLevelMeter(stream, (lvl) => {
+        _remoteLevel = lvl;
+      });
+    },
+    onIceConnectionStateChange: (ics) => {
+      // Mid-Call-Reconnect: bei `disconnected` (transient) wartet der Browser
+      // ~5s auf seine eigenen Reconnect-Versuche. Wenn das nicht reicht,
+      // trigger wir manuell pc.restartIce() — frische ICE-Gathering-Runde
+      // ohne komplette SDP-Renegotiation. Bei `connected`-Recovery: Banner weg.
+      if (ics === 'disconnected' && _state === STATES.ACTIVE) {
+        _isConnectionDegraded = true;
+        startVoiceTimer('restart-ice', RESTART_ICE_DELAY_MS, () => {
+          if (!_pc || _state !== STATES.ACTIVE) return;
+          if (_pc.iceConnectionState !== 'disconnected') return;  // Browser hat sich erholt
+          console.warn('📞 ICE long-disconnected → pc.restartIce()');
+          try { _pc.restartIce(); } catch (e) {
+            console.warn('📞 restartIce failed:', e?.message);
+          }
+        });
+      } else if (ics === 'connected' || ics === 'completed') {
+        _clearRestartIceTimer();
+        _isConnectionDegraded = false;
+      }
     },
     onConnectionStateChange: (cs) => {
       console.log(`📞 RTC connectionState=${cs}`);
@@ -236,6 +411,12 @@ async function _setupPeerConnection(callId, peerHandle) {
   // Initialer Mic-State: respektiert pttMode/isMuted falls bereits gesetzt.
   // Wenn pttMode=true beim Setup → Mic startet OFF (User muss Hold drücken).
   _applyMicState();
+  // Audio-Level-Meter für local stream — wir zeigen den im UI als Pulse
+  // damit User sehen ob Mic wirklich aufnimmt (silent-mic-bug detection).
+  if (_localMeterDispose) { try { _localMeterDispose(); } catch {} }
+  _localMeterDispose = createAudioLevelMeter(stream, (lvl) => {
+    _localLevel = lvl;
+  });
   return pc;
 }
 
@@ -257,11 +438,13 @@ export const voiceStore = {
   get callId()       { return _callId; },
   get isMuted()      { return _isMuted; },
   get isVideoOn()    { return _isVideoOn; },
-  get isSpeakerOn()  { return _isSpeakerOn; },
   get startedAt()    { return _startedAt; },
   get history()      { return _history; },
   get errorMsg()     { return _errorMsg; },
   get isReconnecting() { return _isReconnecting; },
+  get isConnectionDegraded() { return _isConnectionDegraded; },
+  get localLevel()  { return _localLevel; },
+  get remoteLevel() { return _remoteLevel; },
 
   get durationSec() {
     if (_state !== STATES.ACTIVE || !_startedAt) return 0;
@@ -302,16 +485,39 @@ export const voiceStore = {
     _errorMsg = null;
 
     try {
+      // CMK sicherstellen BEVOR getUserMedia (sonst hängt User mit aktivem
+      // Mic während Backend-Roundtrips). ensureSecureDmSession kann cmk_req
+      // triggern und ein paar Sekunden warten.
+      const me = userStore.myUser;
+      const cmk = await ensureSecureDmSession(me, peer.handle);
+      if (!cmk) {
+        _errorMsg = 'no_cmk';
+        await _hardReset();
+        _writeHistoryEntry(true);
+        _state = STATES.ENDED;
+        setTimeout(_resetUiState, 600);
+        return { ok: false, error: 'no_cmk' };
+      }
+
+      _callCmk = cmk;
       const pc = await _setupPeerConnection(_callId, peer.handle);
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
 
+      // DTLS-Fingerprint signieren (gegen Backend-MITM): Backend sieht zwar
+      // auth.fp+sig, kann aber den fp nicht ändern weil dann die signature
+      // ungültig wäre. Backend hat keinen Zugriff auf unseren privaten
+      // signing-key. SDP-Body selbst ist CMK-encrypted — Backend sieht den
+      // SDP-Inhalt (insb. ICE-Candidates mit IPs) nicht.
+      const auth = await _buildAuth(offer.sdp, _callId, 'offer');
+      const ec = await encryptSdp(cmk, offer.sdp, 'offer', me, peer.handle, _callId);
       const r = await apiFetch('/voice/ring', {
         method: 'POST',
         body: {
           to: peer.handle,
           callId: _callId,
-          sdp: { type: offer.type, sdp: offer.sdp },
+          sdp: { type: offer.type, ec },
+          ...(auth ? { auth } : {}),
         },
       });
       if (!r.ok) {
@@ -324,6 +530,8 @@ export const voiceStore = {
       }
       // Backend hat call_log inserted — gepufferte ICE-Candidates senden
       await _flushLocalIceQueue(_callId, peer.handle);
+      // 30s Timer: wenn callee nicht annimmt, automatisch cancel
+      _startNoAnswerTimer('caller');
       return { ok: true, callId: _callId };
     } catch (e) {
       captureException(e, { context: 'voice.startCall' });
@@ -352,17 +560,84 @@ export const voiceStore = {
       } catch {}
       return;
     }
+    // SDP-Body ist CMK-encrypted — vor Auth-Verify entschlüsseln.
+    // CMK muss existieren (Caller hat ensureSecureDmSession schon gemacht
+    // und seine CMK ggf. via /e2e/cmk/store an unsere Devices verteilt).
+    const me = userStore.myUser;
+    const fromHandle = payload.from;
+    const ec = payload.sdp?.ec;
+    if (!ec || !isVoiceEnvelope(ec) || payload.sdp?.type !== 'offer') {
+      console.error(`🚨 Voice incoming offer ohne ec-Envelope von ${fromHandle} — Schema-Mismatch (alte App?)`);
+      try {
+        await apiFetch('/voice/decline', {
+          method: 'POST',
+          body: { callId: payload.callId },
+        });
+      } catch {}
+      return;
+    }
+    let cmk = await getCMKIfExists(fromHandle);
+    if (!cmk) {
+      // Fallback: ensureSecureDmSession kann via cmk_req nachladen
+      cmk = await ensureSecureDmSession(me, fromHandle);
+    }
+    if (!cmk) {
+      console.error(`🚨 Voice incoming offer von ${fromHandle}: keine CMK — decline`);
+      try {
+        await apiFetch('/voice/decline', {
+          method: 'POST',
+          body: { callId: payload.callId },
+        });
+      } catch {}
+      return;
+    }
+    let plainSdp;
+    try {
+      plainSdp = await decryptSdp(cmk, ec, 'offer', fromHandle, me, payload.callId);
+    } catch (e) {
+      console.error(`🚨 Voice offer-decrypt failed von ${fromHandle}: ${e?.message}`);
+      try {
+        await apiFetch('/voice/decline', {
+          method: 'POST',
+          body: { callId: payload.callId },
+        });
+      } catch {}
+      return;
+    }
+    // Auth-Verify VOR Annahme: wenn der Caller einen signierten fp mitschickt,
+    // muss der zur SDP passen + signature mit Caller-sigPub verifyen. Failure
+    // → call sofort declinen, NICHT mal das ringing-UI zeigen.
+    if (payload.auth) {
+      const v = await _verifyAuth(plainSdp, payload.auth, payload.callId, 'offer', fromHandle);
+      if (!v.ok) {
+        console.error(`🚨 Voice MITM-Verdacht (offer): ${v.reason}`);
+        try {
+          await apiFetch('/voice/decline', {
+            method: 'POST',
+            body: { callId: payload.callId },
+          });
+        } catch {}
+        return;
+      }
+    }
     _direction = 'incoming';
-    _peer = { handle: payload.from, displayName: null };
+    _peer = { handle: fromHandle, displayName: null };
     _callId = payload.callId;
     _state = STATES.RINGING;
     _isMuted = false;
     _isVideoOn = false;
     _errorMsg = null;
+    // CMK schon hier persistieren — acceptCall nutzt es zum Encrypten
+    // des Answer-SDP + ICE.
+    _callCmk = cmk;
 
     // Offer für späteren acceptCall ablegen — als Property, kein $state weil
-    // das ein RTCSessionDescriptionInit-Objekt ist.
-    voiceStore._incomingOffer = payload.sdp;
+    // das ein RTCSessionDescriptionInit-Objekt ist. Wir legen den decrypteten
+    // SDP-Klartext ab (RTCPeerConnection braucht plaintext-SDP).
+    voiceStore._incomingOffer = { type: 'offer', sdp: plainSdp };
+    // 30s Timer: wenn User nicht akzeptiert/declined, automatisch decline
+    // (markiert call als missed beim Caller).
+    _startNoAnswerTimer('callee');
   },
 
   /**
@@ -371,8 +646,47 @@ export const voiceStore = {
   async _handleAnswer(payload) {
     if (!_pc || _state !== STATES.RINGING || _direction !== 'outgoing') return;
     if (payload.callId !== _callId) return;
+    const peerHandle = _peer?.handle;
+    const me = userStore.myUser;
+    // Answer-SDP ist CMK-encrypted — erst decrypten, dann auth verifyen.
+    const ec = payload.sdp?.ec;
+    if (!ec || !isVoiceEnvelope(ec) || payload.sdp?.type !== 'answer') {
+      console.error(`🚨 Voice answer ohne ec-Envelope von ${peerHandle} — Schema-Mismatch`);
+      _errorMsg = 'incompatible_peer';
+      void voiceStore.endCall();
+      return;
+    }
+    if (!_callCmk) {
+      console.error(`🚨 Voice answer ohne lokalen CMK — abbrechen`);
+      _errorMsg = 'no_cmk';
+      void voiceStore.endCall();
+      return;
+    }
+    let plainSdp;
     try {
-      await _pc.setRemoteDescription(payload.sdp);
+      plainSdp = await decryptSdp(_callCmk, ec, 'answer', peerHandle, me, _callId);
+    } catch (e) {
+      console.error(`🚨 Voice answer-decrypt failed: ${e?.message}`);
+      _errorMsg = 'decrypt_failed';
+      void voiceStore.endCall();
+      return;
+    }
+    // Auth-Verify: signed DTLS-fingerprint vom Callee. Wenn Backend die SDP
+    // modifiziert hat (MITM-Versuch), ist der fp im SDP ≠ fp in auth, oder
+    // die signature failed → reject call sofort.
+    if (peerHandle) {
+      const v = await _verifyAuth(plainSdp, payload.auth, _callId, 'answer', peerHandle);
+      if (!v.ok) {
+        console.error(`🚨 Voice MITM-Verdacht (answer): ${v.reason}`);
+        _errorMsg = `mitm_${v.reason}`;
+        void voiceStore.endCall();
+        return;
+      }
+    }
+    try {
+      // Callee hat geantwortet → No-Answer-Timer canceln
+      _clearNoAnswerTimer();
+      await _pc.setRemoteDescription({ type: 'answer', sdp: plainSdp });
       await _flushPendingIce();
       _state = STATES.CONNECTING;
       // ACTIVE-Übergang via onConnectionStateChange
@@ -389,18 +703,37 @@ export const voiceStore = {
   async _handleIce(payload) {
     if (!payload?.candidate || payload.callId !== _callId) return;
     if (!_pc) return;
+    // Candidate ist CMK-encrypted — erst decrypten, dann an PC weitergeben.
+    const ec = payload.candidate?.ec;
+    if (!ec || !isVoiceEnvelope(ec)) {
+      console.warn(`📞 ICE candidate ohne ec-Envelope — Schema-Mismatch, skip`);
+      return;
+    }
+    if (!_callCmk) {
+      console.warn(`📞 ICE candidate ohne lokalen CMK — skip`);
+      return;
+    }
+    const me = userStore.myUser;
+    const fromHandle = payload.from;
+    let candidateObj;
+    try {
+      candidateObj = await decryptIce(_callCmk, ec, fromHandle, me, _callId);
+    } catch (e) {
+      console.warn(`📞 ICE-decrypt failed von ${fromHandle}: ${e?.message}`);
+      return;
+    }
     // Diagnose: Candidate-Typ (host/srflx/relay) zeigt NAT-Profil des Peers
-    const c = payload.candidate?.candidate || '';
+    const c = candidateObj?.candidate || '';
     const m = c.match(/typ (host|srflx|prflx|relay)/);
     console.log(`📞 ICE remote candidate: ${m?.[1] || 'unknown'}`);
     if (_pc.remoteDescription) {
       try {
-        await _pc.addIceCandidate(payload.candidate);
+        await _pc.addIceCandidate(candidateObj);
       } catch (e) {
         console.warn(`📞 addIceCandidate failed:`, e?.message);
       }
     } else {
-      _pendingRemoteIce.push(payload.candidate);
+      _pendingRemoteIce.push(candidateObj);
       console.log(`📞 ICE remote candidate queued (${_pendingRemoteIce.length} pending, no remoteDescription yet)`);
     }
   },
@@ -416,19 +749,34 @@ export const voiceStore = {
     const offer = voiceStore._incomingOffer;
     if (!offer || !_callId || !_peer?.handle) return;
 
+    // User hat akzeptiert → kein no-answer mehr möglich
+    _clearNoAnswerTimer();
     _state = STATES.CONNECTING;
     try {
+      const me = userStore.myUser;
+      // _callCmk wurde in receiveCall schon gesetzt — defensiv nochmal prüfen
+      if (!_callCmk) {
+        _callCmk = await getCMKIfExists(_peer.handle);
+        if (!_callCmk) _callCmk = await ensureSecureDmSession(me, _peer.handle);
+      }
+      if (!_callCmk) throw new Error('no_cmk');
+
       const pc = await _setupPeerConnection(_callId, _peer.handle);
       await pc.setRemoteDescription(offer);
       await _flushPendingIce();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
+      // Sign own DTLS-fingerprint für Caller (gegen Backend-MITM, gleich wie
+      // beim ring/offer-Pfad). SDP-Body wird mit CMK encrypted.
+      const auth = await _buildAuth(answer.sdp, _callId, 'answer');
+      const ec = await encryptSdp(_callCmk, answer.sdp, 'answer', me, _peer.handle, _callId);
       const r = await apiFetch('/voice/answer', {
         method: 'POST',
         body: {
           callId: _callId,
-          sdp: { type: answer.type, sdp: answer.sdp },
+          sdp: { type: answer.type, ec },
+          ...(auth ? { auth } : {}),
         },
       });
       if (!r.ok) {
@@ -546,11 +894,6 @@ export const voiceStore = {
   toggleVideo() {
     // Phase 1B: noch nicht implementiert (audio-only)
     // _isVideoOn = !_isVideoOn;
-  },
-
-  toggleSpeaker() {
-    // Browser-Lautsprecher-Toggle ist OS-gebunden; wir tracken nur den UI-Toggle
-    _isSpeakerOn = !_isSpeakerOn;
   },
 
   // ── Push-to-Talk ───────────────────────────────────

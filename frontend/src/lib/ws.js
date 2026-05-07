@@ -37,14 +37,40 @@ function _emit(event, payload) {
 
 export const ws = {
   on(event, callback) {
+    if (typeof callback !== 'function') return () => {};
     if (!_listeners.has(event)) _listeners.set(event, new Set());
     _listeners.get(event).add(callback);
-    // Return unsubscribe-fn
-    return () => _listeners.get(event)?.delete(callback);
+    // Return unsubscribe-fn — räumt auch leere Sets aus der Map auf,
+    // sonst sammeln sich nach delete() leere Set-Einträge an.
+    return () => {
+      const set = _listeners.get(event);
+      if (!set) return;
+      set.delete(callback);
+      if (set.size === 0) _listeners.delete(event);
+    };
   },
 
   off(event, callback) {
-    _listeners.get(event)?.delete(callback);
+    const set = _listeners.get(event);
+    if (!set) return;
+    set.delete(callback);
+    if (set.size === 0) _listeners.delete(event);
+  },
+
+  /**
+   * Entfernt ALLE Listener (alle Events). Wird von stop() implicit gerufen
+   * — defense-in-depth gegen Listener-Akkumulation bei Logout/Login-Cycles
+   * oder HMR im Dev-Mode.
+   */
+  removeAllListeners() {
+    _listeners.clear();
+  },
+
+  /** Anzahl registrierter Listener (für Tests / Diagnose). */
+  get listenerCount() {
+    let total = 0;
+    for (const set of _listeners.values()) total += set.size;
+    return total;
   },
 
   get isConnected() { return _isConnected; },
@@ -69,6 +95,10 @@ export const ws = {
       _ws = null;
     }
     _isConnected = false;
+    // Defense-in-depth: alle Listeners cleanen. Caller (z.B. App.svelte
+    // _teardownApp) ruft eigene unsub-fns vorher — diese Zeile fängt
+    // Listener auf die der Caller vergessen hat zu unsuben.
+    _listeners.clear();
   },
 
   send(obj) {

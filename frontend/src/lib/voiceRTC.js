@@ -95,6 +95,9 @@ export function createPeerConnection(config, handlers) {
 
   pc.oniceconnectionstatechange = () => {
     console.log(`📞 iceConnectionState=${pc.iceConnectionState}`);
+    if (handlers.onIceConnectionStateChange) {
+      handlers.onIceConnectionStateChange(pc.iceConnectionState);
+    }
   };
 
   pc.onicegatheringstatechange = () => {
@@ -161,4 +164,77 @@ export function setLocalAudioMuted(localStream, muted) {
   for (const t of localStream.getAudioTracks()) {
     t.enabled = !muted;
   }
+}
+
+/**
+ * Erstellt einen Audio-Level-Meter für einen MediaStream.
+ * Liefert kontinuierlich (per requestAnimationFrame) den RMS-Audio-Level
+ * im Bereich 0..1 an den Callback.
+ *
+ * Nutzt die Web Audio API (AnalyserNode mit fft 256, time-domain data,
+ * RMS-Berechnung). CPU-cost: <1% in modern Browsern.
+ *
+ * @param {MediaStream} stream
+ * @param {(level: number) => void} onLevel — wird mit 0..1 gerufen, ~60 Hz
+ * @returns {() => void} dispose-Funktion (stoppt RAF + closet AudioContext)
+ */
+export function createAudioLevelMeter(stream, onLevel) {
+  if (!stream || !stream.getAudioTracks().length) return () => {};
+  // AudioContext: lazy + lenient — manche Browser blocken bis User-Gesture
+  let ctx;
+  try {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch {
+    return () => {};
+  }
+  const source = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 256;
+  analyser.smoothingTimeConstant = 0.5;
+  source.connect(analyser);
+
+  const buf = new Float32Array(analyser.fftSize);
+  let raf = 0;
+  let disposed = false;
+
+  function tick() {
+    if (disposed) return;
+    analyser.getFloatTimeDomainData(buf);
+    // RMS über alle Samples — entspricht ungefähr der wahrgenommenen Lautstärke
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    const rms = Math.sqrt(sum / buf.length);
+    // Skalieren auf 0..1, lautes Signal ist typisch 0.3-0.7 RMS
+    const level = Math.min(1, rms * 3);
+    try { onLevel(level); } catch {}
+    raf = requestAnimationFrame(tick);
+  }
+  raf = requestAnimationFrame(tick);
+
+  return () => {
+    disposed = true;
+    if (raf) cancelAnimationFrame(raf);
+    try { source.disconnect(); } catch {}
+    try { analyser.disconnect(); } catch {}
+    try { ctx.close(); } catch {}
+  };
+}
+
+/**
+ * Extrahiert den DTLS-Fingerprint aus einer SDP. Format des SDP-Eintrags:
+ *   a=fingerprint:sha-256 XX:XX:XX:...
+ *
+ * Nimmt den ersten gefundenen Fingerprint (audio + video haben i.d.R. denselben).
+ * Returns canonical-form: "sha-256 XX:XX:XX:..." (lowercase hash-name + uppercase hex).
+ *
+ * @param {string} sdp
+ * @returns {string|null}
+ */
+export function extractDtlsFingerprint(sdp) {
+  if (typeof sdp !== 'string') return null;
+  const m = sdp.match(/^a=fingerprint:(\S+)\s+([0-9A-Fa-f:]+)\s*$/m);
+  if (!m) return null;
+  const algo = m[1].toLowerCase();
+  const hex = m[2].toUpperCase();
+  return `${algo} ${hex}`;
 }

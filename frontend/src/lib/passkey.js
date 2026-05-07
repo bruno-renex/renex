@@ -55,7 +55,7 @@ export function validateHandle(handle) {
  *   - termsAccepted: boolean (muss true sein für Neuregistrierung)
  * @returns {Promise<{ status: "logged_in" | "registered", handle }>}
  */
-export async function loginWithPasskey(handle, { termsAccepted = false } = {}) {
+export async function loginWithPasskey(handle, { termsAccepted = false, cfTurnstileToken = null } = {}) {
   const v = validateHandle(handle);
   if (!v.ok) throw new Error("invalid_handle:" + v.error);
   const h = v.value;
@@ -73,7 +73,10 @@ export async function loginWithPasskey(handle, { termsAccepted = false } = {}) {
     if (!termsAccepted) {
       throw new Error("terms_required");
     }
-    return await _register(h);
+    if (!cfTurnstileToken) {
+      throw new Error("captcha_required");
+    }
+    return await _register(h, cfTurnstileToken);
   }
 
   // 2b) User existiert → Login
@@ -128,15 +131,21 @@ async function _login(handle, pkOptions) {
   return { status: "logged_in", handle };
 }
 
-async function _register(handle) {
-  // 1) register/start
+async function _register(handle, cfTurnstileToken) {
+  // 1) register/start (mit Turnstile-Token für Anti-Bot)
   const startRes = await fetch(`${API}/auth/register/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ handle }),
+    body: JSON.stringify({ handle, cfTurnstileToken }),
   });
   const startData = await startRes.json().catch(() => ({}));
-  if (!startData.publicKey) throw new Error("register_start_failed");
+  if (!startData.publicKey) {
+    // Captcha-Errors als typed-error damit UI sauber message zeigen kann
+    if (startData.code === 'captcha_required' || startData.code === 'captcha_failed') {
+      throw new Error(startData.code);
+    }
+    throw new Error("register_start_failed");
+  }
 
   const publicKey = {
     ...startData.publicKey,

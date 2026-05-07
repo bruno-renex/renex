@@ -478,6 +478,42 @@ export const chatStore = {
   },
 
   /**
+   * Fügt eine lokale System-Bubble in den aktuell sichtbaren Chat ein.
+   * Wird genutzt wenn der Server eine Setting-Change-Notification (z.B.
+   * Auto-Delete in Gruppen) als Control-Message pushed — die zugehörige
+   * D1-System-Message läge zwar bereits in der DB, würde aber erst beim
+   * nächsten Chat-Open via /chat/list sichtbar. Für Live-Sichtbarkeit
+   * injizieren wir hier eine Client-seitige Repräsentation.
+   *
+   * No-op wenn der Chat nicht (mehr) ausgewählt ist oder die convoId
+   * nicht zum aktiven Chat passt.
+   *
+   * @param {string} convoId - Backend-Convo-ID (DM "alice:bob" oder Group-UUID)
+   * @param {string} text - Plaintext der System-Message
+   * @param {number} [ts] - epoch ms (Default: now)
+   */
+  appendLocalSystemMessage(convoId, text, ts) {
+    if (!_selectedChat || !convoId || !text) return;
+    const myKey = _selectedChat.type === 'group'
+      ? _selectedChat.key
+      : (userStore.myUser && _selectedChat.peer
+          ? [userStore.myUser, _selectedChat.peer].sort().join(':')
+          : null);
+    if (myKey !== convoId) return;
+    const id = `sys_${crypto.randomUUID()}`;
+    if (_messages.some(m => m.id === id)) return;
+    _messages = [..._messages, {
+      id,
+      from: null,
+      ts: ts || Date.now(),
+      type: 'system',
+      message: text,
+      text,
+      isMe: false,
+    }];
+  },
+
+  /**
    * Wird gerufen wenn eine CMK frisch importiert wurde (z.B. nach erfolgreichem
    * mirrorRotateCMKForPeer): Bestehende 🔐-Messages des aktuell sichtbaren Chats
    * mit dieser CMK erneut decrypten. Ohne diesen Trigger blieben Messages, die

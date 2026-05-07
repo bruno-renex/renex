@@ -187,6 +187,8 @@ export default {
   autoDeleteProposal:      (label) => `📤 Vorschlag gesendet: ${label}`,
   autoDeleteProposalIncoming: "schlägt Auto-Delete vor:",
   autoDeleteWaitingForPeer: "Wartet auf Bestätigung:",
+  autoDeleteSetByPeer:     "hat Auto-Delete gesetzt:",
+  autoDeleteDisabledByPeer: "hat Auto-Delete deaktiviert.",
   autoDeletePending:       "Anstehend",
   autoDeleteDmHint:        "Beide Seiten müssen zustimmen. Vorschlag wird an Peer gesendet.",
   autoDeleteGroupHint:     "Jedes Mitglied darf ändern. Alle bekommen eine System-Nachricht.",

@@ -382,8 +382,11 @@
     _wsUnsubs.push(
       ws.on("auto_delete_set", (msg) => {
         autoDeleteStore.applyControl(msg);
+        const lng = i18nStore.lang;
+        const me = userStore.myUser;
+
+        // DM-Konsens-Modell: Vorschlag → Empfänger bekommt Toast.
         if (msg.action === "propose" && msg.from) {
-          const lng = i18nStore.lang;
           const label = autoDeleteLabel(msg.days, lng);
           toastStore.push(
             `📨 @${msg.from} ` +
@@ -391,6 +394,41 @@
             ' ' + label,
             { kind: 'info' }
           );
+        }
+
+        // Group-Last-Write-Wins: bei accept/cancel von einem ANDEREN Member
+        // Toast + lokale System-Bubble live in den Chat-Verlauf einfügen.
+        // Backend hat zwar bereits eine D1-System-Message geschrieben, aber
+        // die wäre erst beim nächsten /chat/list-Reload sichtbar.
+        if (msg.groupId && msg.from && msg.from !== me) {
+          if (msg.action === "accept") {
+            const label = autoDeleteLabel(msg.days, lng);
+            toastStore.push(
+              `⏱ @${msg.from} ` +
+              (lng.autoDeleteSetByPeer || 'hat Auto-Delete gesetzt:') +
+              ' ' + label,
+              { kind: 'info' }
+            );
+            chatStore.appendLocalSystemMessage(
+              msg.groupId,
+              `${msg.from} ` +
+              (lng.autoDeleteSetByPeer || 'hat Auto-Delete gesetzt:') +
+              ' ' + label,
+              msg.ts
+            );
+          } else if (msg.action === "cancel") {
+            toastStore.push(
+              `⏱ @${msg.from} ` +
+              (lng.autoDeleteDisabledByPeer || 'hat Auto-Delete deaktiviert.'),
+              { kind: 'info' }
+            );
+            chatStore.appendLocalSystemMessage(
+              msg.groupId,
+              `${msg.from} ` +
+              (lng.autoDeleteDisabledByPeer || 'hat Auto-Delete deaktiviert.'),
+              msg.ts
+            );
+          }
         }
       })
     );

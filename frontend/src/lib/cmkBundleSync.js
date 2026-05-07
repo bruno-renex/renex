@@ -115,11 +115,16 @@ async function _doSync() {
 
     const cmks = await collectLocalCmks();
     const rotationMaps = await collectLocalRotationMaps();
+    // GSKs sammeln — eigene Sender-Group-Keys. Ohne diesen Pfad würden alle
+    // eigenen Group-Sends nach Phrase-Recovery in der eigenen History
+    // unleserlich (kein Sender-Key zum Re-Decrypt der eigenen Messages).
+    const { collectMyGSKs } = await import('./groupCrypto.js');
+    const gsks = await collectMyGSKs();
     const bundle = {
       ts: Date.now(),
       cmks,
       rotationMaps,  // Pre-Rotation-CMKs für Decrypt von alten Messages nach Recovery
-      gsks: {},      // GSKs Phase 1C
+      gsks,          // Eigene Sender-GSKs für Group-History nach Recovery
     };
 
     const masterKey = await masterKeyBytesToCryptoKey(masterKeyBytes);
@@ -130,8 +135,10 @@ async function _doSync() {
     if (r.ok) {
       const count = Object.keys(cmks).length;
       const rotCount = Object.keys(rotationMaps).length;
+      const gskCount = Object.keys(gsks).length;
       const rotSuffix = rotCount > 0 ? `, ${rotCount} rotation-map${rotCount === 1 ? '' : 's'}` : '';
-      console.log(`☁️ Bundle synced (${count} CMK${count === 1 ? '' : 's'}${rotSuffix})`);
+      const gskSuffix = gskCount > 0 ? `, ${gskCount} GSK${gskCount === 1 ? '' : 's'}` : '';
+      console.log(`☁️ Bundle synced (${count} CMK${count === 1 ? '' : 's'}${rotSuffix}${gskSuffix})`);
     }
     return r;
   } catch (e) {
@@ -234,9 +241,32 @@ export async function restoreCmksFromBundle(bundle) {
     }
   }
 
+  // GSKs zurückschreiben — eigene Sender-Group-Keys für die Decrypt-Pipeline
+  // der eigenen Group-History nach Phrase-Recovery. Existierende werden NICHT
+  // überschrieben (würde Divergenzen mit aktiven Group-Sessions erzeugen).
+  let gskImported = 0;
+  let gskSkipped = 0;
+  if (bundle.gsks && typeof bundle.gsks === 'object') {
+    try {
+      const { restoreMyGSKsFromBundle } = await import('./groupCrypto.js');
+      const r = await restoreMyGSKsFromBundle(bundle.gsks);
+      gskImported = r.imported;
+      gskSkipped = r.skipped;
+    } catch (e) {
+      captureException(e, { context: 'restoreMyGSKs' });
+    }
+  }
+
   const rotSuffix = rotImported > 0 ? `, ${rotImported} rotation-map${rotImported === 1 ? '' : 's'} restored` : '';
-  console.log(`📥 Bundle-Restore: ${imported} CMKs importiert, ${skipped} übersprungen${rotSuffix}`);
-  return { imported, skipped, rotationMapsImported: rotImported };
+  const gskSuffix = gskImported > 0 ? `, ${gskImported} GSK${gskImported === 1 ? '' : 's'} restored` : '';
+  console.log(`📥 Bundle-Restore: ${imported} CMKs importiert, ${skipped} übersprungen${rotSuffix}${gskSuffix}`);
+  return {
+    imported,
+    skipped,
+    rotationMapsImported: rotImported,
+    gsksImported: gskImported,
+    gsksSkipped: gskSkipped,
+  };
 }
 
 /**

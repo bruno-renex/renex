@@ -268,6 +268,15 @@ export async function setMyGSK(groupId, gskBytes) {
   const sk = await _getGroupStorageKey(me, groupId, 'my');
   const enc = await _encryptForStorage(sk, gskBytes);
   await idbSet(_myGskKey(me, groupId), enc);
+
+  // Bundle-Sync triggern — neue/rotierte GSK ins R2-Bundle pushen damit
+  // Phrase-Recovery sie wiederherstellen kann. Debounced via scheduleBundleSync.
+  // Dynamic-Import vermeidet circular import (cmkBundleSync importiert
+  // collectMyGSKs aus diesem Modul).
+  try {
+    const mod = await import('./cmkBundleSync.js');
+    mod.scheduleBundleSync();
+  } catch {}
 }
 
 /**
@@ -277,6 +286,69 @@ export async function createMyGSK(groupId) {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   await setMyGSK(groupId, bytes);
   return bytes;
+}
+
+/**
+ * Sammelt alle lokalen eigenen GSKs als Map<groupId, base64-bytes>.
+ * Genutzt vom Bundle-Sync (cmkBundleSync.js) damit GSKs bei
+ * Phrase-Recovery nicht verloren gehen — sonst wären alle eigenen
+ * Group-Sends nach Recovery in der eigenen History unleserlich.
+ *
+ * @returns {Promise<Object<string, string>>} { groupId: cmkB64 }
+ */
+export async function collectMyGSKs() {
+  const me = _getMyHandle();
+  if (!me) return {};
+  const lc = me.toLowerCase();
+  const prefix = `gsk:my:${lc}:`;
+  const keys = await idbListKeys(prefix);
+  if (keys.length === 0) return {};
+
+  const out = {};
+  for (const k of keys) {
+    const groupId = k.slice(prefix.length);
+    if (!groupId) continue;
+    try {
+      const bytes = await getMyGSK(groupId);
+      if (bytes instanceof Uint8Array && bytes.length === 32) {
+        // base64 — gleicher Encoding-Stil wie Bundle-CMKs.
+        let s = '';
+        for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+        out[groupId] = btoa(s);
+      }
+    } catch {}
+  }
+  return out;
+}
+
+/**
+ * Restored eigene GSKs aus einem Recovery-Bundle.
+ * Bestehende GSKs werden NICHT überschrieben (würden Divergenzen erzeugen
+ * mit dem aktiven Sender-Key-State der Group).
+ *
+ * @param {Object<string, string>} gsks - { groupId: base64-bytes } aus Bundle
+ * @returns {Promise<{imported: number, skipped: number}>}
+ */
+export async function restoreMyGSKsFromBundle(gsks) {
+  if (!gsks || typeof gsks !== 'object') return { imported: 0, skipped: 0 };
+  let imported = 0;
+  let skipped = 0;
+  for (const [groupId, b64] of Object.entries(gsks)) {
+    try {
+      if (typeof b64 !== 'string' || !groupId) { skipped++; continue; }
+      const existing = await getMyGSK(groupId);
+      if (existing) { skipped++; continue; }
+      const raw = atob(b64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      if (bytes.length !== 32) { skipped++; continue; }
+      await setMyGSK(groupId, bytes);
+      imported++;
+    } catch {
+      skipped++;
+    }
+  }
+  return { imported, skipped };
 }
 
 /**

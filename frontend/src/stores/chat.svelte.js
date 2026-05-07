@@ -269,6 +269,17 @@ export const chatStore = {
 
     if (!chat) return;
 
+    // Inbox live aktualisieren: Unread-Badge ausblenden sobald Chat geöffnet wird.
+    // Backend resettet unread_counters automatisch bei /chat/list (DM) — siehe
+    // chatRoutes.js:155. Für Gruppen rufen wir /groups/mark-read explizit auf.
+    inboxStore.markRead(chat.key);
+    if (chat.type === 'group' && chat.key) {
+      apiFetch('/groups/mark-read', {
+        method: 'POST',
+        body: { groupId: chat.key, lastReadTs: Date.now() },
+      }).catch(() => {});
+    }
+
     // KEIN Pre-Fetch mehr: das hat eine Race-Condition geschaffen, in der BEIDE
     // Seiten beim Chat-Öffnen gleichzeitig eigene CMKs erzeugten. Stattdessen:
     // ensureSecureDmSession passiert nur beim ersten Send (in sendEncryptedDm),
@@ -376,6 +387,9 @@ export const chatStore = {
             ? { ...serverMsg, text: trimmed, status: "sent", replyTo: localReplyTo }
             : m
         );
+        // Inbox-Liste live aktualisieren — Sidebar zeigt sofort die letzte Nachricht
+        // statt „No chat yet" bis zum nächsten Reload.
+        inboxStore.bumpActivity(_selectedChat.key, trimmed, serverMsg.ts || Date.now());
       } else {
         _messages = _messages.map(m =>
           m.id === tempId ? { ...m, status: "failed" } : m
@@ -419,11 +433,29 @@ export const chatStore = {
     // Dedup: keine Message ID darf 2× in der Liste sein.
     if (msg.id && _messages.some(m => m.id === msg.id)) return;
 
-    if (!_selectedChat) return;
+    // Inbox-Key bestimmen: bei DM der nicht-mir-Handle (Sidebar zeigt Peer),
+    // bei Group die groupId. Gilt unabhängig davon ob aktueller Chat oder
+    // ein anderer — Sidebar muss in beiden Fällen aktualisiert werden.
+    const isGroupMsg = !!rawMsg.groupId;
+    const inboxKey = isGroupMsg
+      ? rawMsg.groupId
+      : (msg.isMe ? msg.to : msg.from);
+    const previewText = msg.e2e ? '' : (msg.text || '');
 
-    const isForCurrentChat =
+    if (inboxKey) {
+      inboxStore.bumpActivity(inboxKey, previewText, msg.ts || Date.now());
+    }
+
+    const isForCurrentChat = _selectedChat && (
       (_selectedChat.type === "dm"   && (msg.from === _selectedChat.peer || msg.to === _selectedChat.peer)) ||
-      (_selectedChat.type === "group" && rawMsg.groupId === _selectedChat.key);
+      (_selectedChat.type === "group" && rawMsg.groupId === _selectedChat.key)
+    );
+
+    // Unread-Counter nur für eingehende Messages (nicht eigene Multi-Device-Echos)
+    // und nur wenn der Chat NICHT gerade offen ist.
+    if (!msg.isMe && !isForCurrentChat && inboxKey) {
+      inboxStore.incrementUnread(inboxKey);
+    }
 
     if (!isForCurrentChat) return;
 

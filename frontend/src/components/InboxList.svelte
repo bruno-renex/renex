@@ -221,10 +221,13 @@
         {:else}
           <ul>
             {#each groups as g (g.id)}
+              {@const groupSubtitle = g.lastSeen
+                ? (g.lastMessage || (g.memberCount ? `${g.memberCount} ${lang.members || "Mitglieder"}` : ""))
+                : (g.memberCount ? `${g.memberCount} ${lang.members || "Mitglieder"}` : "")}
               <li>
                 <ContactItem
                   name={g.name}
-                  subtitle={g.memberCount ? `${g.memberCount} ${lang.members || "Mitglieder"}` : ""}
+                  subtitle={groupSubtitle}
                   isGroup={true}
                   unreadCount={inboxStore.unreadFor(g.id)}
                   isActive={selectedKey === "group:" + g.id}

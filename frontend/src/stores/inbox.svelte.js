@@ -200,6 +200,47 @@ export const inboxStore = {
     }
   },
 
+  // ── LIVE UPDATES (kein Reload nötig) ────────────────
+  /**
+   * Markiert einen DM-Kontakt oder eine Gruppe als „aktiv mit letzter Aktivität".
+   * @param {string} key - DM: peer-Handle, Group: groupId
+   * @param {string} [preview] - Plaintext oder '🔐 …' für E2E-pending
+   * @param {number} [ts] - Timestamp der Message (Default: Date.now())
+   */
+  bumpActivity(key, preview = '', ts = Date.now()) {
+    if (!key) return;
+    // DM-Kontakt updaten
+    const cIdx = _contacts.findIndex(c => c.handle === key);
+    if (cIdx >= 0) {
+      const next = _contacts.slice();
+      next[cIdx] = { ...next[cIdx], lastSeen: ts, lastMessage: preview };
+      _contacts = next;
+      return;
+    }
+    // Group updaten
+    const gIdx = _groups.findIndex(g => g.id === key);
+    if (gIdx >= 0) {
+      const next = _groups.slice();
+      next[gIdx] = { ...next[gIdx], lastSeen: ts, lastMessage: preview };
+      _groups = next;
+    }
+  },
+
+  /** Setzt den Unread-Counter für einen Chat auf 0 (lokal). */
+  markRead(key) {
+    if (!key) return;
+    if (!_unreadCounts[key]) return;
+    const next = { ..._unreadCounts };
+    delete next[key];
+    _unreadCounts = next;
+  },
+
+  /** Inkrementiert den Unread-Counter für einen Chat um 1 (lokal). */
+  incrementUnread(key) {
+    if (!key) return;
+    _unreadCounts = { ..._unreadCounts, [key]: (_unreadCounts[key] || 0) + 1 };
+  },
+
   // ── DEV/TEST HELPERS ────────────────────────────
   // Setzt Mock-Daten für Visual-Tests (NICHT in Production verwenden)
   _setMockData({ contacts, groups, unread } = {}) {

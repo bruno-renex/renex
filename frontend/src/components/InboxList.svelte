@@ -8,6 +8,7 @@
   import { chatStore } from '../stores/chat.svelte.js';
   import { voiceStore } from '../stores/voice.svelte.js';
   import { profileCache } from '../stores/profileCache.svelte.js';
+  import { presenceStore } from '../stores/presence.svelte.js';
   import ContactItem from './ContactItem.svelte';
   import PushBanner from './PushBanner.svelte';
   import AddContactModal from './AddContactModal.svelte';
@@ -48,7 +49,8 @@
       key: contact.handle,
       peer: contact.handle,
       name: dn ? `${dn} · @${contact.handle}` : `@${contact.handle}`,
-      isOnline: contact.isOnline,
+      // isOnline-Status wird im ChatHeader live aus presenceStore gelesen,
+      // nicht mehr aus chat.isOnline (das war stale).
     });
   }
 
@@ -160,7 +162,7 @@
                   subtitle={hasActivity ? (c.lastMessage || "") : (lang.noChatYet || "Noch kein Chat")}
                   {initials}
                   unreadCount={inboxStore.unreadFor(c.handle)}
-                  isOnline={c.isOnline}
+                  isOnline={presenceStore.isOnline(c.handle)}
                   isActive={selectedKey === "dm:" + c.handle}
                   dimmed={!hasActivity}
                   onclick={() => selectChat(c)}

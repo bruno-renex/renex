@@ -19,6 +19,7 @@
   import { voiceStore } from './stores/voice.svelte.js';
   import { notificationsStore } from './stores/notifications.svelte.js';
   import { autoDeleteStore, autoDeleteLabel } from './stores/autoDelete.svelte.js';
+  import { presenceStore } from './stores/presence.svelte.js';
   import { profileCache } from './stores/profileCache.svelte.js';
   import { ws } from './lib/ws.js';
   import { heartbeat } from './lib/multidevice.js';
@@ -201,6 +202,14 @@
       voiceStore.loadHistory(),
       notificationsStore.load(),
     ]);
+
+    // Presence-Polling starten — Backend hat KEINEN WS-Broadcast bei
+    // Status-Change, daher 30s-Polling über alle aktiven Kontakte.
+    // getHandles wird bei jedem Tick neu evaluiert, damit neu hinzugekommene
+    // Kontakte automatisch mit-gepollt werden.
+    presenceStore.startPolling(() =>
+      (inboxStore.contacts || []).map(c => c.handle).filter(Boolean)
+    );
 
     // Nach erfolgreichem Convert oder Invite-Accept: direkt den Chat mit dem
     // Inviter öffnen (sonst hat der User eine leere ChatView trotz vollem Inbox).
@@ -768,6 +777,7 @@
     chatStore.clear();
     notificationsStore.clear();
     autoDeleteStore.clear();
+    presenceStore.clear();
     profileCache.clear();
     document.removeEventListener('visibilitychange', _onVisibilityChange);
   }

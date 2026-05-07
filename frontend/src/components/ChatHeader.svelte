@@ -7,11 +7,24 @@
   import { i18nStore } from '../stores/i18n.svelte.js';
   import { voiceStore } from '../stores/voice.svelte.js';
   import { profileCache } from '../stores/profileCache.svelte.js';
+  import { presenceStore } from '../stores/presence.svelte.js';
   import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
   import ChatHeaderMenu from './ChatHeaderMenu.svelte';
 
   let lang = $derived(i18nStore.lang);
   let chat = $derived(chatStore.selectedChat);
+
+  // Live-Online-Status aus presenceStore — DM only (Group hat keine peer-Presence-Summe)
+  let isPeerOnline = $derived(
+    chat?.type === 'dm' && chat?.peer ? presenceStore.isOnline(chat.peer) : false
+  );
+
+  // Bei Chat-Open frischen Presence-Wert holen (sonst stale bis nächster Poll-Tick).
+  $effect(() => {
+    if (chat?.type === 'dm' && chat?.peer) {
+      presenceStore.refreshNow([chat.peer]);
+    }
+  });
 
   // Display-Name reaktiv aus profileCache ziehen — überschreibt das beim selectChat
   // gesetzte chat.name sobald der Fetch zurückkommt. Gruppen behalten ihren Namen.
@@ -92,7 +105,7 @@
       <div class="status">
         {#if chat.type === 'group'}
           {chat.memberCount || 0} {lang.members || "Mitglieder"}
-        {:else if chat.isOnline}
+        {:else if isPeerOnline}
           <span class="online-dot"></span>
           {lang.online || "Online"}
         {:else}

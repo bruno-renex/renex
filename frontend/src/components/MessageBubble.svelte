@@ -37,6 +37,7 @@
   const REACTION_EMOJIS = ["💀","🔥","🗿","😭","🫡","💯","🤝"];
 
   let pickerOpen = $state(false);
+  let pickerWrapEl = $state(null);
 
   function togglePicker(e) {
     e.stopPropagation();
@@ -54,12 +55,32 @@
     if (onReact) onReact(message, emoji);
   }
 
+  // Click-outside / Escape schließt den offenen Reaktion-Picker.
+  $effect(() => {
+    if (!pickerOpen) return;
+    const onClick = (e) => {
+      if (pickerWrapEl && !pickerWrapEl.contains(e.target)) pickerOpen = false;
+    };
+    const onKey = (e) => { if (e.key === 'Escape') pickerOpen = false; };
+    // setTimeout damit der Open-Click den Listener nicht direkt wieder schließt
+    const id = setTimeout(() => {
+      document.addEventListener('mousedown', onClick);
+      document.addEventListener('keydown', onKey);
+    }, 0);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  });
+
   let canReact = $derived(
     !!onReact &&
     !message.type &&
     message.status !== "sending" &&
     message.status !== "failed" &&
-    !message._unrecoverable
+    !message._unrecoverable &&
+    message.text !== "🔐 …"
   );
 
   // Reactions als Chip-Liste: { emoji, count, mine }
@@ -159,8 +180,13 @@
   });
 </script>
 
+{#if message.type === 'system'}
+  <div class="system-row">
+    <div class="system-bubble">{message.message || ''}</div>
+  </div>
+{:else}
 <div class="bubble-row" class:me={message.isMe}>
-  {#if message.isMe}
+  {#if message.isMe && (canDelete || canEdit || canReact || canReply)}
     <div class="action-cluster">
       {#if canDelete}
         <button class="bubble-action danger" onclick={handleDeleteClick} title="Löschen" aria-label="Löschen">
@@ -180,7 +206,7 @@
         </button>
       {/if}
       {#if canReact}
-        <div class="reaction-wrap">
+        <div class="reaction-wrap" bind:this={pickerWrapEl}>
           <button class="bubble-action" onclick={togglePicker} title="Reagieren" aria-label="Reagieren">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
@@ -245,6 +271,12 @@
       {#if message.edited}
         <span class="edited-mark" title="Bearbeitet">(bearbeitet)</span>
       {/if}
+      {#if !message.isMe && message.verified === null && message.text && message.text !== "🔐 …"}
+        <span
+          class="unverified-mark"
+          title="Signatur konnte nicht geprüft werden — Sender-Pubkey fehlt im Cache. Inhalt ist E2E-verschlüsselt, aber Authentizität nicht bestätigt."
+        >ⓘ</span>
+      {/if}
       {#if message.isMe}
         <span class="status-icon" class:read={message.status === "read"} class:failed={message.status === "failed"}>
           {statusIcon}
@@ -270,7 +302,7 @@
   {#if !message.isMe && (canReply || canReact)}
     <div class="action-cluster">
       {#if canReact}
-        <div class="reaction-wrap">
+        <div class="reaction-wrap" bind:this={pickerWrapEl}>
           <button class="bubble-action" onclick={togglePicker} title="Reagieren" aria-label="Reagieren">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
@@ -299,8 +331,24 @@
     </div>
   {/if}
 </div>
+{/if}
 
 <style>
+  .system-row {
+    display: flex;
+    justify-content: center;
+    margin: 12px 0 4px;
+  }
+  .system-bubble {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-panel-alt);
+    border-radius: 12px;
+    padding: 4px 12px;
+    max-width: 80%;
+    text-align: center;
+  }
+
   .bubble-row {
     display: flex;
     align-items: center;
@@ -367,6 +415,15 @@
 
   .bubble.me .edited-mark {
     color: rgba(7, 7, 10, 0.6);
+  }
+
+  /* Sig-Verify unkonklusiv (verified===null) — dezenter Indicator,
+     unterscheidet sich von tampered (verified===false → eigene Warnung). */
+  .unverified-mark {
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.6;
+    cursor: help;
   }
 
   /* Reaction-Picker — kleines Popover mit den 7 erlaubten Emojis */

@@ -152,6 +152,14 @@ export default {
   deviceLimitUpgradeHint:  "Tip: With RENEX Pro you can connect up to 10 devices.",
   deviceLimitOkBtn:        "Got it",
 
+  // ── Device toasts (VISION §6 multi-device visibility) ───
+  deviceAddedSelfToast:    "📱 New device added. If that wasn't you — remove it immediately under Profile → Devices.",
+  deviceAddedPeerToast:    "📱 A contact added a new device.",
+  deviceRevokedSelfToast:  "🔒 Device removed — keys are being rotated.",
+  deviceRevokedPeerToast:  "🔒 A contact removed a device — keys rotated.",
+  deviceAutoRevokedSelfToast: "🧹 Inactive device removed automatically (30 days offline).",
+  deviceAutoRevokedPeerToast: "🧹 A contact's inactive device was removed automatically.",
+
   // ── Group inbox + Create-Modal (Phase 1C i18n) ──────
   noGroupsYet:          "No groups yet",
   members:              "members",

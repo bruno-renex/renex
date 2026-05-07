@@ -409,6 +409,19 @@
           ? { fromHandle: msg.from, deviceId: msg.deviceId, jwk: msg.jwk }
           : null;
 
+        // VISION §6: User-sichtbarer Toast — eigenes neues Device vs Kontakt-Device.
+        // Wir filtern das CURRENT-Device aus (das hat sich gerade selbst registriert
+        // und braucht keine Notification). Backend liefert (noch) kein device_name,
+        // wir zeigen daher die deviceId-Kürzel als Identifier.
+        if (msg.deviceId && msg.deviceId !== userStore.deviceId) {
+          const lng = i18nStore.lang;
+          const shortId = String(msg.deviceId).slice(0, 12);
+          const text = msg.from === me
+            ? (lng.deviceAddedSelfToast || `📱 Neues Gerät hinzugefügt (${shortId}…). Wenn das nicht du warst — sofort entfernen unter Profil → Geräte.`)
+            : (lng.deviceAddedPeerToast || `📱 @${msg.from} hat ein neues Gerät hinzugefügt (${shortId}…)`);
+          toastStore.push(text, { kind: msg.from === me ? 'warn' : 'info', ttl: 7000 });
+        }
+
         if (msg.from === me) {
           const contacts = (inboxStore.contacts || []).map(c => c.handle).filter(Boolean);
           if (contacts.length > 0) {
@@ -448,6 +461,29 @@
         if (msg.deviceId === userStore.deviceId && msg.reason !== 'self') {
           sessionStore.logout();
           return;
+        }
+
+        // VISION §6: Toast für entferntes Device. Reason-Differenzierung:
+        //  - 'user' (Security-Aktion) — prominenter Warn-Toast inkl. Rotation-Hinweis
+        //  - 'auto' (30d Inaktivität) — leiser Info-Toast
+        //  - 'self' (Logout-Cleanup) — kein Toast nötig (User hat selbst ausgelöst)
+        if (msg.deviceId && msg.deviceId !== userStore.deviceId && msg.reason !== 'self') {
+          const me = userStore.myUser;
+          const lng = i18nStore.lang;
+          const shortId = String(msg.deviceId).slice(0, 12);
+          let text, kind;
+          if (msg.reason === 'auto') {
+            text = msg.from === me
+              ? (lng.deviceAutoRevokedSelfToast || `🧹 Inaktives Gerät entfernt (${shortId}…) — 30 Tage offline`)
+              : (lng.deviceAutoRevokedPeerToast || `🧹 @${msg.from}'s Gerät (${shortId}…) automatisch entfernt`);
+            kind = 'info';
+          } else {
+            text = msg.from === me
+              ? (lng.deviceRevokedSelfToast || `🔒 Gerät (${shortId}…) entfernt — Schlüssel werden rotiert`)
+              : (lng.deviceRevokedPeerToast || `🔒 @${msg.from} hat ein Gerät entfernt — Schlüssel rotiert`);
+            kind = 'warn';
+          }
+          toastStore.push(text, { kind, ttl: 7000 });
         }
 
         // CMK-Rotation bei `reason='user'` (echtes Security-Event, Memory §4.4):

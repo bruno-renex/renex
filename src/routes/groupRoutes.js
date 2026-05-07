@@ -1,5 +1,5 @@
 import { json, readJson, param, checkCsrf, isValidGroupId, insertSystemMessage } from '../utils.js';
-import { requireSession, requireAnySession, rateLimit, pushToGroupMembers } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit, pushToGroupMembers, pushToUserDO } from '../auth.js';
 
 // ======================================================
 // GROUP ROUTES
@@ -11,7 +11,7 @@ import { requireSession, requireAnySession, rateLimit, pushToGroupMembers } from
 // GET  /groups/list          — Meine Gruppen
 // GET  /groups/members       — Mitglieder einer Gruppe
 // GET  /groups/auto-delete   — Aktuelles Auto-Delete Setting
-// POST /groups/auto-delete   — Admin: Auto-Delete setzen/deaktivieren
+// POST /groups/auto-delete   — Mitglied: Auto-Delete setzen/deaktivieren (Last-Write-Wins)
 // ======================================================
 
 const MAX_GROUP_NAME   = 64;
@@ -32,7 +32,7 @@ export async function handleGroupRoutes(request, env, path, params) {
 
     // ──────────────────────────────────────────────────
     // POST /groups/create
-    // Body: { name: string }
+    // Body: { name: string, members?: string[] }
     // ──────────────────────────────────────────────────
     case "/groups/create": {
       if (request.method !== "POST") break;
@@ -47,6 +47,33 @@ export async function handleGroupRoutes(request, env, path, params) {
       const name = String(body.name || "").trim();
       if (!name || name.length > MAX_GROUP_NAME) {
         return json(request, { error: "Invalid group name (1–64 chars)" }, 400);
+      }
+
+      // Mitglieder validieren (optional)
+      const rawMembers = Array.isArray(body.members) ? body.members : [];
+      const memberSet = new Set();
+      for (const h of rawMembers) {
+        const v = String(h || "").toLowerCase().trim();
+        if (!v || v === me) continue;
+        if (!/^[a-z0-9_]+$/.test(v)) {
+          return json(request, { error: `Invalid handle: ${v}` }, 400);
+        }
+        memberSet.add(v);
+      }
+      if (1 + memberSet.size > MAX_MEMBERS) {
+        return json(request, { error: `Group too large (max ${MAX_MEMBERS})` }, 400);
+      }
+
+      // Pro Member: existiert + ist Kontakt (status=accepted)
+      const validMembers = [];
+      for (const inv of memberSet) {
+        const userExists = await env.RENEX_KV.get(`webauthn:${inv}`);
+        if (!userExists) return json(request, { error: `User not found: ${inv}` }, 404);
+        const areFriends = await env.RENEX_DB.prepare(
+          "SELECT 1 FROM contacts WHERE user_handle = ? AND contact_handle = ? AND status = 'accepted'"
+        ).bind(me, inv).first();
+        if (!areFriends) return json(request, { error: `Not in your contacts: ${inv}` }, 403);
+        validMembers.push(inv);
       }
 
       const groupId = crypto.randomUUID();
@@ -64,7 +91,37 @@ export async function handleGroupRoutes(request, env, path, params) {
          VALUES (?, ?, 'admin', ?)`
       ).bind(groupId, me, now).run();
 
-      return json(request, { ok: true, groupId, name });
+      // Mitglieder eintragen + System-Messages
+      for (const inv of validMembers) {
+        await env.RENEX_DB.prepare(
+          `INSERT INTO conversation_members (convo_id, member_handle, role, joined_at)
+           VALUES (?, ?, 'member', ?)`
+        ).bind(groupId, inv, now).run();
+        await env.RENEX_DB.prepare(
+          `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+           VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+        ).bind(crypto.randomUUID(), groupId, me, now,
+          `${inv} was invited by ${me}`).run();
+      }
+
+      // Live-Push: jedes neue Mitglied bekommt ein group_added (lädt die Gruppe in seine Inbox).
+      // await damit Cloudflare Workers den Push nicht nach Response abbricht.
+      // pushToUserDO fängt Offline-User intern ab → Promise.allSettled blockiert nicht.
+      if (validMembers.length > 0) {
+        const addedEvent = {
+          id:        crypto.randomUUID(),
+          type:      "group_added",
+          groupId,
+          name,
+          createdBy: me,
+          ts:        now
+        };
+        await Promise.allSettled(
+          validMembers.map(h => pushToUserDO(env, h, addedEvent))
+        );
+      }
+
+      return json(request, { ok: true, groupId, name, members: validMembers });
     }
 
     // ──────────────────────────────────────────────────
@@ -142,7 +199,10 @@ export async function handleGroupRoutes(request, env, path, params) {
         invitedBy: me,
         ts: joinTs
       };
-      await pushToGroupMembers(env, env.RENEX_DB, groupId, null, joinEvent);
+      // bypassCache=true: KV.delete oben war fire-and-forget, KV könnte stale sein.
+      // Frische DB-Liste enforcen damit der gerade hinzugefügte invitee garantiert
+      // gepusht wird (sonst would Cache-Stale = invitee nicht in Liste = kein WS-Event).
+      await pushToGroupMembers(env, env.RENEX_DB, groupId, null, joinEvent, { bypassCache: true });
 
       return json(request, { ok: true, groupId, invited: invitee });
     }
@@ -287,7 +347,10 @@ export async function handleGroupRoutes(request, env, path, params) {
         newAdmin: newAdminHandle ?? undefined,
         ts: leaveTs
       };
-      await pushToGroupMembers(env, env.RENEX_DB, groupId, null, leaveEvent);
+      // bypassCache=true: KV-Delete oben war fire-and-forget. Frische DB-Liste
+      // verhindert dass der ex-member (= leaver) nochmal aus dem stale-Cache
+      // benachrichtigt wird. (Crypto-irrelevant aber privacy-relevant.)
+      await pushToGroupMembers(env, env.RENEX_DB, groupId, null, leaveEvent, { bypassCache: true });
 
       // Wenn letzter Member: Gruppe löschen
       const remaining = await env.RENEX_DB.prepare(
@@ -429,7 +492,7 @@ export async function handleGroupRoutes(request, env, path, params) {
             handles: expiredGuests,
             reason: "session_expired",
             ts: Date.now()
-          }).catch(() => {});
+          }, { bypassCache: true }).catch(() => {});
         }
       }
 
@@ -500,7 +563,9 @@ export async function handleGroupRoutes(request, env, path, params) {
       ).bind(crypto.randomUUID(), groupId, me, removeTs,
         `${me} removed ${target} from the group`).run();
 
-      // Verbleibende Members + entferntes Mitglied benachrichtigen
+      // Verbleibende Members + entferntes Mitglied benachrichtigen.
+      // Mit bypassCache=true ist target nicht mehr in der DB-Liste → muss explizit
+      // separat gepusht werden (sonst weiß sein Frontend nicht "ich wurde entfernt").
       const removeEvent = {
         id:      crypto.randomUUID(),
         type:    "group_member_removed",
@@ -509,7 +574,10 @@ export async function handleGroupRoutes(request, env, path, params) {
         removedBy: me,
         ts:      removeTs
       };
-      await pushToGroupMembers(env, env.RENEX_DB, groupId, null, removeEvent);
+      // 1) ex-member explizit benachrichtigen
+      pushToUserDO(env, target, removeEvent).catch(() => {});
+      // 2) verbleibende Members aus frischer DB (ohne ex-member)
+      await pushToGroupMembers(env, env.RENEX_DB, groupId, null, removeEvent, { bypassCache: true });
 
       return json(request, { ok: true });
     }
@@ -547,23 +615,21 @@ export async function handleGroupRoutes(request, env, path, params) {
         const { groupId, days } = body;
         if (!isValidGroupId(groupId)) return json(request, { error: "Invalid groupId" }, 400);
 
-        // Admin-Check
+        // Mitglieds-Check (kein Admin-Zwang — Last-Write-Wins, jedes Mitglied
+        // darf für die eigene Privacy-Hygiene das Setting ändern. Ein Konflikt
+        // wird durch System-Bubble + ts-Ordering transparent gemacht.)
         const membership = await env.RENEX_DB.prepare(
           "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
         ).bind(groupId, me).first();
         if (!membership) return json(request, { error: "Not a member" }, 403);
-        if (membership.role !== "admin") return json(request, { error: "Only the group admin can change auto-delete" }, 403);
 
-        const ALLOWED_DAYS = new Set([0.0417, 1, 7, 30]);
+        const ALLOWED_DAYS = new Set([1, 7, 30]);
         const now = Date.now();
 
         const autoDeleteLabel = (d) => {
-          if (d === 0.0417) return "1h";
           if (d === 1)  return "24h";
           if (d === 7)  return "7 days";
-          if (d === 28) return "28 days";
           if (d === 30) return "30 days";
-          if (d === 90) return "90 days";
           return `${d} days`;
         };
 

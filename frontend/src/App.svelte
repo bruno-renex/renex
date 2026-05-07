@@ -17,12 +17,18 @@
   import { inboxStore } from './stores/inbox.svelte.js';
   import { chatStore } from './stores/chat.svelte.js';
   import { voiceStore } from './stores/voice.svelte.js';
+  import { notificationsStore } from './stores/notifications.svelte.js';
+  import { autoDeleteStore, autoDeleteLabel } from './stores/autoDelete.svelte.js';
+  import { profileCache } from './stores/profileCache.svelte.js';
   import { ws } from './lib/ws.js';
   import { heartbeat } from './lib/multidevice.js';
   import { getRecoveryStatus } from './lib/recovery.js';
   import { uploadInboxKeyIfNeeded } from './lib/e2eKeys.js';
-  import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer } from './lib/chatPipeline.js';
-  import { bootstrapBundleRestore } from './lib/cmkBundleSync.js';
+  import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer, ensureSecureDmSession } from './lib/chatPipeline.js';
+  import { isGuestHandle } from './lib/guestNames.js';
+  import { isGuestConvertPending, performGuestConvert, readPendingGuestConvert } from './lib/guestConvert.js';
+  import { migratePeerHandle, migrateMyHandle } from './lib/handleMigration.js';
+  import { bootstrapBundleRestore, checkRecoveryPromptNeeded } from './lib/cmkBundleSync.js';
   import { clearCachedMasterKey } from './lib/masterKey.js';
   import { getCMKIfExists, rotateCMKForPeer } from './lib/cmk.js';
   import {
@@ -41,15 +47,20 @@
   import RecoveryOnboardingModal from './components/RecoveryOnboardingModal.svelte';
   import RecoveryVerifyModal from './components/RecoveryVerifyModal.svelte';
   import RecoveryLoginModal from './components/RecoveryLoginModal.svelte';
+  import DeviceLimitModal from './components/DeviceLimitModal.svelte';
+  import ToastContainer from './components/ToastContainer.svelte';
+  import { toastStore } from './stores/toast.svelte.js';
+  import { startVersionPolling } from './lib/versionCheck.js';
 
   let sessionState = $derived(sessionStore.state);
   let myUser = $derived(userStore.myUser);
 
   // Debug-Hook: macht die wichtigsten Stores + Crypto-Funktionen für die Browser-
-  // Console verfügbar. Nicht für reguläre App-Logik nutzen — nur für manuelle Tests
-  // (z.B. CMK-Rotation triggern ohne echtes device_removed-Event).
-  // Production-OK: kein PII, keine Secrets. Funktionen prüfen Auth via apiFetch.
-  if (typeof window !== 'undefined') {
+  // Console verfügbar. Nur für manuelle Tests im Dev-Mode — z.B. CMK-Rotation
+  // triggern ohne echtes device_removed-Event.
+  // import.meta.env.DEV ist nur in `vite serve` true; bei `vite build` (Prod)
+  // wird der ganze Block dead-code-eliminiert → kein __renex auf Production.
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
     window.__renex = {
       stores: { userStore, inboxStore, chatStore, voiceStore, sessionStore },
       cmk: { rotateCMKForPeer, getCMKIfExists, redistributeCMKToPeer, mirrorRotateCMKForPeer },
@@ -65,6 +76,9 @@
   // ── Recovery-State (Spec: docs/RECOVERY.md §5, §6) ──
   let recoveryNeedsOnboarding = $state(false);
   let recoveryNeedsVerify = $state(false);
+
+  // ── Device-Limit-Modal (zeigt sich wenn /e2e/inbox/upload 409 device_limit_reached liefert)
+  let deviceLimitInfo = $state(null);
   // Recovery-Login wird hier gehalten (nicht in LoginModal), damit das Modal
   // nach erfolgreicher Passkey-Auth NICHT unmountet wird (LoginModal verschwindet
   // sobald myUser gesetzt → sonst würde Step 2 (Phrase) nie sichtbar).
@@ -75,6 +89,19 @@
   // Sammelt unsubscribe-Funktionen aller WS-Listener — wird bei _teardownApp
   // sauber abgemeldet, damit nach Logout+Login keine Listener akkumulieren.
   let _wsUnsubs = [];
+
+  // PWA-Update-Polling: läuft immer (auch im LoginModal-State), nicht nur in App.
+  // Stoppt sich selbst beim Mount-Tearout via $effect-Cleanup.
+  $effect(() => {
+    return startVersionPolling((serverVersion) => {
+      const text = i18nStore.lang.updateAvailableToast || '🔄 Neue Version verfügbar — Reload';
+      toastStore.push(text, {
+        kind: 'info',
+        ttl: 0,                                // persistent
+        action: () => { window.location.reload(); },
+      });
+    });
+  });
 
   $effect(() => {
     if (myUser && !_bootstrapped) {
@@ -87,13 +114,106 @@
   });
 
   async function _bootstrapApp() {
+    // Guest-Convert PRIO-1: muss VOR Initial-Data-Load laufen, sonst lädt
+    // loadContacts() für den frisch-registrierten User eine LEERE Liste
+    // (Backend hat Migration noch nicht durchgeführt). Convert-API blockiert
+    // nicht — bei Fehler läuft Bootstrap wie ein normaler frischer User.
+    let convertedInviter = null;
+    if (isGuestConvertPending()) {
+      console.log('🔁 Guest-Convert pending → /invite/convert wird aufgerufen');
+      // Pending VOR performGuestConvert lesen — der Call clearPendingGuestConvert intern.
+      const pendingPre = readPendingGuestConvert();
+      try {
+        const conv = await performGuestConvert();
+        if (conv.ok) {
+          console.log('✅ Guest-Convert erfolgreich:', conv);
+          // E2E-Storage von guest_xxx auf realHandle migrieren (CMK, GSK, rotation-keys etc.)
+          // — sonst bleiben CMKs unter dem alten Guest-Handle liegen und Decrypt schlägt fehl.
+          if (pendingPre?.token && conv.realHandle) {
+            try {
+              const r = await migrateMyHandle(pendingPre.token, conv.realHandle);
+              if (r.renamed > 0) console.log(`🔁 Self-Migration: ${r.renamed} IDB-Keys umgeschrieben`);
+            } catch (e) {
+              captureException(e, { context: 'guestConvert.migrateMyHandle' });
+            }
+          }
+          convertedInviter = conv.inviterHandle || null;
+          toastStore.push(
+            i18nStore.lang.convertSuccess || 'Gast-Konto übernommen ✓',
+            { kind: 'success' }
+          );
+          // URL-Cleanup: ?registerGuest=1 entfernen damit kein Re-Trigger
+          try {
+            const url = new URL(location.href);
+            url.searchParams.delete('registerGuest');
+            history.replaceState({}, '', url.toString());
+          } catch {}
+        } else {
+          console.warn('⚠️ Guest-Convert fehlgeschlagen:', conv.error);
+        }
+      } catch (e) {
+        captureException(e, { context: 'guestConvert.bootstrap' });
+      }
+    }
+
+    // Invite-Accept: Real-User kam über /join?token=... und hat "Sign in & join"
+    // geklickt. join/index.html legte `pendingInviteRedirect` in sessionStorage ab.
+    // Wir extrahieren den Token, rufen /invite/accept und öffnen den entstehenden
+    // Chat. Bei Fehler bleibt der User in der Inbox (Toast informiert).
+    let acceptedInviter = null;
+    try {
+      const redirectUrl = sessionStorage.getItem('pendingInviteRedirect');
+      if (redirectUrl) {
+        sessionStorage.removeItem('pendingInviteRedirect');
+        let inviteToken = null;
+        try {
+          inviteToken = new URL(redirectUrl).searchParams.get('token');
+        } catch {}
+        if (inviteToken) {
+          console.log('🤝 Invite-Accept pending → /invite/accept wird aufgerufen');
+          try {
+            const r = await apiFetch('/invite/accept', {
+              method: 'POST',
+              body: { token: inviteToken },
+            });
+            if (r.ok && r.data?.convoId) {
+              console.log('✅ Invite-Accept erfolgreich:', r.data);
+              acceptedInviter = r.data.inviterHandle || null;
+            } else {
+              console.warn('⚠️ Invite-Accept fehlgeschlagen:', r.error || r.data?.code);
+              toastStore.push(
+                i18nStore.lang.inviteAcceptFailed || 'Could not accept invite',
+                { kind: 'error' }
+              );
+            }
+          } catch (e) {
+            captureException(e, { context: 'inviteAccept.bootstrap' });
+          }
+        }
+      }
+    } catch {}
+
     // Initial Data parallel laden (Errors silent — App-Boot darf nicht blockieren)
-    Promise.allSettled([
+    await Promise.allSettled([
       inboxStore.loadContacts(),
       inboxStore.loadGroups(),
       inboxStore.loadUnread(),
       voiceStore.loadHistory(),
+      notificationsStore.load(),
     ]);
+
+    // Nach erfolgreichem Convert oder Invite-Accept: direkt den Chat mit dem
+    // Inviter öffnen (sonst hat der User eine leere ChatView trotz vollem Inbox).
+    const openInviter = convertedInviter || acceptedInviter;
+    if (openInviter) {
+      chatStore.selectChat({
+        type: 'dm',
+        key: openInviter,
+        peer: openInviter,
+        name: `@${openInviter}`,
+        isOnline: true,
+      });
+    }
 
     // WebSocket starten
     ws.start();
@@ -107,13 +227,34 @@
           const me = userStore.myUser;
           if (me && msg.from && msg.from !== me) {
             console.log(`📨 cmk_req von ${msg.from} empfangen → versuche redistribute`);
-            void redistributeCMKToPeer(me, msg.from).then(r => {
+            void (async () => {
+              const r = await redistributeCMKToPeer(me, msg.from);
               if (r && r.ok && r.distributed > 0) {
                 console.log(`✅ CMK an ${msg.from} (${r.distributed} Devices) verteilt`);
-              } else if (r && r.reason === 'no_local_cmk') {
-                console.warn(`⚠️ cmk_req von ${msg.from}: eigene CMK fehlt, cmk_unavailable gesendet`);
+                return;
               }
-            });
+              if (r?.reason !== 'no_local_cmk') return;
+
+              // Fresh-Guest-Path: Gast hat per Fallback-Bootstrap eine CMK in KV
+              // hochgeladen, aber wir (Inviter) haben sie nie lokal importiert.
+              // ensureSecureDmSession holt sie aus KV (tryFetchAndUnwrapCMK) und
+              // speichert lokal. Danach Re-Distribute, damit alle Inviter-Devices
+              // synchronisiert sind.
+              if (isGuestHandle(msg.from)) {
+                console.log(`🔍 Guest cmk_req: versuche KV-Fetch des Gast-CMK für ${msg.from}`);
+                try {
+                  const cmk = await ensureSecureDmSession(me, msg.from);
+                  if (cmk) {
+                    console.log(`✅ Guest-CMK aus KV importiert für ${msg.from}, redistribute`);
+                    await redistributeCMKToPeer(me, msg.from);
+                    return;
+                  }
+                } catch (e) {
+                  captureException(e, { context: 'cmk_req-guest-bootstrap', peer: msg.from });
+                }
+              }
+              console.warn(`⚠️ cmk_req von ${msg.from}: eigene CMK fehlt, cmk_unavailable gesendet`);
+            })();
           }
           return;
         }
@@ -166,6 +307,33 @@
         }
         if (!msg.type || msg.type === "message") {
           chatStore.receiveMessage(msg);
+        }
+      })
+    );
+
+    // Neue Gruppe: Empfänger lädt Group-Liste neu, damit sie in der Inbox erscheint.
+    _wsUnsubs.push(
+      ws.on("group_added", (msg) => {
+        console.log("👥 group_added", msg);
+        inboxStore.loadGroups().catch(() => {});
+      })
+    );
+
+    // Auto-Delete: propose/accept/decline/cancel — Peer/Group-Mitglied hat Setting
+    // geändert. Lokalen Store updaten + bei DM-Proposal Toast zeigen damit der User
+    // weiß dass jetzt eine Akzeptier-Aktion im 3-Punkte-Menü ansteht.
+    _wsUnsubs.push(
+      ws.on("auto_delete_set", (msg) => {
+        autoDeleteStore.applyControl(msg);
+        if (msg.action === "propose" && msg.from) {
+          const lng = i18nStore.lang;
+          const label = autoDeleteLabel(msg.days, lng);
+          toastStore.push(
+            `📨 @${msg.from} ` +
+            (lng.autoDeleteProposalIncoming || 'schlägt Auto-Delete vor:') +
+            ' ' + label,
+            { kind: 'info' }
+          );
         }
       })
     );
@@ -263,6 +431,11 @@
           })();
         } else if (msg.from) {
           void redistributeCMKToPeer(me, msg.from, newDeviceInfo);
+          // Frischer Peer (z.B. Gast joined gerade) → Contacts neu laden, sonst
+          // erscheint die Konversation erst nach manuellem Reload in der Inbox.
+          // Backend hat beim /invite/join schon contacts-Eintrag erzeugt + ETag
+          // gebumped, aber Frontend-Cache muss explizit gepullt werden.
+          inboxStore.loadContacts().catch(() => {});
         }
       })
     );
@@ -295,18 +468,37 @@
           // Achtung: das Removed Device ist bereits aus der KV/D1 entfernt
           // (Backend-side); wrapCMKForInboxDevices nimmt nur noch aktive Devices
           // → der alte CMK ist auf dem geleakten Device tot.
+          //
+          // Multi-Device-Race-Fix (B11): Nur das initiierende Device rotiert.
+          // `msg.initiatedBy` ist die deviceId des Devices das die Revoke-Aktion
+          // ausgeführt hat. Andere Devices skippen → keine konkurrierenden CMK-
+          // Generationen mit divergenten Werten in KV.
+          // Backwards-Compat: wenn initiatedBy nicht gesetzt (alte Backend-Version),
+          // rotiert jedes Device wie zuvor (Race möglich, aber nicht schlimmer).
+          const myDeviceId = userStore.deviceId;
+          const isInitiator = !msg.initiatedBy || msg.initiatedBy === myDeviceId;
+          if (!isInitiator) {
+            console.log(`🔁 Self-Revoke: skip Rotation — Initiator ist ${msg.initiatedBy} (ich bin ${myDeviceId})`);
+            return;
+          }
           void (async () => {
             const contacts = (inboxStore.contacts || []).map(c => c.handle).filter(Boolean);
-            console.log(`🔁 Self-Revoke: rotiere CMK für ${contacts.length} DMs`);
+            console.log(`🔁 Self-Revoke (initiator): rotiere CMK für ${contacts.length} DMs`);
+            let rotatedCount = 0;
             for (const peer of contacts) {
               try {
                 const r = await rotateCMKForPeer(me, peer);
                 if (r?.ok) {
                   await redistributeCMKToPeer(me, peer);
+                  rotatedCount++;
                 }
               } catch (e) {
                 captureException(e, { context: 'rotate-on-self-revoke', peer });
               }
+            }
+            if (rotatedCount > 0) {
+              const t = i18nStore.lang.cmkSelfRotateToast || '🔁 Sicherheits-Schlüssel rotiert ({n} Chats)';
+              toastStore.push(t.replace('{n}', String(rotatedCount)), { kind: 'success' });
             }
           })();
         } else if (msg.from && msg.from !== me) {
@@ -320,7 +512,13 @@
             console.log(`🔁 Peer-Revoke (${msg.from}): mirror-rotation triggern`);
             try {
               const r = await mirrorRotateCMKForPeer(me, msg.from);
-              if (!r.ok) {
+              if (r.ok) {
+                // Re-Decrypt-Sweep: Messages die zwischen Rotate-Trigger und CMK-
+                // Import als 🔐 hängengeblieben sind erneut versuchen.
+                chatStore.retryDecryptForPeer(msg.from);
+                const t = i18nStore.lang.cmkMirrorRotateToast || '🔁 Sicherheits-Schlüssel mit {peer} rotiert';
+                toastStore.push(t.replace('{peer}', msg.from), { kind: 'success' });
+              } else {
                 console.warn(`Mirror-Rotation für ${msg.from} skipped: ${r.reason}`);
               }
             } catch (e) {
@@ -328,6 +526,83 @@
             }
           })();
         }
+      })
+    );
+
+    // invite_accepted: Ein Real-User hat unseren Invite-Link akzeptiert.
+    // Pendant zum guest_joined-Event, aber für eingeloggte Empfänger statt Gäste.
+    _wsUnsubs.push(
+      ws.on("invite_accepted", (msg) => {
+        console.log("🤝 invite_accepted", msg);
+        const handle = (msg?.handle || '').toLowerCase();
+        if (!handle) return;
+        inboxStore.loadContacts().catch(() => {});
+        inboxStore.loadUnread().catch(() => {});
+        const tpl = i18nStore.lang.inviteAcceptedToast || '🤝 {handle} accepted the invite';
+        toastStore.push(tpl.replace('{handle}', handle), { kind: 'info' });
+      })
+    );
+
+    // guest_joined: Ein Gast hat unseren Invite-Link benutzt und ist beigetreten.
+    // Backend hat contacts-Eintrag bereits angelegt (siehe inviteRoutes.js); wir
+    // laden die Inbox neu, damit der Gast als Kontakt + Unread-Badge erscheinen.
+    _wsUnsubs.push(
+      ws.on("guest_joined", (msg) => {
+        console.log("👤 guest_joined", msg);
+        const handle = (msg?.handle || '').toLowerCase();
+        if (!handle) return;
+        inboxStore.loadContacts().catch(() => {});
+        inboxStore.loadUnread().catch(() => {});
+        const tpl = i18nStore.lang.guestJoinedToast || '👤 {handle} joined';
+        toastStore.push(tpl.replace('{handle}', handle), { kind: 'info' });
+      })
+    );
+
+    // GUEST_CONVERTED: Gast hat sich registriert → wird zu echtem User mit neuem Handle.
+    // Backend migriert contacts (guest_xxx → realHandle). Wir laden Kontakte neu.
+    // Wenn aktueller Chat = der konvertierte Gast → Chat auf neuen Handle umschalten.
+    _wsUnsubs.push(
+      ws.on("GUEST_CONVERTED", async (msg) => {
+        console.log("🔁 GUEST_CONVERTED", msg);
+        const oldHandle = (msg.oldHandle || '').toLowerCase();
+        const newHandle = (msg.newHandle || '').toLowerCase();
+        if (!oldHandle || !newHandle) return;
+
+        // ProfileCache invalidieren (alter guest_xxx-Display ist obsolet)
+        profileCache.invalidate(oldHandle);
+        profileCache.invalidate(newHandle);
+
+        // E2E-Storage migrieren: Peer-Handle wechselt von guest_xxx → realHandle.
+        // Sonst lägen CMK/Rotation-Maps unter dem alten Schlüssel und Decrypt
+        // bzw. cmk_req-Antworten würden „unrecoverable" liefern.
+        try {
+          const r = await migratePeerHandle(oldHandle, newHandle);
+          if (r.renamed > 0) console.log(`🔁 Peer-Migration: ${r.renamed} IDB-Keys umgeschrieben`);
+        } catch (e) {
+          captureException(e, { context: 'GUEST_CONVERTED.migratePeerHandle' });
+        }
+
+        // Kontakte neu laden (Backend hat user_handle in contacts-Tabelle migriert)
+        inboxStore.loadContacts().catch(() => {});
+
+        // Wenn aktuell ein Chat mit dem alten Gast offen ist → auf neuen Handle umschalten
+        const sel = chatStore.selectedChat;
+        if (sel?.type === 'dm' && sel.peer === oldHandle) {
+          chatStore.selectChat({
+            type: 'dm',
+            key: newHandle,
+            peer: newHandle,
+            name: `@${newHandle}`,
+            isOnline: true,
+          });
+        }
+
+        // Toast-Hinweis
+        const t = i18nStore.lang.guestConvertedToast || '👤 {old} ist jetzt {new}';
+        toastStore.push(
+          t.replace('{old}', oldHandle).replace('{new}', newHandle),
+          { kind: 'info' }
+        );
       })
     );
 
@@ -343,6 +618,11 @@
       _wsUnsubs.push(
         ws.on(evt, (msg) => {
           console.log("👥", evt, msg);
+          // ProfileCache für betroffenen Handle invalidieren — falls DN sich
+          // geändert hat, holt der nächste .get() frisch (statt 5min TTL zu warten).
+          if (msg?.from && typeof msg.from === 'string') {
+            profileCache.invalidate(msg.from);
+          }
           inboxStore.loadContacts().catch(() => {});
         })
       );
@@ -381,8 +661,12 @@
     // Heartbeat erst NACH erfolgreichem Upload, damit das Device im Backend
     // existiert (sonst returnt /heartbeat 404 für unbekannte deviceIds).
     void (async () => {
-      const uploaded = await uploadInboxKeyIfNeeded();
-      if (uploaded) _runHeartbeat();
+      const result = await uploadInboxKeyIfNeeded();
+      if (result?.ok) {
+        _runHeartbeat();
+      } else if (result?.deviceLimit) {
+        deviceLimitInfo = result.deviceLimit;
+      }
     })();
     document.addEventListener('visibilitychange', _onVisibilityChange);
 
@@ -398,6 +682,21 @@
     // - Schützt gegen den Fall: Tab/Browser-State teilweise verloren,
     //   aber masterKey-Cache überlebte → CMKs auto-restoren statt cmk_req-Loop.
     void bootstrapBundleRestore();
+
+    // Recovery-Prompt-Hint: Inkognito/neuer-Browser-Fall — Bundle existiert in R2,
+    // aber masterKey nicht im Cache. User würde sonst nur 🔐-Messages sehen ohne
+    // zu wissen wie er die freischalten kann. Toast zeigt klickbaren Hint.
+    void (async () => {
+      const needsPrompt = await checkRecoveryPromptNeeded();
+      if (needsPrompt) {
+        const text = i18nStore.lang.recoveryPromptToast || '🔐 Chat-History wiederherstellen — Phrase eingeben';
+        toastStore.push(text, {
+          kind: 'info',
+          ttl: 0,                                    // persistent — User soll's bewusst wegklicken
+          action: () => { recoveryLoginOpen = true; },
+        });
+      }
+    })();
   }
 
   async function _checkRecovery() {
@@ -431,6 +730,9 @@
     _wsUnsubs = [];
     ws.stop();
     chatStore.clear();
+    notificationsStore.clear();
+    autoDeleteStore.clear();
+    profileCache.clear();
     document.removeEventListener('visibilitychange', _onVisibilityChange);
   }
 </script>
@@ -454,6 +756,12 @@
 <!-- RecoveryLogin auf App-Level: überlebt LoginModal-Unmount nach Passkey-Auth.
      User durchläuft Step 1 (auth) → 2 (phrase) → 3 (success) ohne Unterbrechung. -->
 <RecoveryLoginModal bind:isOpen={recoveryLoginOpen} />
+
+<!-- Device-Limit-Modal: 5 (Free) bzw. 10 (Pro) Geräte erreicht -->
+<DeviceLimitModal bind:info={deviceLimitInfo} />
+
+<!-- Toast-Stack (CMK-Rotation, future Notifications) -->
+<ToastContainer />
 
 <style>
   .app {

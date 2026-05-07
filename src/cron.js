@@ -1,7 +1,11 @@
 import { pushToUserDO } from './auth.js';
 
 // ======================================================
-// CRON: Automatische Nachrichten-Löschung (täglich 03:00 UTC)
+// CRON: Automatische Nachrichten-Löschung (stündlich)
+// Schedule: "0 * * * *" — siehe wrangler.toml
+// Auto-Delete Hard-Cleanup läuft stündlich für minimale Server-Lebensdauer.
+// Andere Cleanups (Feedback, Push, Guests, Devices) laufen mit, sind aber
+// idempotent → kein Problem bei stündlicher Frequenz.
 // ======================================================
 export async function scheduled(event, env) {
   console.log("🕐 Auto-Delete Cron gestartet:", new Date().toISOString());
@@ -139,9 +143,27 @@ export async function scheduled(event, env) {
   }
 
   // ── Auto-Revoke (30d Inaktivität) ────────────────────
-  // KEINE CMK-Rotation (revoked_by='auto'). Nur eigene Devices benachrichtigen.
+  await runAutoRevokeStaleDevices(env);
+
+  // ── Revoked-Row-Retention (90d) ──────────────────────
+  await _revokedRetention(env);
+}
+
+// ======================================================
+// Auto-Revoke: Devices mit >30d Inaktivität auf 'revoked' setzen.
+// KEINE CMK-Rotation (revoked_by='auto') — Spec: docs/MULTI_DEVICE.md §3.2.
+// Nur Self-Push damit eigene andere Devices ihre Liste refreshen.
+//
+// Exportiert für Unit-Tests (siehe tests/cronAutoRevoke.test.js).
+// @returns {Promise<{revoked: number, errors: number}>}
+// ======================================================
+export async function runAutoRevokeStaleDevices(env, opts = {}) {
+  const inactivityMs = opts.inactivityMs ?? 30 * 86400_000;
+  let revokedCount = 0;
+  let errorCount = 0;
+
   try {
-    const cutoff = Date.now() - 30 * 86400_000;
+    const cutoff = Date.now() - inactivityMs;
     const stale = await env.RENEX_DB.prepare(`
       SELECT device_id, user_handle FROM devices
       WHERE state = 'active' AND last_seen_at < ?
@@ -177,18 +199,25 @@ export async function scheduled(event, env) {
           reason: "auto",
           ts: Date.now()
         }).catch(() => {});
+
+        revokedCount++;
       } catch (e) {
+        errorCount++;
         console.warn(`Auto-Revoke einzelnes Device fehlgeschlagen (${row.device_id}):`, e.message);
       }
     }
     if (staleRows.length > 0) {
-      console.log(`🧹 Auto-Revoke: ${staleRows.length} inaktive Devices entfernt (>30d)`);
+      console.log(`🧹 Auto-Revoke: ${revokedCount}/${staleRows.length} inaktive Devices entfernt (>${Math.round(inactivityMs / 86400_000)}d)`);
     }
   } catch (e) {
+    errorCount++;
     console.error("❌ Auto-Revoke Cron fehlgeschlagen:", e);
   }
 
-  // ── Revoked-Row-Retention (90d) ──────────────────────
+  return { revoked: revokedCount, errors: errorCount };
+}
+
+async function _revokedRetention(env) {
   // Audit-Forensik: revoked Rows nach 90 Tagen endgültig löschen.
   try {
     const cutoff = Date.now() - 90 * 86400_000;

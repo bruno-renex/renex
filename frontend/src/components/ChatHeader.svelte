@@ -7,6 +7,8 @@
   import { i18nStore } from '../stores/i18n.svelte.js';
   import { voiceStore } from '../stores/voice.svelte.js';
   import { profileCache } from '../stores/profileCache.svelte.js';
+  import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
+  import ChatHeaderMenu from './ChatHeaderMenu.svelte';
 
   let lang = $derived(i18nStore.lang);
   let chat = $derived(chatStore.selectedChat);
@@ -15,21 +17,27 @@
   // gesetzte chat.name sobald der Fetch zurückkommt. Gruppen behalten ihren Namen.
   let displayName = $derived.by(() => {
     if (!chat) return null;
-    if (chat.type === 'dm' && chat.peer) return profileCache.get(chat.peer);
+    if (chat.type === 'dm' && chat.peer) {
+      // Gast → deterministischer „Guest Blue Eagle"-Name (kein Backend-Lookup nötig)
+      if (isGuestHandle(chat.peer)) return guestDisplayName(chat.peer);
+      return profileCache.get(chat.peer);
+    }
     return null;
   });
 
-  let headerName = $derived(
-    chat?.type === 'dm' && chat.peer
-      ? (displayName ? `${displayName} · @${chat.peer}` : `@${chat.peer}`)
-      : (chat?.name || '')
-  );
+  let headerName = $derived.by(() => {
+    if (chat?.type !== 'dm' || !chat.peer) return chat?.name || '';
+    // Gast: nur den hübschen Namen zeigen, nicht @guest_3a7f… anhängen
+    if (isGuestHandle(chat.peer)) return displayName || guestDisplayName(chat.peer);
+    return displayName ? `${displayName} · @${chat.peer}` : `@${chat.peer}`;
+  });
 
   let initials = $derived.by(() => {
     const src = displayName || chat?.peer || chat?.name || '';
     if (!src) return "?";
     return src
       .replace(/^@/, "")
+      .replace(/^Guest /, "")  // "Guest Blue Eagle" → "BE" statt "GB"
       .split(/[\s._-]+/)
       .map(p => p[0])
       .join("")
@@ -94,17 +102,20 @@
     </div>
 
     <div class="actions">
-      <button class="action-btn" onclick={onCall} title="Voice call" aria-label="Voice call">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
-        </svg>
-      </button>
-      <button class="action-btn" onclick={onVideoCall} title="Video call" aria-label="Video call">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="23 7 16 12 23 17 23 7"/>
-          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-        </svg>
-      </button>
+      {#if chat.type === 'dm'}
+        <button class="action-btn" onclick={onCall} title="Voice call" aria-label="Voice call">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+          </svg>
+        </button>
+        <button class="action-btn" onclick={onVideoCall} title="Video call" aria-label="Video call">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="23 7 16 12 23 17 23 7"/>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+          </svg>
+        </button>
+      {/if}
+      <ChatHeaderMenu {chat} />
     </div>
   </header>
 {/if}

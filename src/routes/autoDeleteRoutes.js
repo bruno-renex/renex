@@ -39,7 +39,7 @@ export async function handleAutoDeleteRoutes(request, env, path, params) {
         ).bind(me, peer).first();
         if (contact?.status !== "accepted") return json(request, { error: "Not a contact" }, 403);
 
-        const ALLOWED_DAYS = new Set([0, 0.0417, 1, 7, 30]);
+        const ALLOWED_DAYS = new Set([0, 1, 7, 30]);
         const convoId = dmConvoId(me, peer);
         const now = Date.now();
 

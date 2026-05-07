@@ -29,7 +29,7 @@ binding = "RENEX_FILES"
 bucket_name = "renex-files"
 
 [triggers]
-crons = ["0 3 * * *"]
+crons = ["0 * * * *"]
 
 # ======================================================
 # VAPID Keys für Web Push Notifications

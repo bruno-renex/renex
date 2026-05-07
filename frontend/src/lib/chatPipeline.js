@@ -1135,14 +1135,68 @@ export async function decryptIncomingGroupMessage(msg, myHandle, groupId) {
       ? msg.epoch
       : Math.floor((msg.ts || Date.now()) / EPOCH_MS);
 
+    // Decrypt-Strategien:
+    //  1. Vanilla-HKDF-Pattern: deriveGroupMK(GSK, groupId, sender, chainIndex)
+    //     mit Salt "renex:gmk:v1" — falls chainIndex (rotationIndex) gegeben.
+    //     Vanilla-Sender (groupSessionManager.js encryptGroupMessage) verwendet
+    //     einen per-Message HKDF-derived MK. Ohne diesen Pfad schlägt der
+    //     Decrypt für Vanilla→Svelte-Group-Messages fehl.
+    //  2. Vanilla-HKDF v0-Salt (Legacy 32 zero bytes) — alte Vanilla-Messages.
+    //  3. Direct-GSK — Svelte→Svelte-Send-Pfad (sendEncryptedGroup).
+    const chainIndex = typeof msg.rotationIndex === 'number'
+      ? msg.rotationIndex
+      : (typeof msg.rotation_index === 'number'
+          ? msg.rotation_index
+          : (typeof msg.chainIndex === 'number' ? msg.chainIndex : null));
+
     let decrypted = null;
+    let workingKey = gskKey;
     let usedEpoch = baseEpoch;
-    for (const ep of [baseEpoch, baseEpoch - 1, baseEpoch + 1]) {
-      try {
-        decrypted = await e2eDecrypt(gskKey, ivB64, ctB64);
-        if (typeof decrypted === 'string') { usedEpoch = ep; break; }
-      } catch {}
+
+    // Strategy 1+2: Vanilla HKDF-derived MK
+    if (chainIndex !== null) {
+      const HKDF_SALT_V1 = new TextEncoder().encode('renex:gmk:v1');
+      const HKDF_SALT_V0 = new Uint8Array(32);
+      const info = new TextEncoder().encode(
+        `renex-group:${groupId}:${senderHandle}:${chainIndex}`
+      );
+      const baseKey = await crypto.subtle.importKey(
+        'raw', gskBytes, 'HKDF', false, ['deriveKey']
+      );
+      for (const salt of [HKDF_SALT_V1, HKDF_SALT_V0]) {
+        try {
+          const mk = await crypto.subtle.deriveKey(
+            { name: 'HKDF', hash: 'SHA-256', salt, info },
+            baseKey,
+            { name: 'AES-GCM', length: 256 },
+            false,
+            ['encrypt', 'decrypt']
+          );
+          const pt = await e2eDecrypt(mk, ivB64, ctB64);
+          if (typeof pt === 'string') {
+            decrypted = pt;
+            workingKey = mk;
+            break;
+          }
+        } catch {}
+      }
     }
+
+    // Strategy 3: Direct-GSK fallback (Svelte-Sender)
+    if (typeof decrypted !== 'string') {
+      for (const ep of [baseEpoch, baseEpoch - 1, baseEpoch + 1]) {
+        try {
+          const pt = await e2eDecrypt(gskKey, ivB64, ctB64);
+          if (typeof pt === 'string') {
+            decrypted = pt;
+            workingKey = gskKey;
+            usedEpoch = ep;
+            break;
+          }
+        } catch {}
+      }
+    }
+
     if (typeof decrypted !== 'string') {
       return { text: null, verified: null };
     }
@@ -1152,7 +1206,9 @@ export async function decryptIncomingGroupMessage(msg, myHandle, groupId) {
     const replyCt = msg.replyCt || msg.reply_ct;
     if (typeof replyIv === 'string' && typeof replyCt === 'string') {
       try {
-        replyText = await e2eDecrypt(gskKey, replyIv, replyCt);
+        // Reply mit derselben Key-Variante decrypten die für die Haupt-Bubble
+        // funktioniert hat (workingKey = HKDF-derived MK ODER direct-GSK).
+        replyText = await e2eDecrypt(workingKey, replyIv, replyCt);
       } catch { replyText = null; }
     }
 

@@ -202,7 +202,7 @@ async function handleReply(data, replyText) {
   // Hinweis: Inline-Reply geht nur unverschlüsselt (kein E2E im SW möglich)
   // Für E2E-Chats → App öffnen
   if (data.e2e) {
-    const targetUrl = data.url || "/inbox.html";
+    const targetUrl = data.url || "/";
     const windowClients = await clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const client of windowClients) {
       client.focus();

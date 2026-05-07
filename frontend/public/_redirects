@@ -1,3 +1,10 @@
-/chat/*         /chat/index.html    200
-/js/*           /js/:splat          200
+# Backward-Compat (Block-F-Cutover): alte PWAs/Bookmarks die noch /chat?with=…
+# kennen — Cloudflare Pages reicht den Query-String automatisch durch.
+# 301 = permanenter Redirect, Browser-Caches die neue URL und alte Lesezeichen
+# updaten sich automatisch.
+/chat            /                  301
+/chat/           /                  301
+/chat/*          /                  301
+
+# Default Catch-All — Svelte-App auf Root.
 /*              /index.html         200

@@ -7,18 +7,21 @@
 // ======================================================
 import { describe, it, expect } from 'vitest';
 
-// Direkter Import der Pure-Functions (aus archiviertem Vanilla — Phase 1B
-// migriert dies in frontend/src/lib/crypto.js)
+// Pure-Crypto-Functions aus dem Svelte-Frontend. Migration aus
+// renex-legacy abgeschlossen — die Original-Vanilla-Quelle wurde im
+// Block-F-Cutover entfernt; die hier getesteten Functions sind 1:1-
+// Ports + Hardenings.
+//
+// Tests für File-Crypto-Helpers (generateFileKey, exportKeyB64,
+// importKeyB64) wurden entfernt — File-Upload ist noch nicht ins
+// Svelte-Frontend portiert. Wenn das später passiert: Tests
+// re-enablen + neuen Port nach lib/fileCrypto.js o.ä. importieren.
+import { abToB64, b64ToAb } from '../frontend/src/lib/bytes.js';
 import {
-  abToB64,
-  b64ToAb,
   e2eEncrypt,
   e2eDecrypt,
-  generateFileKey,
-  exportKeyB64,
-  importKeyB64,
   e2eEncryptBytes,
-} from '../renex-legacy/js/chatCrypto.js';
+} from '../frontend/src/lib/chatCrypto.js';
 
 // ── Test 1: Base64 Round-Trip ─────────────────────────────────
 // Wenn dieser Test fehlt → keine Encryption funktioniert (alle Payloads kaputt).
@@ -102,27 +105,11 @@ describe('e2eEncrypt / e2eDecrypt', () => {
   });
 });
 
-// ── Test 3: Key Export/Import Round-Trip ─────────────────────
-// Wichtig für CMK-Sharing zwischen Devices: exportKeyB64 → importKeyB64.
-describe('exportKeyB64 / importKeyB64', () => {
-  it('round-trips an AES-GCM key (decryption works)', async () => {
-    const original = await generateFileKey();
-    const b64 = await exportKeyB64(original);
-    const imported = await importKeyB64(b64);
-
-    // Imported-Key kann decrypten was Original encrypted hat
-    const { ivB64, ctB64 } = await e2eEncrypt(original, 'test payload');
-    const decrypted = await e2eDecrypt(imported, ivB64, ctB64);
-    expect(decrypted).toBe('test payload');
-  });
-
-  it('exported key has correct length (32 bytes = 256 bits)', async () => {
-    const key = await generateFileKey();
-    const b64 = await exportKeyB64(key);
-    const bytes = new Uint8Array(b64ToAb(b64));
-    expect(bytes.length).toBe(32);
-  });
-});
+// Tests für exportKeyB64 / importKeyB64 / generateFileKey wurden im
+// Block-F-Cutover entfernt — diese File-Crypto-Helpers wurden nicht ins
+// Svelte-Frontend portiert (kein File-Upload aktuell). Wenn File-Upload
+// kommt: hier die Tests wieder einsetzen mit Import aus dem dann neu
+// erstellten Modul (vermutlich lib/fileCrypto.js).
 
 // ── Test 4: Binary Encrypt (für Files/Images) ───────────────
 describe('e2eEncryptBytes', () => {
@@ -151,21 +138,4 @@ describe('e2eEncryptBytes', () => {
   });
 });
 
-// ── Test 5: generateFileKey (extractable) ───────────────────
-// Wichtig: generated key MUSS extractable sein (für CMK-Sync zwischen Devices).
-describe('generateFileKey', () => {
-  it('generates a key that can be exported (extractable=true)', async () => {
-    const key = await generateFileKey();
-    // Wenn nicht extractable, würde exportKey throwen
-    const exported = await crypto.subtle.exportKey('raw', key);
-    expect(exported.byteLength).toBe(32); // 256-bit AES
-  });
-
-  it('produces unique keys (high entropy)', async () => {
-    const k1 = await generateFileKey();
-    const k2 = await generateFileKey();
-    const b1 = await exportKeyB64(k1);
-    const b2 = await exportKeyB64(k2);
-    expect(b1).not.toBe(b2);
-  });
-});
+// generateFileKey tests entfernt — siehe Kommentar oben.

@@ -312,23 +312,27 @@ export async function handleChatRoutes(request, env, path, params) {
         // Aus D1 löschen
         await env.RENEX_DB.prepare("DELETE FROM messages WHERE id = ?").bind(msgId).run();
 
-        // Peer via DO benachrichtigen
+        // Peer(s) via DO benachrichtigen
         const isGroup = isUUID(row.convo_id);
         const deleteEvent = {
           id: crypto.randomUUID(),
           type: "message_deleted",
           messageId: msgId,
+          convoId: row.convo_id,
+          groupId: isGroup ? row.convo_id : null,
           from: me,
           ts: Date.now()
         };
         if (isGroup) {
-          // Gruppen: alle Mitglieder benachrichtigen (exkl. Sender)
           await pushToGroupMembers(env, env.RENEX_DB, row.convo_id, me, deleteEvent);
         } else {
-          // DM: nur den Peer benachrichtigen
           const peer = row.to_user === me ? row.from_user : row.to_user;
           await pushToUserDO(env, peer, { ...deleteEvent, to: peer });
         }
+        // Multi-Device-Self-Sync: eigene andere Devices ebenfalls benachrichtigen
+        // (DM + Group). Tab/Device, der die Aktion ausgelöst hat, filtert sich
+        // im Frontend via msg.deviceId selbst raus. Fire-and-forget.
+        pushToUserDO(env, me, deleteEvent).catch(() => {});
 
         return json(request, { ok: true });
       }
@@ -388,6 +392,10 @@ export async function handleChatRoutes(request, env, path, params) {
         messageId: msgId,
         ciphertext: cipher,
         rotationIndex: rotIdx,
+        // convoId immer mitgeben damit Empfänger sicher routen kann (DM vs Group),
+        // auch wenn die _raw-Row beim Empfänger noch keine groupId hat (Reload-Pfad).
+        convoId: row.convo_id,
+        groupId: isGroup ? row.convo_id : null,
         from: me,
         ts: now
       };
@@ -397,6 +405,8 @@ export async function handleChatRoutes(request, env, path, params) {
         const peer = row.to_user === me ? row.from_user : row.to_user;
         await pushToUserDO(env, peer, { ...editEvent, to: peer });
       }
+      // Multi-Device-Self-Sync: eigene andere Devices kriegen Edit-Event auch.
+      pushToUserDO(env, me, editEvent).catch(() => {});
 
       return json(request, { ok: true, editedAt: now });
     }
@@ -531,6 +541,8 @@ export async function handleChatRoutes(request, env, path, params) {
         const peer = msg.to_user === me ? msg.from_user : msg.to_user;
         await pushToUserDO(env, peer, { ...reactionEvent, to: peer });
       }
+      // Multi-Device-Self-Sync: eigene andere Devices spiegeln die Reaktion.
+      pushToUserDO(env, me, reactionEvent).catch(() => {});
       // Sender selbst (eigener Tab) bekommt auch das Event zurück
       return json(request, { ok: true, action, reactions });
     }

@@ -84,6 +84,34 @@ async function _decryptFromStorage(storageKey, ivB64, ctB64) {
   return new Uint8Array(pt);
 }
 
+/**
+ * Re-encryptet ein gespeichertes GSK-Blob für eine neue Self-Identität.
+ *
+ * Background: Storage-Key ist HKDF-derived aus
+ *   `renex:gsk-storage:<scope>:<me>:<groupId>`
+ * — bindet `me` und `groupId`, NICHT den Peer. Beim Guest-Convert wechselt
+ * `me` auf der Self-Seite, der Storage-Key ändert sich also.
+ *
+ * @param {{ivB64: string, ctB64: string}} blob
+ * @param {'my'|'peer'} scope
+ * @param {string} oldMe
+ * @param {string} newMe
+ * @param {string} groupId
+ * @returns {Promise<{ivB64: string, ctB64: string}|null>}
+ */
+export async function reEncryptGskBlobForRename(blob, scope, oldMe, newMe, groupId) {
+  if (!blob || !blob.ivB64 || !blob.ctB64) return null;
+  const oldKey = await _getGroupStorageKey(oldMe, groupId, scope);
+  const newKey = await _getGroupStorageKey(newMe, groupId, scope);
+  try {
+    const gskBytes = await _decryptFromStorage(oldKey, blob.ivB64, blob.ctB64);
+    if (gskBytes instanceof Uint8Array && gskBytes.length === 32) {
+      return await _encryptForStorage(newKey, gskBytes);
+    }
+  } catch {}
+  return null;
+}
+
 // ======================================================
 // IDB-Keys
 // ======================================================
@@ -135,8 +163,96 @@ export async function getMyGSK(groupId) {
   }
 }
 
+// ======================================================
+// GSK-Rotation-Archive (in-memory, 16min TTL)
+// ------------------------------------------------------
+// Edits laufen in einem 15min-Window nach Original-Send. Wenn die GSK in
+// dieser Zeit rotiert (z.B. nach group_member_left), würde der Edit-Decrypt
+// bei Empfängern fehlschlagen — die alte GSK wäre überschrieben.
+//
+// Lösung: jeden setMyGSK/setPeerGSK behält den vorherigen Wert kurz im
+// Speicher. editEncryptedGroup / decryptEditedGroupMessage können dann die
+// historische GSK über `originalMsg.ts` finden.
+//
+// Bewusst in-memory only:
+//  - 15min-Edit-Window ist kurz, IDB-Write pro Rotation wäre Overkill
+//  - Bei Tab-Reload geht's verloren — das ist OK, dann gilt eben "kein Edit"
+//  - Kein Storage-Wrap → kein zusätzlicher Crypto-Roundtrip
+// ======================================================
+const ARCHIVE_TTL_MS = 16 * 60 * 1000;
+// _gskArchive: Map<archiveKey, Array<{gsk: Uint8Array, replacedAt: number}>>
+//   archiveKey = `my:${groupId}` oder `peer:${groupId}:${peerHandle}`
+const _gskArchive = new Map();
+
+function _archiveKey(kind, groupId, peerHandle = null) {
+  const gid = String(groupId).toLowerCase();
+  return kind === 'my'
+    ? `my:${gid}`
+    : `peer:${gid}:${String(peerHandle || '').toLowerCase()}`;
+}
+
+function _pruneArchive(key) {
+  const list = _gskArchive.get(key);
+  if (!list) return;
+  const cutoff = Date.now() - ARCHIVE_TTL_MS;
+  const fresh = list.filter(e => e.replacedAt >= cutoff);
+  if (fresh.length === 0) _gskArchive.delete(key);
+  else if (fresh.length !== list.length) _gskArchive.set(key, fresh);
+}
+
+function _archivePush(key, gskBytes) {
+  if (!(gskBytes instanceof Uint8Array) || gskBytes.length !== 32) return;
+  const list = _gskArchive.get(key) || [];
+  list.push({ gsk: new Uint8Array(gskBytes), replacedAt: Date.now() });
+  _gskArchive.set(key, list);
+  _pruneArchive(key);
+}
+
+/**
+ * Findet die GSK, die zum Zeitpunkt `ts` aktiv war.
+ * Eintrag passt wenn `replacedAt > ts` (also danach abgelöst).
+ * @returns {Uint8Array|null}
+ */
+function _archiveFindAtTs(key, ts) {
+  _pruneArchive(key);
+  const list = _gskArchive.get(key);
+  if (!list || list.length === 0 || typeof ts !== 'number') return null;
+  // älteste passende Version (kleinster replacedAt > ts) — sonst bekommt man
+  // bei mehreren Rotationen die jüngste statt die zur Zeit ts korrekte.
+  let best = null;
+  for (const e of list) {
+    if (e.replacedAt > ts) {
+      if (!best || e.replacedAt < best.replacedAt) best = e;
+    }
+  }
+  return best ? best.gsk : null;
+}
+
+/** Findet die historische eigene GSK zum gegebenen Zeitpunkt. */
+export function findMyGSKAtTs(groupId, ts) {
+  return _archiveFindAtTs(_archiveKey('my', groupId), ts);
+}
+
+/** Findet die historische Peer-GSK zum gegebenen Zeitpunkt. */
+export function findPeerGSKAtTs(groupId, peerHandle, ts) {
+  return _archiveFindAtTs(_archiveKey('peer', groupId, peerHandle), ts);
+}
+
+/** Wird von group-leave / Logout aufgerufen — archiv für die Gruppe leeren. */
+export function clearGSKArchiveForGroup(groupId) {
+  const gid = String(groupId).toLowerCase();
+  for (const k of _gskArchive.keys()) {
+    if (k === `my:${gid}` || k.startsWith(`peer:${gid}:`)) {
+      _gskArchive.delete(k);
+    }
+  }
+}
+
 /**
  * Schreibt eine eigene GSK in IDB (Wrap-for-Storage).
+ * Bevor der neue Wert geschrieben wird, der vorherige (falls vorhanden) ins
+ * In-Memory-Archive für 16min — damit Edits älterer Messages noch decryptbar
+ * sind (siehe Archive-Doku oben).
  */
 export async function setMyGSK(groupId, gskBytes) {
   if (!(gskBytes instanceof Uint8Array) || gskBytes.length !== 32) {
@@ -144,6 +260,11 @@ export async function setMyGSK(groupId, gskBytes) {
   }
   const me = _getMyHandle();
   if (!me) throw new Error('not logged in');
+  // Vor dem Überschreiben: alten Wert ins Archive
+  try {
+    const prev = await getMyGSK(groupId);
+    if (prev) _archivePush(_archiveKey('my', groupId), prev);
+  } catch {}
   const sk = await _getGroupStorageKey(me, groupId, 'my');
   const enc = await _encryptForStorage(sk, gskBytes);
   await idbSet(_myGskKey(me, groupId), enc);
@@ -191,6 +312,11 @@ export async function setPeerGSK(groupId, peerHandle, gskBytes) {
   }
   const me = _getMyHandle();
   if (!me) throw new Error('not logged in');
+  // Vorherige Peer-GSK ins Archive (für Edit-Decrypt im 15min-Window).
+  try {
+    const prev = await getPeerGSK(groupId, peerHandle);
+    if (prev) _archivePush(_archiveKey('peer', groupId, peerHandle), prev);
+  } catch {}
   const sk = await _getGroupStorageKey(me, groupId, 'peer');
   const enc = await _encryptForStorage(sk, gskBytes);
   await idbSet(_peerGskKey(me, groupId, peerHandle), enc);
@@ -217,6 +343,7 @@ async function _listAllGroupKeys(groupId) {
  * Vollständiger Cleanup beim Verlassen einer Gruppe.
  */
 export async function deleteAllGSKsForGroup(groupId) {
+  clearGSKArchiveForGroup(groupId);
   await deleteMyGSK(groupId);
   const peerKeys = await _listAllGroupKeys(groupId);
   for (const k of peerKeys) {
@@ -473,28 +600,53 @@ export async function handleIncomingGSKMessage(msg) {
     const to = String(msg.to || '').toLowerCase();
     const payloads = Array.isArray(msg.payloads) ? msg.payloads : [];
 
-    if (!me || !groupId || !from || payloads.length === 0) return false;
+    if (!me || !groupId || !from || payloads.length === 0) {
+      console.warn(`🔑✗ gsk skip(precond): me=${!!me} groupId=${!!groupId} from=${from} payloads=${payloads.length}`);
+      return false;
+    }
     // Eigene gsk an OWN-Devices laufen über KV — nicht über chatSend-Broadcast.
-    if (from === me) return false;
+    if (from === me) {
+      // Nicht loggen — eigenes Echo, by design
+      return false;
+    }
     // Nur an mich adressierte gsks akzeptieren (Broadcast-Echo verwirft den Rest).
-    if (to && to !== me) return false;
+    if (to && to !== me) {
+      // Nicht loggen — Broadcast-Echo, by design (passiert für jeden anderen Member-Empfänger)
+      return false;
+    }
 
     // Mein device-payload herausfischen
     const myDeviceId = getDeviceId();
     const payload = payloads.find(p => p?.deviceId === myDeviceId);
-    if (!payload) return false;
+    if (!payload) {
+      const seen = payloads.map(p => p?.deviceId).filter(Boolean);
+      console.warn(`🔑✗ gsk skip(no_payload_for_device): me=${me} myDeviceId=${myDeviceId} payloads_for=[${seen.join(',')}] from=${from} group=${String(groupId).slice(0,8)}`);
+      return false;
+    }
 
     // Sender-JWK auflösen (für ECDH)
     const senderDeviceId = payload.fromDeviceId || msg.deviceId;
-    if (!senderDeviceId) return false;
+    if (!senderDeviceId) {
+      console.warn(`🔑✗ gsk skip(no_senderDeviceId): from=${from}`);
+      return false;
+    }
     let senderJwk = await findSenderDeviceJwk(from, senderDeviceId);
     if (!senderJwk) {
       const devs = await _fetchUserDevices(from);
       senderJwk = devs.find(d => d.deviceId === senderDeviceId)?.jwk || null;
     }
-    if (!senderJwk) return false;
+    if (!senderJwk) {
+      console.warn(`🔑✗ gsk skip(no_senderJwk): from=${from} senderDeviceId=${senderDeviceId}`);
+      return false;
+    }
 
-    const gsk = await _unwrapGskFromPayload(payload, senderJwk);
+    let gsk;
+    try {
+      gsk = await _unwrapGskFromPayload(payload, senderJwk);
+    } catch (e) {
+      console.warn(`🔑✗ gsk unwrap fail: from=${from} senderDeviceId=${senderDeviceId} err=${e?.message}`);
+      throw e;
+    }
     await setPeerGSK(groupId, from, gsk);
     return true;
   } catch (e) {

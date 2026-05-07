@@ -20,9 +20,11 @@ import {
   editEncryptedDm, decryptEditedMessage,
   invalidateDecryptCacheFor,
   sendEncryptedGroup, decryptIncomingGroupMessage,
+  editEncryptedGroup, decryptEditedGroupMessage,
 } from '../lib/chatPipeline.js';
 import { inboxStore } from './inbox.svelte.js';
 import { getCMKIfExists } from '../lib/cmk.js';
+import { isGuestHandle } from '../lib/guestNames.js';
 import {
   isPendingCmkReq, markPendingCmkReq, clearPendingCmkReq,
   isCmkUnavailable, markCmkUnavailable, clearCmkUnavailable, clearAllCmkState,
@@ -91,13 +93,15 @@ export const chatStore = {
     const trimmed = newText.trim();
     const m = _messages.find(x => x.id === msgId);
     if (!m || !m.isMe) return { ok: false, error: 'not_own' };
-    if (_selectedChat.type !== 'dm') {
-      // Group-Edit nicht im Plaintext-Pfad implementiert — Phase 1C
-      return { ok: false, error: 'group_edit_unsupported' };
-    }
     const myHandle = userStore.myUser;
-    const peer = _selectedChat.peer;
-    const result = await editEncryptedDm(myHandle, peer, m._raw || m, msgId, trimmed);
+    let result;
+    if (_selectedChat.type === 'group') {
+      // Original-Row mitgeben für Archive-Lookup (GSK-Rotation 15min-Window).
+      result = await editEncryptedGroup(myHandle, _selectedChat.key, msgId, trimmed, m._raw || m);
+    } else {
+      const peer = _selectedChat.peer;
+      result = await editEncryptedDm(myHandle, peer, m._raw || m, msgId, trimmed);
+    }
     if (result.ok) {
       _patchMessage(msgId, { text: trimmed, edited: true, editedAt: Date.now() });
     }
@@ -184,9 +188,29 @@ export const chatStore = {
     if (!m) return;
     invalidateDecryptCacheFor(id);
     const myHandle = userStore.myUser;
-    const peer = m.from === myHandle ? m.to : m.from;
     const original = m._raw || m;
-    const newText = await decryptEditedMessage(event, original, myHandle, peer);
+    // Group vs DM erkennen — robuster Fallback gegen Reload-Race:
+    //  1. event.groupId  — Backend setzt es jetzt explizit (chatRoutes.js editEvent)
+    //  2. event.convoId  — falls UUID-Format → Group
+    //  3. original.groupId / original.convo_id — falls bereits in _raw vorhanden
+    //  4. _selectedChat — letzter Fallback wenn Chat aktiv
+    // UUID-Pattern (RFC 4122 v4-ähnlich) statt String-Heuristiken.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const isUuid = (s) => typeof s === 'string' && UUID_RE.test(s);
+    const groupId =
+      (isUuid(event.groupId) && event.groupId) ||
+      (isUuid(event.convoId) && event.convoId) ||
+      (isUuid(original.groupId) && original.groupId) ||
+      (isUuid(original.convo_id) && original.convo_id) ||
+      (isUuid(original.convoId) && original.convoId) ||
+      (_selectedChat?.type === 'group' ? _selectedChat.key : null);
+    let newText;
+    if (groupId) {
+      newText = await decryptEditedGroupMessage(event, original, myHandle, groupId);
+    } else {
+      const peer = m.from === myHandle ? m.to : m.from;
+      newText = await decryptEditedMessage(event, original, myHandle, peer);
+    }
     if (typeof newText === 'string') {
       // _raw aktualisieren, damit ein nachträgliches _decryptOne (z.B. nach
       // Reload) den editierten Cipher inkl. neuer Sig sieht.
@@ -421,6 +445,25 @@ export const chatStore = {
     _invalidateGroupMembers(groupId);
   },
 
+  /**
+   * Wird gerufen wenn eine CMK frisch importiert wurde (z.B. nach erfolgreichem
+   * mirrorRotateCMKForPeer): Bestehende 🔐-Messages des aktuell sichtbaren Chats
+   * mit dieser CMK erneut decrypten. Ohne diesen Trigger blieben Messages, die
+   * vor der Rotation aber nach Ankunft der neuen CMK eingingen, dauerhaft 🔐.
+   *
+   * Idempotent: bei nicht-aktivem Chat oder fehlenden 🔐-Messages no-op.
+   * In-flight-Guard wird vorher gelöscht damit der Retry-Sweep nicht durch
+   * den 1.5s-Dedup-Throttle blockiert wird.
+   */
+  retryDecryptForPeer(peerHandle) {
+    if (!peerHandle) return;
+    if (_selectedChat?.type !== 'dm' || _selectedChat?.peer !== peerHandle) return;
+    const myHandle = userStore.myUser;
+    if (!myHandle) return;
+    _decryptAllInFlight.delete(peerHandle);
+    void _decryptAllE2E(peerHandle, myHandle);
+  },
+
   clear() {
     _selectedChat = null;
     _messages = [];
@@ -651,6 +694,29 @@ async function _kickCmkAcquisitionIfNeeded(peerHandle) {
   // cmk_req würde nichts ändern.
   const localCmk = await getCMKIfExists(peerHandle).catch(() => null);
   if (localCmk) return;
+
+  // Guest-Peer-Sonderfall: Gast hat per Fallback-Bootstrap eine CMK in KV
+  // hochgeladen (gewrappt für meine deviceId). cmk_req hilft nicht, weil der
+  // Gast sie selber nicht "redistribuieren" kann. Stattdessen direkt
+  // ensureSecureDmSession → fetcht aus KV + speichert lokal.
+  if (isGuestHandle(peerHandle)) {
+    console.warn(`🔍 Proaktiv KV-Fetch für Gast-Peer ${peerHandle} (statt cmk_req)`);
+    const myHandle = userStore.myUser;
+    if (myHandle) {
+      try {
+        const cmk = await ensureSecureDmSession(myHandle, peerHandle);
+        if (cmk) {
+          console.log(`✅ Gast-CMK aus KV importiert für ${peerHandle} — Decrypt-Retry kommt`);
+          // _decryptOne läuft eh in seinem Backoff-Loop weiter — der findet
+          // die jetzt lokal gespeicherte CMK beim nächsten Versuch.
+          return;
+        }
+      } catch (e) {
+        captureException(e, { context: 'kickCmkAcquisition-guest', peerHandle });
+      }
+    }
+    // Fallthrough zu cmk_req falls KV-Fetch fehlschlug (Best-Effort)
+  }
 
   console.warn(`📨 Proaktiv cmk_req → ${peerHandle} (Chat geöffnet, keine lokale CMK)`);
   markPendingCmkReq(peerHandle);

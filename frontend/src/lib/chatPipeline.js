@@ -29,7 +29,8 @@ import {
 import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
 import { signMessage, verifyMessageSig } from './messageSig.js';
 import {
-  ensureMyGSK, getOrRequestPeerGSK, importGskAesKey,
+  ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
+  findMyGSKAtTs, findPeerGSKAtTs,
 } from './groupCrypto.js';
 
 // LRU für SK-Bytes pro (sid, rotationIndex) — vermeidet Re-Derivation pro Message
@@ -257,6 +258,32 @@ export async function ensureSecureDmSession(myHandle, peerHandle) {
           clearPendingCmkReq(peerHandle);
           return cmk;
         }
+      }
+      // Guest-Peer-Spezial: Gäste können in „Local-Only-Fallback" landen.
+      // Legacy /chat hat ein 3s/8s/20s/60s Background-Retry das die CMK in KV
+      // hochlädt sobald unsere Inbox-Keys verfügbar sind. Wir warten geduldig
+      // statt Authority-Override (der zerstört die Chance auf Recovery, weil
+      // er KV mit unserer CMK überschreibt — Gast hat dann nirgendwo passenden
+      // Schlüssel mehr für seine alten Messages).
+      if (peerHandle.startsWith('guest_')) {
+        console.warn(`⏳ Guest-Peer ${peerHandle}: warte auf Local-Only-CMK-Upload (Background-Retry)`);
+        for (const delay of [3000, 5000, 10000, 15000]) {
+          await new Promise(r => setTimeout(r, delay));
+          if (isCmkUnavailable(peerHandle)) break;
+          cmk = await tryFetchAndUnwrapCMK(peerHandle);
+          if (cmk) {
+            console.log(`✅ Gast-CMK aus KV nach ${delay}ms erhalten`);
+            clearPendingCmkReq(peerHandle);
+            return cmk;
+          }
+        }
+        // Aufgeben — Gast hat nach insgesamt ~33s nicht uploaded.
+        // KEIN Authority-Override (würde existing-encrypted-Messages permanent
+        // unrecoverable machen). User sieht 🔓✗-Marker, aber neue Messages
+        // werden funktionieren sobald Gast endlich in KV uploaded.
+        console.warn(`⌛ Gast ${peerHandle} hat CMK noch nicht in KV — Messages bleiben 🔐 bis Gast uploaded`);
+        clearPendingCmkReq(peerHandle);
+        return null;
       }
       // Aufgeben — Peer ist offline oder cmk_req nicht zugestellt.
       // KEINE neue CMK erstellen → würde Divergenz schaffen.
@@ -747,6 +774,16 @@ export async function redistributeCMKToPeer(myHandle, peerHandle, newDeviceInfo 
   }
 }
 
+// ── Mirror-Rotate Idempotenz-Layer ─────────────────────
+// Schützt gegen:
+//   1. Doppelte WS-Events (Reconnect-Replay) → 2× mirrorRotate für gleichen peer
+//   2. Parallele self-revoke + peer-revoke Triggers
+//   3. Sequenzielle Re-Triggers innerhalb der KV-Propagations-Fensters
+// Ohne diesen Layer: ~32s erfolgloser Retry-Loop pro Duplikat (KV-Race-Backoff).
+const _mirrorRotateInFlight = new Map();   // peerHandle → Promise<result>
+const _mirrorRotateCooldown = new Map();   // peerHandle → ts
+const MIRROR_ROTATE_COOLDOWN_MS = 30_000;  // 30s nach success keine Re-Tries
+
 /**
  * Mirror-Rotation auf der Empfänger-Seite: wird gerufen wenn ein Peer ein eigenes
  * Device als kompromittiert markiert hat (`device_removed` mit `reason='user'`).
@@ -768,6 +805,33 @@ export async function redistributeCMKToPeer(myHandle, peerHandle, newDeviceInfo 
  * @returns {Promise<{ok: boolean, newFromIndex?: number, reason?: string}>}
  */
 export async function mirrorRotateCMKForPeer(myHandle, peerHandle) {
+  // ── Idempotenz-Guards ──────────────────────────────
+  // Cooldown: jüngst-erfolgreiche Rotation → schneller Skip statt 32s Retry-Loop
+  const lastSuccess = _mirrorRotateCooldown.get(peerHandle);
+  if (lastSuccess && (Date.now() - lastSuccess) < MIRROR_ROTATE_COOLDOWN_MS) {
+    return { ok: false, reason: 'cooldown_active' };
+  }
+  // In-flight: parallele Trigger teilen sich denselben Promise
+  const existing = _mirrorRotateInFlight.get(peerHandle);
+  if (existing) {
+    console.log(`🔁 mirrorRotateCMKForPeer(${peerHandle}): in-flight, await existing`);
+    return existing;
+  }
+
+  const work = (async () => _doMirrorRotate(myHandle, peerHandle))();
+  _mirrorRotateInFlight.set(peerHandle, work);
+  try {
+    const result = await work;
+    if (result?.ok) {
+      _mirrorRotateCooldown.set(peerHandle, Date.now());
+    }
+    return result;
+  } finally {
+    _mirrorRotateInFlight.delete(peerHandle);
+  }
+}
+
+async function _doMirrorRotate(myHandle, peerHandle) {
   try {
     const oldCmk = await getCMKIfExists(peerHandle);
     if (!oldCmk) {
@@ -1128,5 +1192,117 @@ export async function decryptIncomingGroupMessage(msg, myHandle, groupId) {
   } catch (e) {
     captureException(e, { context: 'decryptIncomingGroupMessage', groupId });
     return { text: null, verified: null };
+  }
+}
+
+/**
+ * Editiert eine eigene E2E-Group-Message.
+ *
+ * Wenn die GSK zwischen Original-Send und Edit-Zeit rotiert wurde (z.B. nach
+ * group_member_left), encryptet diese Funktion die Edit-Cipher mit der
+ * **Original-GSK** aus dem In-Memory-Archive (siehe groupCrypto.js). Damit
+ * können Empfänger, die ebenfalls noch die alte GSK im Archive haben, den
+ * Edit decrypten. Fallback wenn kein Archive-Eintrag mehr da ist: aktuelle GSK.
+ *
+ * @param {string} myHandle
+ * @param {string} groupId
+ * @param {string} msgId
+ * @param {string} newPlaintext
+ * @param {object} [originalMsg] - optional: enthält `ts` für Archive-Lookup
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+export async function editEncryptedGroup(myHandle, groupId, msgId, newPlaintext, originalMsg = null) {
+  try {
+    // Archive-Lookup zuerst: wenn die Original-GSK noch im Archive ist
+    // (Rotation seit Original-Send), nimm die — sonst current.
+    const originalTs = typeof originalMsg?.ts === 'number' ? originalMsg.ts : null;
+    let gskBytes = null;
+    if (originalTs !== null) {
+      gskBytes = findMyGSKAtTs(groupId, originalTs);
+    }
+    if (!gskBytes) gskBytes = await getMyGSK(groupId);
+    if (!gskBytes) return { ok: false, error: 'no_gsk' };
+
+    const gskKey = await importGskAesKey(gskBytes);
+    const sid = String(groupId);
+    const epoch = Math.floor(Date.now() / EPOCH_MS);
+
+    const { ivB64, ctB64 } = await e2eEncrypt(gskKey, newPlaintext);
+    const sig = await signMessage(ivB64, ctB64, sid, epoch);
+
+    const ciphertext = JSON.stringify({ iv: ivB64, ct: ctB64, sig, epoch });
+    const r = await apiFetch('/chat/message/edit', {
+      method: 'POST',
+      body: { id: msgId, ciphertext },
+    });
+    if (!r.ok) return { ok: false, error: r.error || 'edit_failed' };
+    _decryptCache.delete(msgId);
+    return { ok: true };
+  } catch (e) {
+    captureException(e, { context: 'editEncryptedGroup', groupId });
+    return { ok: false, error: e.message || 'unknown' };
+  }
+}
+
+/**
+ * Decrypted das ciphertext-Feld eines `message_edited`-Events einer Group-Message.
+ * Holt die GSK des Senders (eigene oder peer) und verifiziert die Sig.
+ *
+ * @param {object} event - WS-Event mit `ciphertext` (JSON-String)
+ * @param {object} originalMsg - Original-Message-Row (für sender, deviceId)
+ * @param {string} myHandle
+ * @param {string} groupId
+ * @returns {Promise<string|null>}
+ */
+export async function decryptEditedGroupMessage(event, originalMsg, myHandle, groupId) {
+  try {
+    let parsed;
+    try { parsed = JSON.parse(event.ciphertext || ''); } catch { return null; }
+    const ivB64 = parsed.iv;
+    const ctB64 = parsed.ct;
+    if (typeof ivB64 !== 'string' || typeof ctB64 !== 'string') return null;
+
+    const senderHandle = String(originalMsg.from || event.from || '').toLowerCase();
+    if (!senderHandle) return null;
+
+    const isOwn = senderHandle === String(myHandle).toLowerCase();
+    const originalTs = typeof originalMsg?.ts === 'number' ? originalMsg.ts : null;
+
+    // Try-Order:
+    //  1. aktuelle GSK des Senders (häufigster Fall)
+    //  2. archivierte GSK zum Original-Send-Zeitpunkt (wenn 1. fehlschlägt
+    //     UND wir wissen wann die Original-Message gesendet wurde — typisch
+    //     bei GSK-Rotation innerhalb des 15min-Edit-Windows).
+    const candidates = [];
+    if (isOwn) {
+      const cur = await getMyGSK(groupId);
+      if (cur) candidates.push(cur);
+      if (originalTs !== null) {
+        const archived = findMyGSKAtTs(groupId, originalTs);
+        if (archived) candidates.push(archived);
+      }
+    } else {
+      const cur = await getOrRequestPeerGSK(groupId, senderHandle);
+      if (cur) candidates.push(cur);
+      if (originalTs !== null) {
+        const archived = findPeerGSKAtTs(groupId, senderHandle, originalTs);
+        if (archived) candidates.push(archived);
+      }
+    }
+    if (candidates.length === 0) return null;
+
+    for (const gskBytes of candidates) {
+      try {
+        const gskKey = await importGskAesKey(gskBytes);
+        const plaintext = await e2eDecrypt(gskKey, ivB64, ctB64);
+        if (typeof plaintext === 'string') return plaintext;
+      } catch {
+        // Falsche GSK → nächste Kandidatin probieren
+      }
+    }
+    return null;
+  } catch (e) {
+    captureException(e, { context: 'decryptEditedGroupMessage', groupId });
+    return null;
   }
 }

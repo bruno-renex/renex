@@ -134,7 +134,7 @@
   </div>
 
   <div class="title">Privacy Policy</div>
-  <div class="subtitle">Effective from April 15, 2026</div>
+  <div class="subtitle">Effective from May 7, 2026</div>
   <div class="lang-switch"><a href="/datenschutz/">Deutsch</a></div>
 
   <div class="section-title">1. Data Controller</div>
@@ -166,6 +166,9 @@
       <li><strong>Passkey data:</strong> WebAuthn credentials are stored locally on your device. We only store the public key and a credential ID for authentication.</li>
       <li><strong>Messages:</strong> All messages are end-to-end encrypted (AES-256-GCM + X25519 ECDH). The server stores only encrypted data that cannot be read without the participants' private keys.</li>
       <li><strong>Metadata:</strong> To deliver messages, communication relationships (who communicates with whom) and timestamps are stored. This metadata is technically necessary for the operation of the service.</li>
+      <li><strong>Voice/video calls (WebRTC):</strong> Calls are established peer-to-peer. The server stores neither audio nor video content. For NAT traversal, Cloudflare STUN/TURN servers are contacted, during which IP addresses may be briefly visible. Call metadata (caller, recipient, time, duration) is stored locally on your device.</li>
+      <li><strong>Recovery bundle (encrypted backup):</strong> Optionally, an encrypted backup of your conversation keys can be stored with the provider (Cloudflare R2) so you can restore your chat history via recovery phrase after device loss. The phrase <em>never</em> leaves your device; the backup is client-side encrypted and unreadable for the provider.</li>
+      <li><strong>Push notifications (optional):</strong> If you enable notifications, a push subscription from your browser (endpoint + public key) is stored. Push payloads contain <em>no</em> message content, only a hint that a new message has arrived.</li>
       <li><strong>Technical data:</strong> IP address and user agent are temporarily processed in session data for the operation and security of the service. RENEX only logs technical metadata for stability and security, never message content or keys.</li>
     </ul>
   </div>
@@ -181,11 +184,18 @@
     </ul>
   </div>
 
-  <div class="section-title">6. Encryption</div>
+  <div class="section-title">6. Encryption &amp; Recovery</div>
   <div class="text">
     RENEX uses end-to-end encryption for all messages. Encryption keys are generated and stored
-    exclusively on users' devices. The operator has no access to the plaintext of messages at any
-    time. Users are responsible for creating backups of their private keys or messages.
+    exclusively on users' devices. The operator has no access to the plaintext of messages or to
+    private keys at any time.
+  </div>
+  <div class="text">
+    <strong>Recovery phrase:</strong> During initial setup, a 12-word phrase is generated on your
+    device and shown once. A master key is derived from this phrase (PBKDF2 + HKDF) and used to
+    encrypt a bundle of your conversation keys, which is stored with the provider (Cloudflare R2).
+    The phrase never leaves your device and cannot be reconstructed by the provider. If you lose
+    the phrase, recovering historical encrypted messages is technically impossible.
   </div>
 
   <div class="section-title">7. Data Retention and Deletion</div>
@@ -200,16 +210,22 @@
 
   <div class="section-title">8. Cookies and Local Storage</div>
   <div class="text">
-    RENEX does not use tracking cookies. Only technically necessary data is stored in the
-    browser's local storage (localStorage/sessionStorage), such as session data and encryption keys.
+    RENEX does not use tracking cookies. The following technically necessary storage takes place:
+    <ul>
+      <li><strong>Guest session cookie</strong> (<code>guest_session</code>): HttpOnly, Secure, SameSite=Strict, lifetime max. 24 hours. Set when you use an invite link as a guest; without this cookie no guest authentication is possible.</li>
+      <li><strong>localStorage / sessionStorage / IndexedDB:</strong> encryption keys (locally encrypted with a device-bound storage key), handle, language preference, conversation keys. Never leave your device.</li>
+    </ul>
   </div>
 
   <div class="section-title">9. Third-Party Services</div>
   <div class="text">
     <ul>
-      <li><strong>Cloudflare:</strong> RENEX is hosted via Cloudflare (CDN, Workers, D1, R2). Cloudflare may process technical data such as IP addresses according to their own privacy policy. Data may be processed on servers in the USA. Transfer is based on the EU Standard Contractual Clauses (SCCs) and the EU-US Data Privacy Framework.</li>
-      <li><strong>Cloudflare Turnstile:</strong> Used for bot detection on certain pages (e.g., login/registration, feedback, invitations). No personal data is shared with third parties.</li>
-      <li><strong>GIF Search (Tenor / Google):</strong> We use the Tenor API (Google LLC, USA) for the GIF search feature. Search queries are anonymized through our servers — Tenor does not see your IP address or handle. Google processes search queries according to their privacy policy. Legal basis: Art. 6(1)(f) GDPR (legitimate interest). Third-country transfer is based on the EU-US Data Privacy Framework.</li>
+      <li><strong>Cloudflare:</strong> RENEX is provided via Cloudflare, Inc. (101 Townsend Street, San Francisco, CA 94107, USA) (CDN, Workers, D1, R2, Pages). Cloudflare processes technical data such as IP addresses, connection metadata, and stored payload data as a data processor on our behalf. A Data Processing Addendum under Art. 28 GDPR is in place. Data may be processed on servers in the USA; transfer is based on the EU Standard Contractual Clauses (SCCs), the EU-U.S. Data Privacy Framework, the UK Extension, and the <strong>Swiss-U.S. Data Privacy Framework</strong>, under which Cloudflare is certified. More info: <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">Cloudflare Privacy Policy</a>.</li>
+      <li><strong>Cloudflare Turnstile:</strong> Used for bot detection on certain pages (e.g., login/registration, feedback, invitations). Turnstile deliberately avoids tracking cookies and does not collect personal data for advertising purposes. Legal basis and third-country transfer as for "Cloudflare".</li>
+      <li><strong>GIF Search (GIPHY):</strong> For the GIF search feature we use the GIPHY API (Giphy, Inc., 350 Fifth Ave, FL 20, New York, NY 10118, USA). Search queries are anonymized through our servers — GIPHY does not see your IP address or handle. However, when displaying GIF previews and when sending a GIF, the image is loaded directly from the GIPHY CDN (media.giphy.com); your IP address, device information, and possibly cookies are processed by GIPHY in this process. GIPHY is an independent controller in this respect under GDPR. Legal basis: Art. 6(1)(f) GDPR (legitimate interest in a functional messenger experience). Third-country transfer to the USA is based on the EU-U.S. Data Privacy Framework, the UK Extension, and the Swiss-U.S. Data Privacy Framework, under which GIPHY is certified. More info: <a href="https://support.giphy.com/hc/en-us/articles/360032872931" target="_blank" rel="noopener noreferrer">GIPHY Privacy Policy</a>.</li>
+      <li><strong>Cloudflare STUN/TURN (voice/video calls):</strong> For voice and video calls, NAT-traversal servers from Cloudflare are contacted (<code>stun.cloudflare.com</code> and possibly TURN relay). IP addresses and connection data are transmitted to Cloudflare in this process. Call content (audio/video) remains peer-to-peer and is end-to-end encrypted. Legal basis and third-country transfer as for "Cloudflare".</li>
+      <li><strong>Sentry (error telemetry):</strong> Crash and error reports are sent to Sentry (Functional Software, Inc., 132 Hawthorne Street, San Francisco, CA 94107, USA). Before transmission, RENEX automatically removes all known sensitive data (recovery phrases, private keys, master keys, message content, byte buffers). Only stack traces, browser version, and error context are transmitted. Legal basis: Art. 6(1)(f) GDPR (legitimate interest in error analysis and stability). Third-country transfer USA: EU/UK/Swiss-U.S. Data Privacy Framework. Sentry is certified under the DPF.</li>
+      <li><strong>Web Push (optional):</strong> If you enable browser notifications, a push subscription from your browser is transmitted to our server. The actual delivery runs through the push service infrastructure of your browser vendor (Mozilla, Google FCM, Apple APNS), which processes IP address and endpoint. Push payloads contain <em>no</em> message content. Legal basis: Art. 6(1)(a) GDPR (consent). You can disable notifications at any time in your browser settings or in the app.</li>
     </ul>
   </div>
 
@@ -235,9 +251,12 @@
 
   <div class="section-title">12. International Data Transfer</div>
   <div class="text">
-    Data may be transferred to the USA in connection with the third-party services mentioned
-    in section 9. This transfer is secured by the EU Standard Contractual Clauses (SCCs) and/or
-    the EU-US Data Privacy Framework.
+    Data may be transferred to the USA in connection with the third-party services mentioned in
+    section 9. This transfer is secured by the EU Standard Contractual Clauses (SCCs) and/or the
+    EU-U.S. Data Privacy Framework, the UK Extension, and the <strong>Swiss-U.S. Data Privacy
+    Framework</strong>, under which the third-party providers used are certified. For users in
+    Switzerland, the Swiss Data Protection Act (DSG) additionally applies; the Swiss-U.S. DPF
+    ensures that data transfers to the USA meet the requirements of the DSG.
   </div>
 
   <div class="section-title">13. Your Rights</div>

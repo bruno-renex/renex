@@ -59,6 +59,8 @@ import {
   deriveGroupMessageKey,
   // Bundle-Sync helpers
   collectMyGSKs, restoreMyGSKsFromBundle,
+  // Auto-Rotate-Threshold (NIST SP 800-38D §8.3)
+  ENCRYPT_ROTATE_THRESHOLD,
 } from '../frontend/src/lib/groupCrypto.js';
 
 // ======================================================
@@ -911,5 +913,21 @@ describe('deriveGroupMessageKey', () => {
     await expect(
       crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k2, ct)
     ).rejects.toThrow();
+  });
+});
+
+// ======================================================
+// Auto-Rotate Threshold Constant (NIST SP 800-38D §8.3)
+// ======================================================
+describe('ENCRYPT_ROTATE_THRESHOLD', () => {
+  it('is exactly 2^32 (NIST-empfohlen für AES-GCM)', () => {
+    expect(ENCRYPT_ROTATE_THRESHOLD).toBe(2 ** 32);
+    expect(ENCRYPT_ROTATE_THRESHOLD).toBe(4_294_967_296);
+  });
+
+  it('is exported as a number (not bigint, JS-Number-safe)', () => {
+    expect(typeof ENCRYPT_ROTATE_THRESHOLD).toBe('number');
+    expect(Number.isInteger(ENCRYPT_ROTATE_THRESHOLD)).toBe(true);
+    expect(Number.isSafeInteger(ENCRYPT_ROTATE_THRESHOLD)).toBe(true);
   });
 });

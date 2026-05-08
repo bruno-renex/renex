@@ -19,6 +19,7 @@ import {
   storePeerDevices, findSenderDeviceJwk, getSigPubForDevice,
   wrapCMKForInboxDevices, unwrapCMKFromPeer,
   createAndStoreCMK,
+  incrementCmkEncryptCounter, rotateCMKForPeer,
 } from './cmk.js';
 import {
   EPOCH_MS, dmSessionId,
@@ -32,6 +33,7 @@ import {
   ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
   findMyGSKAtTs, findPeerGSKAtTs,
   nextGroupChainIndex, deriveGroupMessageKey,
+  rotateMyGSK, ENCRYPT_ROTATE_THRESHOLD,
 } from './groupCrypto.js';
 
 // LRU für SK-Bytes pro (sid, rotationIndex) — vermeidet Re-Derivation pro Message
@@ -554,6 +556,19 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo =
     const r = await apiFetch('/chat/send', { method: 'POST', body });
 
     if (!r.ok) return { ok: false, error: r.error || 'send_failed' };
+
+    // Auto-Rotate-Threshold (NIST SP 800-38D §8.3): per-CMK Encrypt-Counter
+    // tracken. Bei Reach prophylaktisch CMK rotieren — fire-and-forget,
+    // blockt den Send nicht. Counter wird in rotateCMKForPeer reset auf 0.
+    void incrementCmkEncryptCounter(peerHandle).then(count => {
+      if (count >= ENCRYPT_ROTATE_THRESHOLD) {
+        console.warn(`⚠️ CMK auto-rotate: threshold ${ENCRYPT_ROTATE_THRESHOLD} reached for peer ${peerHandle}`);
+        return rotateCMKForPeer(myHandle, peerHandle).catch(e =>
+          captureException(e, { context: 'auto-rotate-cmk', peerHandle })
+        );
+      }
+    }).catch(() => {});
+
     return { ok: true, message: r.data?.message };
   } catch (e) {
     captureException(e, { context: 'sendEncryptedDm', peerHandle });
@@ -1062,6 +1077,18 @@ export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plain
     // probiert HKDF zuerst (chainIndex-Pfad), fallback Direct-GSK.
     const chainIndex = await nextGroupChainIndex(groupId);
     const mk = await deriveGroupMessageKey(gskBytes, groupId, myHandle, chainIndex);
+
+    // Auto-Rotate-Threshold (NIST SP 800-38D §8.3): wenn die GSK >=
+    // ENCRYPT_ROTATE_THRESHOLD mal verwendet wurde, prophylaktisch eine
+    // neue GSK generieren + an alle Members verteilen. Fire-and-forget,
+    // blockt den aktuellen Send nicht — der nächste Send nutzt dann die
+    // neue GSK (chainIndex resettet auf 0 via setMyGSK).
+    if (chainIndex >= ENCRYPT_ROTATE_THRESHOLD) {
+      console.warn(`⚠️ GSK auto-rotate: threshold ${ENCRYPT_ROTATE_THRESHOLD} reached for group ${groupId}`);
+      void rotateMyGSK(groupId, memberHandles).catch(e =>
+        captureException(e, { context: 'auto-rotate-gsk', groupId })
+      );
+    }
 
     const epoch = Math.floor(Date.now() / EPOCH_MS);
     const sid = String(groupId);

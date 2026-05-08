@@ -340,6 +340,57 @@ export async function deleteCMK(peerHandle) {
   await idbDelete(cmkIdbKey(peerHandle));
 }
 
+// ======================================================
+// DM Encrypt-Counter (Auto-Rotate-Threshold)
+// ------------------------------------------------------
+// Pro CMK ein monoton wachsender Counter, der bei jedem
+// E2E-Encrypt im DM-Pfad inkrementiert wird. Wenn er den
+// Threshold erreicht, soll ein Caller eine prophylaktische
+// CMK-Rotation triggern.
+//
+// Reset auf 0 nach erfolgreicher Rotation (am Ende von
+// rotateCMKForPeer) — der neue CMK beginnt frisch.
+//
+// IDB-Key: `cmk-counter:<peer-lowercase>`. Per-User-Skoping
+// nicht nötig, weil der Browser-Tab eh per User-Login isoliert
+// ist (sessionStore.check) und CMKs ebenfalls.
+// ======================================================
+const CMK_COUNTER_PREFIX = 'cmk-counter:';
+
+function _cmkCounterKey(peerHandle) {
+  return `${CMK_COUNTER_PREFIX}${String(peerHandle || '').toLowerCase()}`;
+}
+
+/**
+ * Inkrementiert den Encrypt-Counter für die DM-CMK eines Peers
+ * und gibt den neuen Wert zurück. Caller (z.B. sendEncryptedDm)
+ * vergleicht mit ENCRYPT_ROTATE_THRESHOLD aus groupCrypto.js und
+ * triggert ggf. rotateCMKForPeer.
+ *
+ * @param {string} peerHandle
+ * @returns {Promise<number>} neuer Counter-Wert (>= 1)
+ */
+export async function incrementCmkEncryptCounter(peerHandle) {
+  if (!peerHandle) return 0;
+  const k = _cmkCounterKey(peerHandle);
+  const current = (await idbGet(k)) ?? 0;
+  const next = (typeof current === 'number' && current >= 0 ? current : 0) + 1;
+  await idbSet(k, next);
+  return next;
+}
+
+/** Liest den aktuellen Counter ohne Increment (Tests/Debug). */
+export async function peekCmkEncryptCounter(peerHandle) {
+  if (!peerHandle) return 0;
+  return (await idbGet(_cmkCounterKey(peerHandle))) ?? 0;
+}
+
+/** Setzt den Counter auf 0 (nach Rotation). */
+export async function resetCmkEncryptCounter(peerHandle) {
+  if (!peerHandle) return;
+  await idbSet(_cmkCounterKey(peerHandle), 0);
+}
+
 /**
  * Rotiert das CMK für eine DM (Forward Secrecy bei Device-Compromise).
  *
@@ -400,6 +451,9 @@ export async function rotateCMKForPeer(myHandle, peerHandle) {
 
   // 6. Active CMK ersetzen (importAndStoreCMKFromPeer triggert auch bundle-sync)
   await importAndStoreCMKFromPeer(peerHandle, newCmk);
+
+  // 7. Encrypt-Counter reset — neuer CMK beginnt frisch (Auto-Rotate-Reset)
+  await resetCmkEncryptCounter(peerHandle);
 
   console.log(`🔁 CMK rotiert für ${peerHandle}: fromIndex=${newFromIndex}`);
   return { ok: true, newCmk, newFromIndex };

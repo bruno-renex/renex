@@ -296,6 +296,18 @@ export async function createMyGSK(groupId) {
 }
 
 // ======================================================
+// Auto-Rotate Threshold (NIST SP 800-38D)
+// ------------------------------------------------------
+// AES-GCM-Birthday-Bound: 2^48 IV-Collision-Wahrscheinlichkeit pro Key.
+// NIST empfiehlt prophylaktische Rotation VOR 2^32 Encryptions, damit die
+// Collision-Wahrscheinlichkeit unter ~2^-65 bleibt — astronomisch sicher.
+// Bei realistischen Volumes (selbst extreme Power-User: ~10^7 sends/Jahr)
+// wird der Threshold nie erreicht, aber der Mechanismus ist da als
+// Defense-in-Depth gegen langfristige Key-Reuse.
+// ======================================================
+export const ENCRYPT_ROTATE_THRESHOLD = 2 ** 32;
+
+// ======================================================
 // GSK Chain-Index (Forward-Secrecy)
 // ------------------------------------------------------
 // Pro (groupId, myHandle) zählt ein monoton-wachsender Counter, der bei

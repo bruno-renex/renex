@@ -25,6 +25,9 @@ import {
   getSigPubForDevice,
   wrapCMKForInboxDevices,
   unwrapCMKFromPeer,
+  incrementCmkEncryptCounter,
+  peekCmkEncryptCounter,
+  resetCmkEncryptCounter,
 } from '../frontend/src/lib/cmk.js';
 
 // ── Test-Setup: my_user setzen + ECDH-Keypair in IDB ─
@@ -288,5 +291,56 @@ describe('CMK Wrap/Unwrap (ECDH)', () => {
       cmk
     );
     expect(payloads).toEqual([]);
+  });
+});
+
+// ======================================================
+// CMK Encrypt-Counter (Auto-Rotate-Threshold)
+// ======================================================
+// Pro CMK ein monoton wachsender Counter, der prophylaktische CMK-
+// Rotation triggert wenn er 2^32 erreicht (NIST SP 800-38D §8.3).
+// Reset bei rotateCMKForPeer (frischer CMK = Counter zurück auf 0).
+
+describe('CMK Encrypt-Counter', () => {
+  // Unique peers pro Test damit IDB-State zwischen Tests nicht leckt
+  // (fake-indexeddb-Reset zwischen Tests ist nicht garantiert atomar).
+
+  it('peekCmkEncryptCounter returns 0 when never used', async () => {
+    expect(await peekCmkEncryptCounter('cnt-fresh-1')).toBe(0);
+  });
+
+  it('incrementCmkEncryptCounter returns sequential values + persists', async () => {
+    const peer = 'cnt-seq-2';
+    expect(await incrementCmkEncryptCounter(peer)).toBe(1);
+    expect(await incrementCmkEncryptCounter(peer)).toBe(2);
+    expect(await incrementCmkEncryptCounter(peer)).toBe(3);
+    expect(await peekCmkEncryptCounter(peer)).toBe(3);
+  });
+
+  it('resetCmkEncryptCounter sets counter back to 0', async () => {
+    const peer = 'cnt-reset-3';
+    await incrementCmkEncryptCounter(peer);
+    await incrementCmkEncryptCounter(peer);
+    expect(await peekCmkEncryptCounter(peer)).toBe(2);
+    await resetCmkEncryptCounter(peer);
+    expect(await peekCmkEncryptCounter(peer)).toBe(0);
+  });
+
+  it('counter is per-peer-isolated (lowercase normalized)', async () => {
+    const peerA = 'cnt-iso-4a';
+    const peerB = 'cnt-iso-4b';
+    await incrementCmkEncryptCounter(peerA);
+    await incrementCmkEncryptCounter(peerA);
+    await incrementCmkEncryptCounter(peerB);
+    expect(await peekCmkEncryptCounter(peerA)).toBe(2);
+    expect(await peekCmkEncryptCounter(peerB)).toBe(1);
+    // Lowercase-Match: gleicher Peer in upper/lower case
+    expect(await peekCmkEncryptCounter(peerA.toUpperCase())).toBe(2);
+  });
+
+  it('handles missing peer gracefully', async () => {
+    expect(await incrementCmkEncryptCounter('')).toBe(0);
+    expect(await peekCmkEncryptCounter(null)).toBe(0);
+    await resetCmkEncryptCounter(undefined);  // No throw
   });
 });

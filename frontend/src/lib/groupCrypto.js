@@ -25,9 +25,10 @@ import { idbGet, idbSet, idbDelete, idbListKeys } from './idb.js';
 import { bytesToB64, b64ToBytes } from './bytes.js';
 import { apiFetch } from './api.js';
 import { captureException } from './sentry.js';
-import { loadPrivateKey, getDeviceId } from './e2eKeys.js';
+import { loadPrivateKey, getDeviceId, loadSigningPrivKey } from './e2eKeys.js';
 import {
   storePeerDevices, loadPeerDevicesIdb, findSenderDeviceJwk,
+  getSigPubForDevice,
 } from './cmk.js';
 
 // ======================================================
@@ -293,6 +294,97 @@ export async function createMyGSK(groupId) {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   await setMyGSK(groupId, bytes);
   return bytes;
+}
+
+// ======================================================
+// GSK Sender-Signature (Defense-in-Depth gegen from-Spoofing)
+// ------------------------------------------------------
+// Zusätzlich zur ECDH-Symmetrie (Sender-Pubkey aus Inbox-Cache) wird
+// die GSK-Distribution mit der ECDSA-Sig des Senders authentifiziert.
+// Schützt gegen ein hypothetisches Backend-Manipulation des `from`-Felds.
+//
+// Signed-String-Format:  `renex-gsk-v1|<groupId>|<ts>|<sha256(gsk)-hex>`
+// → bindet GSK-Hash an (groupId, timestamp). Wenn Backend GSK ersetzt,
+//   ändert sich der Hash → verify fail. Wenn Backend `from` ersetzt,
+//   ist die Sig nicht mit dem (anderen) sigPub verifizierbar → fail.
+// ======================================================
+
+async function _sha256Hex(bytes) {
+  const buf = await crypto.subtle.digest('SHA-256', bytes);
+  const arr = new Uint8Array(buf);
+  let out = '';
+  for (let i = 0; i < arr.length; i++) {
+    out += arr[i].toString(16).padStart(2, '0');
+  }
+  return out;
+}
+
+function _gskSigInput(groupId, gskHashHex, ts) {
+  return new TextEncoder().encode(`renex-gsk-v1|${groupId}|${ts}|${gskHashHex}`);
+}
+
+/**
+ * Signiert eine GSK-Distribution mit dem eigenen ECDSA-Sig-Privkey.
+ * @param {string} groupId
+ * @param {Uint8Array} gskBytes - 32-Byte Sender-GSK
+ * @param {number} ts - epoch ms
+ * @returns {Promise<string>} sigB64
+ */
+export async function signGskPayload(groupId, gskBytes, ts) {
+  if (!(gskBytes instanceof Uint8Array) || gskBytes.length !== 32) {
+    throw new Error('gskBytes must be 32 bytes');
+  }
+  const privKey = await loadSigningPrivKey();
+  if (!privKey) throw new Error('No signing key — initE2EKeys + uploadInboxKeyIfNeeded first');
+  const gskHash = await _sha256Hex(gskBytes);
+  const data = _gskSigInput(String(groupId), gskHash, Number(ts));
+  const sig = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    privKey,
+    data
+  );
+  return bytesToB64(new Uint8Array(sig));
+}
+
+/**
+ * Verifiziert die GSK-Sig gegen den Sender-Sig-Pubkey aus dem Peer-Cache.
+ * Returns false bei jedem Fehler — Caller (handleIncomingGSKMessage) muss
+ * dann entscheiden ob die GSK trotzdem akzeptiert wird (z.B. wenn sig
+ * fehlt = älterer Sender ohne Sig-Support, ECDH-Symmetrie schützt schon).
+ *
+ * @param {string} sigB64
+ * @param {object} sigPubJwk - aus getSigPubForDevice
+ * @param {string} groupId
+ * @param {Uint8Array} gskBytes - die UNWRAPPTE GSK (nach ECDH-Decrypt)
+ * @param {number} ts
+ * @returns {Promise<boolean>}
+ */
+export async function verifyGskPayload(sigB64, sigPubJwk, groupId, gskBytes, ts) {
+  try {
+    if (typeof sigB64 !== 'string' || !sigPubJwk) return false;
+    if (sigPubJwk.kty !== 'EC' || sigPubJwk.crv !== 'P-256') return false;
+    if (typeof sigPubJwk.x !== 'string' || typeof sigPubJwk.y !== 'string') return false;
+    if (sigPubJwk.d !== undefined) return false;
+    if (!(gskBytes instanceof Uint8Array) || gskBytes.length !== 32) return false;
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) return false;
+
+    const pubKey = await crypto.subtle.importKey(
+      'jwk', sigPubJwk,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false, ['verify']
+    );
+    const gskHash = await _sha256Hex(gskBytes);
+    const data = _gskSigInput(String(groupId), gskHash, ts);
+    const sigBytes = b64ToBytes(sigB64);
+    return await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      pubKey,
+      sigBytes,
+      data
+    );
+  } catch {
+    return false;
+  }
 }
 
 // ======================================================
@@ -635,6 +727,20 @@ export async function sendMyGSKToMember(groupId, gskBytes, peerHandle) {
     const devices = await _fetchUserDevices(peerHandle);
     if (devices.length === 0) return { ok: false, reason: 'no_devices' };
 
+    // GSK-Sig signed über (groupId, ts, sha256(gskBytes)) — Auth-Layer
+    // zusätzlich zur ECDH-Symmetrie. Empfänger verifiziert mit Sender-
+    // SigPub aus Peer-Cache. Defense-in-depth gegen from-Spoofing.
+    // Wenn Sig-Privkey fehlt (Edge-Case bei nicht-initialisiertem Device),
+    // weiter ohne Sig — Empfänger logged Warn und akzeptiert (ECDH-Schutz
+    // bleibt). Sig-Generation darf den GSK-Send NICHT blocken.
+    const gskSigTs = Date.now();
+    let gskSig = null;
+    try {
+      gskSig = await signGskPayload(groupId, gskBytes, gskSigTs);
+    } catch (e) {
+      console.warn('🔑 sendMyGSKToMember: signGskPayload failed (non-fatal):', e?.message);
+    }
+
     // KV-Limit chatSend: max 10 payloads/message. Bei grossen Multi-Device-
     // Konstellationen (theoretisch >10 Devices pro User) splitten.
     const CHUNK = 10;
@@ -644,19 +750,24 @@ export async function sendMyGSKToMember(groupId, gskBytes, peerHandle) {
       const payloads = await _wrapGskForDevices(slice, gskBytes);
       if (payloads.length === 0) continue;
 
-      const r = await apiFetch('/chat/send', {
-        method: 'POST',
-        body: {
-          to: peerHandle,
-          convoId: groupId,
-          type: 'gsk',
-          v: 1,
-          e2e: false,
-          payloads,
-          deviceId: getDeviceId(),
-          message: '__gsk__',
-        },
-      });
+      const body = {
+        to: peerHandle,
+        convoId: groupId,
+        type: 'gsk',
+        v: 1,
+        e2e: false,
+        payloads,
+        deviceId: getDeviceId(),
+        message: '__gsk__',
+      };
+      // Optional sig fields — Empfänger toleriert deren Fehlen für
+      // Backwards-Compat (alte Versionen ohne Sig-Support).
+      if (gskSig) {
+        body.gskSig = gskSig;
+        body.gskSigTs = gskSigTs;
+      }
+
+      const r = await apiFetch('/chat/send', { method: 'POST', body });
       if (r.ok) totalDelivered += payloads.length;
     }
     return { ok: totalDelivered > 0, distributed: totalDelivered };
@@ -813,6 +924,42 @@ export async function handleIncomingGSKMessage(msg) {
       console.warn(`🔑✗ gsk unwrap fail: from=${from} senderDeviceId=${senderDeviceId} err=${e?.message}`);
       throw e;
     }
+
+    // GSK-Sender-Sig verifizieren (Defense-in-Depth gegen from-Spoofing).
+    // Falls msg.gskSig fehlt: backwards-compat (alte Sender ohne Sig-Support),
+    // akzeptieren mit Warning. ECDH-Symmetrie schützt schon — verkehrter
+    // Sender-Pubkey hätte den unwrap nicht durchgelassen.
+    // Falls msg.gskSig vorhanden ABER fail: GSK droppen (Sig-Spoof-Versuch).
+    if (typeof msg.gskSig === 'string' && msg.gskSig.length > 0) {
+      const sigTs = typeof msg.gskSigTs === 'number' ? msg.gskSigTs : null;
+      if (sigTs === null) {
+        console.warn(`🔑✗ gsk sig verify skipped: gskSig vorhanden aber gskSigTs fehlt (from=${from})`);
+      } else {
+        let sigPub = await getSigPubForDevice(from, senderDeviceId);
+        if (!sigPub) {
+          // Cache-Miss → re-fetch peer-devices und nochmal probieren
+          try {
+            const devs = await _fetchUserDevices(from);
+            sigPub = devs.find(d => d.deviceId === senderDeviceId)?.sigPub || null;
+          } catch {}
+        }
+        if (sigPub) {
+          const ok = await verifyGskPayload(msg.gskSig, sigPub, groupId, gsk, sigTs);
+          if (!ok) {
+            console.error(
+              `🚨 GSK-Sig-Verify FAILED — from=${from} senderDeviceId=${senderDeviceId} ` +
+              `group=${String(groupId).slice(0, 8)} — GSK gedroppt (möglicher Spoof)`
+            );
+            return false;
+          }
+        } else {
+          // sigPub nicht im Cache UND nicht aus Inbox — toleriert (alte Sender,
+          // ECDH-Schutz greift). Im Production-Logging als Hinweis.
+          console.warn(`🔑 gsk sig present but sigPub unknown for from=${from}/${senderDeviceId} — accepting via ECDH-only`);
+        }
+      }
+    }
+
     await setPeerGSK(groupId, from, gsk);
     return true;
   } catch (e) {

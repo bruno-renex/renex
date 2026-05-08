@@ -61,6 +61,8 @@ import {
   collectMyGSKs, restoreMyGSKsFromBundle,
   // Auto-Rotate-Threshold (NIST SP 800-38D §8.3)
   ENCRYPT_ROTATE_THRESHOLD,
+  // Sender-Sig (Defense-in-Depth gegen from-Spoofing)
+  signGskPayload, verifyGskPayload,
 } from '../frontend/src/lib/groupCrypto.js';
 
 // ======================================================
@@ -929,5 +931,109 @@ describe('ENCRYPT_ROTATE_THRESHOLD', () => {
     expect(typeof ENCRYPT_ROTATE_THRESHOLD).toBe('number');
     expect(Number.isInteger(ENCRYPT_ROTATE_THRESHOLD)).toBe(true);
     expect(Number.isSafeInteger(ENCRYPT_ROTATE_THRESHOLD)).toBe(true);
+  });
+});
+
+// ======================================================
+// GSK Sender-Signature (Defense-in-Depth gegen from-Spoofing)
+// ======================================================
+// signGskPayload signiert (groupId, ts, sha256(gsk)) mit ECDSA-Sig-Privkey
+// des Senders. verifyGskPayload prüft mit Sender-SigPubkey aus Peer-Cache.
+// Schützt gegen Backend-Manipulation des `from`-Felds zusätzlich zur
+// ECDH-Symmetrie.
+
+describe('GSK Sender-Sig', () => {
+  /** Erzeugt ein ECDSA-P256-Keypair und installiert es in IDB unter dem
+   *  Format das loadSigningPrivKey() erwartet: { pub: jwk, priv: CryptoKey }.
+   *  Returnt das public-key-JWK für Verify-Tests. */
+  async function setupSigningKey() {
+    const pair = await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true, ['sign', 'verify']
+    );
+    const pubJwk = await crypto.subtle.exportKey('jwk', pair.publicKey);
+    // IDB_SIG_KEYPAIR = 'sig_keypair', Format { pub, priv } (siehe e2eKeys.js)
+    await idbSet('sig_keypair', { pub: pubJwk, priv: pair.privateKey });
+    return pubJwk;
+  }
+
+  beforeEach(async () => {
+    await resetIdb();
+    await setupUser('alice');
+  });
+
+  it('round-trip: sign + verify with correct sigPub returns true', async () => {
+    const sigPub = await setupSigningKey();
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const ts = Date.now();
+    const sig = await signGskPayload('group-x', gsk, ts);
+    expect(typeof sig).toBe('string');
+    expect(sig.length).toBeGreaterThan(0);
+    const ok = await verifyGskPayload(sig, sigPub, 'group-x', gsk, ts);
+    expect(ok).toBe(true);
+  });
+
+  it('verify FAILS with wrong sigPub (different keypair = spoofed sender)', async () => {
+    await setupSigningKey();
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const ts = Date.now();
+    const sig = await signGskPayload('group-x', gsk, ts);
+    // Anderer Pubkey als der zum Privkey passende
+    const otherPair = await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true, ['sign', 'verify']
+    );
+    const wrongPub = await crypto.subtle.exportKey('jwk', otherPair.publicKey);
+    expect(await verifyGskPayload(sig, wrongPub, 'group-x', gsk, ts)).toBe(false);
+  });
+
+  it('verify FAILS with manipulated GSK bytes (Backend-Tampering)', async () => {
+    const sigPub = await setupSigningKey();
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const ts = Date.now();
+    const sig = await signGskPayload('group-x', gsk, ts);
+    // Andere GSK in Verify
+    const otherGsk = crypto.getRandomValues(new Uint8Array(32));
+    expect(await verifyGskPayload(sig, sigPub, 'group-x', otherGsk, ts)).toBe(false);
+  });
+
+  it('verify FAILS with wrong groupId (cross-group replay-Schutz)', async () => {
+    const sigPub = await setupSigningKey();
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const ts = Date.now();
+    const sig = await signGskPayload('group-a', gsk, ts);
+    expect(await verifyGskPayload(sig, sigPub, 'group-b', gsk, ts)).toBe(false);
+  });
+
+  it('verify FAILS with wrong ts (timestamp-Replay-Schutz)', async () => {
+    const sigPub = await setupSigningKey();
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const ts = Date.now();
+    const sig = await signGskPayload('group-x', gsk, ts);
+    expect(await verifyGskPayload(sig, sigPub, 'group-x', gsk, ts + 1)).toBe(false);
+  });
+
+  it('verify defensively rejects malformed inputs', async () => {
+    const sigPub = await setupSigningKey();
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const ts = Date.now();
+    // null/undefined sig
+    expect(await verifyGskPayload(null, sigPub, 'g', gsk, ts)).toBe(false);
+    expect(await verifyGskPayload(undefined, sigPub, 'g', gsk, ts)).toBe(false);
+    // null sigPub
+    expect(await verifyGskPayload('zzzz', null, 'g', gsk, ts)).toBe(false);
+    // sigPub mit `d` (privkey-Leak)
+    const sigPubWithD = { ...sigPub, d: 'priv-leak' };
+    expect(await verifyGskPayload('zzzz', sigPubWithD, 'g', gsk, ts)).toBe(false);
+    // wrong gsk-length
+    expect(await verifyGskPayload('zzzz', sigPub, 'g', new Uint8Array(31), ts)).toBe(false);
+    // non-numeric ts
+    expect(await verifyGskPayload('zzzz', sigPub, 'g', gsk, 'invalid')).toBe(false);
+  });
+
+  it('signGskPayload throws on invalid GSK length', async () => {
+    await setupSigningKey();
+    await expect(signGskPayload('g', new Uint8Array(31), Date.now())).rejects.toThrow();
+    await expect(signGskPayload('g', new Uint8Array(33), Date.now())).rejects.toThrow();
   });
 });

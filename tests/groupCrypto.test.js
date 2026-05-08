@@ -54,6 +54,11 @@ import {
   getOrRequestPeerGSK, importGskAesKey,
   // Rotation-Archive (15min-Edit-Window)
   findMyGSKAtTs, findPeerGSKAtTs, clearGSKArchiveForGroup,
+  // Forward-Secrecy: chainIndex + per-Message HKDF MK
+  nextGroupChainIndex, peekGroupChainIndex, resetGroupChainIndex,
+  deriveGroupMessageKey,
+  // Bundle-Sync helpers
+  collectMyGSKs, restoreMyGSKsFromBundle,
 } from '../frontend/src/lib/groupCrypto.js';
 
 // ======================================================
@@ -778,5 +783,133 @@ describe('GSK Rotation Archive', () => {
     await setMyGSK(gid, v2);
     // Lookup mit ts NACH der letzten Rotation → kein Archiveintrag deckt das ab
     expect(findMyGSKAtTs(gid, Date.now() + 60_000)).toBe(null);
+  });
+});
+
+// ======================================================
+// GSK Chain-Index (Forward-Secrecy in Group-Send)
+// ======================================================
+// Pro (groupId, myHandle) Counter, der bei jedem Send inkrementiert wird.
+// Per-Message-MK = HKDF(GSK, info=`...:chainIndex`). Symmetrisch zu DM
+// (deriveMessageKey aus session.js) und cross-frontend-kompatibel mit
+// Vanilla-Encrypt-Pfad (groupSessionManager.js encryptGroupMessage).
+
+describe('GSK Chain-Index', () => {
+  beforeEach(async () => {
+    await resetIdb();
+    await setupUser('alice');
+    resetApiMock();
+  });
+
+  it('peekGroupChainIndex returns 0 when never used', async () => {
+    expect(await peekGroupChainIndex('group-fresh')).toBe(0);
+  });
+
+  it('nextGroupChainIndex returns current + persists current+1', async () => {
+    const gid = 'group-counter';
+    expect(await nextGroupChainIndex(gid)).toBe(0);
+    expect(await peekGroupChainIndex(gid)).toBe(1);
+    expect(await nextGroupChainIndex(gid)).toBe(1);
+    expect(await peekGroupChainIndex(gid)).toBe(2);
+    expect(await nextGroupChainIndex(gid)).toBe(2);
+  });
+
+  it('resetGroupChainIndex sets counter back to 0', async () => {
+    const gid = 'group-reset';
+    await nextGroupChainIndex(gid);
+    await nextGroupChainIndex(gid);
+    expect(await peekGroupChainIndex(gid)).toBe(2);
+    await resetGroupChainIndex(gid);
+    expect(await peekGroupChainIndex(gid)).toBe(0);
+  });
+
+  it('setMyGSK resets chainIndex automatically (rotation-on-rekey)', async () => {
+    const gid = 'group-rekey';
+    await nextGroupChainIndex(gid);
+    await nextGroupChainIndex(gid);
+    expect(await peekGroupChainIndex(gid)).toBe(2);
+    // Neue GSK setzen → chainIndex muss 0 sein
+    await setMyGSK(gid, crypto.getRandomValues(new Uint8Array(32)));
+    expect(await peekGroupChainIndex(gid)).toBe(0);
+  });
+
+  it('chain-indices isolated per group', async () => {
+    await nextGroupChainIndex('group-a');
+    await nextGroupChainIndex('group-a');
+    await nextGroupChainIndex('group-b');
+    expect(await peekGroupChainIndex('group-a')).toBe(2);
+    expect(await peekGroupChainIndex('group-b')).toBe(1);
+  });
+});
+
+// ======================================================
+// deriveGroupMessageKey: HKDF-Determinismus + Cross-Param-Isolation
+// ======================================================
+describe('deriveGroupMessageKey', () => {
+  it('produces identical MK for same (gsk, groupId, sender, chainIndex)', async () => {
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const k1 = await deriveGroupMessageKey(gsk, 'g', 'alice', 5);
+    const k2 = await deriveGroupMessageKey(gsk, 'g', 'alice', 5);
+    // CryptoKey-Objects können nicht direkt verglichen werden — encrypt+decrypt
+    // mit beiden bestätigt die Äquivalenz.
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const pt = new TextEncoder().encode('roundtrip');
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k1, pt);
+    const back = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k2, ct);
+    expect(new TextDecoder().decode(back)).toBe('roundtrip');
+  });
+
+  it('different chainIndex → different MK (per-Message Forward-Secrecy)', async () => {
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const k0 = await deriveGroupMessageKey(gsk, 'g', 'alice', 0);
+    const k1 = await deriveGroupMessageKey(gsk, 'g', 'alice', 1);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv }, k0, new TextEncoder().encode('msg0')
+    );
+    // k1 darf k0's ciphertext NICHT decrypten können
+    await expect(
+      crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k1, ct)
+    ).rejects.toThrow();
+  });
+
+  it('different sender → different MK (cross-sender isolation)', async () => {
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const kA = await deriveGroupMessageKey(gsk, 'g', 'alice', 0);
+    const kB = await deriveGroupMessageKey(gsk, 'g', 'bob', 0);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv }, kA, new TextEncoder().encode('from-alice')
+    );
+    await expect(
+      crypto.subtle.decrypt({ name: 'AES-GCM', iv }, kB, ct)
+    ).rejects.toThrow();
+  });
+
+  it('different groupId → different MK (cross-group isolation)', async () => {
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const k1 = await deriveGroupMessageKey(gsk, 'group-a', 'alice', 0);
+    const k2 = await deriveGroupMessageKey(gsk, 'group-b', 'alice', 0);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv }, k1, new TextEncoder().encode('a')
+    );
+    await expect(
+      crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k2, ct)
+    ).rejects.toThrow();
+  });
+
+  it('different GSK → different MK (sanity)', async () => {
+    const g1 = crypto.getRandomValues(new Uint8Array(32));
+    const g2 = crypto.getRandomValues(new Uint8Array(32));
+    const k1 = await deriveGroupMessageKey(g1, 'g', 'alice', 0);
+    const k2 = await deriveGroupMessageKey(g2, 'g', 'alice', 0);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv }, k1, new TextEncoder().encode('x')
+    );
+    await expect(
+      crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k2, ct)
+    ).rejects.toThrow();
   });
 });

@@ -5,7 +5,7 @@
 // jeder verschlüsselten Nachricht laufen. Wenn eine dieser Functions
 // kaputt geht, ist E2E-Verschlüsselung kompromittiert.
 // ======================================================
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 // Pure-Crypto-Functions aus dem Svelte-Frontend. Migration aus
 // renex-legacy abgeschlossen — die Original-Vanilla-Quelle wurde im
@@ -139,3 +139,77 @@ describe('e2eEncryptBytes', () => {
 });
 
 // generateFileKey tests entfernt — siehe Kommentar oben.
+
+// ── Test 5: AAD (Additional Authenticated Data) ─────────────
+// Defense-in-Depth: AAD bindet das Ciphertext an einen Domain-Kontext
+// (z.B. 'renex:dm:v1'). Wenn Sender und Empfänger nicht dieselbe AAD
+// verwenden, schlägt AES-GCM-Auth-Tag-Verify fehl.
+describe('AAD (Additional Authenticated Data)', () => {
+  let key;
+
+  beforeEach(async () => {
+    key = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+    );
+  });
+
+  it('round-trips with matching AAD', async () => {
+    const aad = 'renex:dm:v1';
+    const { ivB64, ctB64 } = await e2eEncrypt(key, 'hello with aad', aad);
+    const back = await e2eDecrypt(key, ivB64, ctB64, aad);
+    expect(back).toBe('hello with aad');
+  });
+
+  it('decrypt FAILS with mismatched AAD (wrong domain string)', async () => {
+    const { ivB64, ctB64 } = await e2eEncrypt(key, 'secret', 'renex:dm:v1');
+    await expect(
+      e2eDecrypt(key, ivB64, ctB64, 'renex:group:v1')
+    ).rejects.toThrow();
+  });
+
+  it('decrypt FAILS when AAD provided on decrypt but not on encrypt', async () => {
+    const { ivB64, ctB64 } = await e2eEncrypt(key, 'no-aad-msg');
+    await expect(
+      e2eDecrypt(key, ivB64, ctB64, 'renex:dm:v1')
+    ).rejects.toThrow();
+  });
+
+  it('decrypt FAILS when AAD provided on encrypt but not on decrypt', async () => {
+    const { ivB64, ctB64 } = await e2eEncrypt(key, 'has-aad', 'renex:dm:v1');
+    await expect(
+      e2eDecrypt(key, ivB64, ctB64)
+    ).rejects.toThrow();
+  });
+
+  it('round-trips when AAD is null on both sides (backward-compat)', async () => {
+    const { ivB64, ctB64 } = await e2eEncrypt(key, 'plain', null);
+    const back = await e2eDecrypt(key, ivB64, ctB64, null);
+    expect(back).toBe('plain');
+  });
+
+  it('accepts AAD as Uint8Array (binary domain marker)', async () => {
+    const aad = new Uint8Array([0xDE, 0xAD, 0xBE, 0xEF]);
+    const { ivB64, ctB64 } = await e2eEncrypt(key, 'binary-aad', aad);
+    const back = await e2eDecrypt(key, ivB64, ctB64, aad);
+    expect(back).toBe('binary-aad');
+  });
+
+  it('e2eEncryptBytes / e2eDecryptBytes round-trip with AAD', async () => {
+    const aad = 'renex:file:v1';
+    const original = new Uint8Array(64);
+    crypto.getRandomValues(original);
+    const { ivB64, ctBytes } = await e2eEncryptBytes(key, original, aad);
+    // Direct decrypt with crypto.subtle to verify AAD was set
+    const iv = new Uint8Array(b64ToAb(ivB64));
+    const back = await crypto.subtle.decrypt(
+      {
+        name: 'AES-GCM',
+        iv,
+        additionalData: new TextEncoder().encode(aad),
+      },
+      key,
+      ctBytes
+    );
+    expect(Array.from(new Uint8Array(back))).toEqual(Array.from(original));
+  });
+});

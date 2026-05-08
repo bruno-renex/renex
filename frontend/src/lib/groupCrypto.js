@@ -269,6 +269,13 @@ export async function setMyGSK(groupId, gskBytes) {
   const enc = await _encryptForStorage(sk, gskBytes);
   await idbSet(_myGskKey(me, groupId), enc);
 
+  // ChainIndex zurücksetzen — neue GSK = neue Sender-Key-Identität, also
+  // beginnt der Counter wieder bei 0. Ohne Reset würde der Empfänger nach
+  // einer Rotation falsche per-Message-MKs ableiten (chainIndex-Mismatch
+  // zwischen Sender (counter weiterläuft) und ableitbarem Counter aus
+  // GSK-Generation-Time).
+  try { await idbSet(_chainKey(me, groupId), 0); } catch {}
+
   // Bundle-Sync triggern — neue/rotierte GSK ins R2-Bundle pushen damit
   // Phrase-Recovery sie wiederherstellen kann. Debounced via scheduleBundleSync.
   // Dynamic-Import vermeidet circular import (cmkBundleSync importiert
@@ -286,6 +293,81 @@ export async function createMyGSK(groupId) {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   await setMyGSK(groupId, bytes);
   return bytes;
+}
+
+// ======================================================
+// GSK Chain-Index (Forward-Secrecy)
+// ------------------------------------------------------
+// Pro (groupId, myHandle) zählt ein monoton-wachsender Counter, der bei
+// jedem Send inkrementiert wird. Die Group-MK pro Message ist dann
+// HKDF(GSK, info=`renex-group:<groupId>:<sender>:<chainIndex>`).
+//
+// Damit hat jede Message einen eigenen MK — das gleiche Forward-Secrecy-
+// Pattern wie Vanilla (groupSessionManager.js encryptGroupMessage) und
+// symmetrisch zu DM (deriveMessageKey aus session.js).
+//
+// Reset auf 0 bei jeder neuen GSK (siehe setMyGSK), damit ein Empfänger
+// nach Rotation wieder bei 0 anfängt — wichtig für IV-Uniqueness-Garantie
+// (12-Byte IV pro Message zufällig, aber chainIndex bindet auch).
+// ======================================================
+function _chainKey(me, groupId) {
+  return `gsk-chain:${String(me).toLowerCase()}:${String(groupId).toLowerCase()}`;
+}
+
+/**
+ * Holt den nächsten chainIndex (current value) und persistiert
+ * `current + 1` für den Folge-Aufruf. Der returnte Wert wird in der
+ * aktuellen Message als rotationIndex mitgeschickt.
+ */
+export async function nextGroupChainIndex(groupId) {
+  const me = _getMyHandle();
+  if (!me) throw new Error('not logged in');
+  const k = _chainKey(me, groupId);
+  const current = (await idbGet(k)) ?? 0;
+  const next = (typeof current === 'number' && current >= 0) ? current : 0;
+  await idbSet(k, next + 1);
+  return next;
+}
+
+/** Liest den nächsten chainIndex ohne ihn zu inkrementieren (für Tests/Debug). */
+export async function peekGroupChainIndex(groupId) {
+  const me = _getMyHandle();
+  if (!me) return 0;
+  return (await idbGet(_chainKey(me, groupId))) ?? 0;
+}
+
+/** Setzt den chainIndex zurück auf 0 (bei neuer/rotierter GSK). */
+export async function resetGroupChainIndex(groupId) {
+  const me = _getMyHandle();
+  if (!me) return;
+  await idbSet(_chainKey(me, groupId), 0);
+}
+
+/**
+ * HKDF-derived per-Message-Key für Group-Sends (Forward-Secrecy).
+ * Cross-Frontend-kompatibel mit Vanilla — selber Salt, selbes info-Format.
+ *
+ * @param {Uint8Array} gskBytes - 32-Byte Sender-GSK
+ * @param {string} groupId
+ * @param {string} senderHandle
+ * @param {number} chainIndex
+ * @returns {Promise<CryptoKey>}
+ */
+export async function deriveGroupMessageKey(gskBytes, groupId, senderHandle, chainIndex) {
+  const salt = new TextEncoder().encode('renex:gmk:v1');
+  const info = new TextEncoder().encode(
+    `renex-group:${groupId}:${senderHandle}:${chainIndex}`
+  );
+  const baseKey = await crypto.subtle.importKey(
+    'raw', gskBytes, 'HKDF', false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt, info },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
 }
 
 /**

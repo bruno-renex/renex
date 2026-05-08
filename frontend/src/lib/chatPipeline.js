@@ -31,6 +31,7 @@ import { signMessage, verifyMessageSig } from './messageSig.js';
 import {
   ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
   findMyGSKAtTs, findPeerGSKAtTs,
+  nextGroupChainIndex, deriveGroupMessageKey,
 } from './groupCrypto.js';
 
 // LRU für SK-Bytes pro (sid, rotationIndex) — vermeidet Re-Derivation pro Message
@@ -1055,11 +1056,17 @@ export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plain
     const gskBytes = await ensureMyGSK(groupId, memberHandles);
     if (!gskBytes) return { ok: false, error: 'no_gsk' };
 
-    const gskKey = await importGskAesKey(gskBytes);
+    // Forward-Secrecy: per-Message-MK via HKDF(GSK, info=`...:chainIndex`).
+    // Symmetrisch zu DM (deriveMessageKey aus session.js) und cross-frontend-
+    // kompatibel mit Vanilla. Der Decrypt-Pfad in decryptIncomingGroupMessage
+    // probiert HKDF zuerst (chainIndex-Pfad), fallback Direct-GSK.
+    const chainIndex = await nextGroupChainIndex(groupId);
+    const mk = await deriveGroupMessageKey(gskBytes, groupId, myHandle, chainIndex);
+
     const epoch = Math.floor(Date.now() / EPOCH_MS);
     const sid = String(groupId);
 
-    const { ivB64, ctB64 } = await e2eEncrypt(gskKey, plaintext);
+    const { ivB64, ctB64 } = await e2eEncrypt(mk, plaintext);
     const sig = await signMessage(ivB64, ctB64, sid, epoch);
     const deviceId = getDeviceId();
 
@@ -1074,13 +1081,18 @@ export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plain
       ctB64,
       sig,
       deviceId,
+      // chainIndex landet im backend als rotation_index; decryptIncomingGroupMessage
+      // liest msg.rotationIndex / rotation_index für die HKDF-Ableitung.
+      rotationIndex: chainIndex,
     };
 
     if (replyTo && replyTo.id && typeof replyTo.text === 'string') {
       const previewText = replyTo.text.length > 200
         ? replyTo.text.slice(0, 200) + '…'
         : replyTo.text;
-      const enc = await e2eEncrypt(gskKey, previewText);
+      // Reply-Preview mit demselben per-Message-MK encrypten — der Empfänger
+      // hat den selben chainIndex und kann sowohl Body als auch Reply ableiten.
+      const enc = await e2eEncrypt(mk, previewText);
       body.replyToId = replyTo.id;
       body.replyFrom = replyTo.from;
       body.replyIv = enc.ivB64;
@@ -1279,17 +1291,22 @@ export async function editEncryptedGroup(myHandle, groupId, msgId, newPlaintext,
     if (!gskBytes) gskBytes = await getMyGSK(groupId);
     if (!gskBytes) return { ok: false, error: 'no_gsk' };
 
-    const gskKey = await importGskAesKey(gskBytes);
     const sid = String(groupId);
     const epoch = Math.floor(Date.now() / EPOCH_MS);
 
-    const { ivB64, ctB64 } = await e2eEncrypt(gskKey, newPlaintext);
+    // Forward-Secrecy: frischer chainIndex für die Edit-Cipher. Backend
+    // speichert den ciphertext-JSON inkl. rotationIndex (siehe rotIdx-
+    // Embedding in chatRoutes.js:374). Empfänger leitet gleichen MK ab.
+    const chainIndex = await nextGroupChainIndex(groupId);
+    const mk = await deriveGroupMessageKey(gskBytes, groupId, myHandle, chainIndex);
+
+    const { ivB64, ctB64 } = await e2eEncrypt(mk, newPlaintext);
     const sig = await signMessage(ivB64, ctB64, sid, epoch);
 
     const ciphertext = JSON.stringify({ iv: ivB64, ct: ctB64, sig, epoch });
     const r = await apiFetch('/chat/message/edit', {
       method: 'POST',
-      body: { id: msgId, ciphertext },
+      body: { id: msgId, ciphertext, rotationIndex: chainIndex },
     });
     if (!r.ok) return { ok: false, error: r.error || 'edit_failed' };
     _decryptCache.delete(msgId);

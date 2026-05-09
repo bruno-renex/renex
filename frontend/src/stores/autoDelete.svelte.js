@@ -14,6 +14,8 @@ import { apiFetch } from '../lib/api.js';
 import { userStore } from './user.svelte.js';
 import { captureException } from '../lib/sentry.js';
 import { chatToConvoId } from './notifications.svelte.js';
+import { chatStore } from './chat.svelte.js';
+import { i18nStore } from './i18n.svelte.js';
 
 // settings[convoId] = { days, status, proposedBy, originalDays, type: 'dm'|'group' }
 let _settings = $state({});
@@ -108,6 +110,15 @@ export const autoDeleteStore = {
             myRole: _settings[cid]?.myRole || 'member',
           },
         };
+        // Optimistische System-Bubble für den Setzenden — analog Group-Rename.
+        // Toast wird vom UI-Caller (ChatHeaderMenu) gepusht; hier KEIN Toast,
+        // sonst Doppel-Anzeige. WS-Echo skipt Self via msg.from !== me.
+        // Backend persistiert dieselbe Info als deutsche D1-Message für Reload.
+        const lng = i18nStore.lang;
+        const text = days
+          ? `${me} ${(lng.autoDeleteSetByPeer || 'hat Auto-Delete gesetzt:')} ${autoDeleteLabel(days, lng)}`
+          : `${me} ${(lng.autoDeleteDisabledByPeer || 'hat Auto-Delete deaktiviert.')}`;
+        chatStore.appendLocalSystemMessage(cid, text, Date.now());
       } else {
         _settings = {
           ..._settings,
@@ -138,15 +149,26 @@ export const autoDeleteStore = {
         body: { peer, action: 'accept' },
       });
       if (!r.ok) return { ok: false, error: r.error };
+      const newDays = r.data?.days || 0;
+      const newStatus = r.data?.status === 'active' ? 'active' : 'off';
+      const proposer = _settings[cid]?.proposedBy || peer;
       _settings = {
         ..._settings,
         [cid]: {
           ..._settings[cid],
-          status: r.data?.status === 'active' ? 'active' : 'off',
-          days: r.data?.days || 0,
+          status: newStatus,
+          days: newDays,
           originalDays: null,
         },
       };
+      // Optimistische System-Bubble: aus Konsens-Sicht hat der Vorschlagende
+      // (proposer) Auto-Delete „gesetzt"/„deaktiviert", egal wer akzeptiert hat.
+      // Konsistent zu autoDeleteRoutes.js (D1-Message-Text).
+      const lng = i18nStore.lang;
+      const text = newDays > 0
+        ? `${proposer} ${(lng.autoDeleteSetByPeer || 'hat Auto-Delete gesetzt:')} ${autoDeleteLabel(newDays, lng)}`
+        : `${proposer} ${(lng.autoDeleteDisabledByPeer || 'hat Auto-Delete deaktiviert.')}`;
+      chatStore.appendLocalSystemMessage(cid, text, Date.now());
       return { ok: true };
     } catch (e) {
       captureException(e, { context: 'autoDelete.accept' });

@@ -201,10 +201,8 @@ export async function handleE2eRoutes(request, env, path, params) {
           return json(request, { error: "Missing deviceId" }, 400);
         }
 
-        // Device-Limit gegen D1 prüfen (Spec §6)
-        // Pro-Tier: forward-compatible. Heute existiert kein tier-Field → immer free → MAX=5.
-        const isPro = session.tier === 'pro';
-        const MAX_DEVICES = isPro ? 10 : 5;
+        // Device-Limit: hart auf 5 — User verwaltet selbst unter Profil → Geräte.
+        const MAX_DEVICES = 5;
 
         const existingRows = await env.RENEX_DB.prepare(
           "SELECT device_id FROM devices WHERE user_handle = ? AND state IN ('active','syncing','new')"
@@ -217,7 +215,6 @@ export async function handleE2eRoutes(request, env, path, params) {
             error: "device_limit_reached",
             currentDevices: existingIds.length,
             maxDevices: MAX_DEVICES,
-            upgradeAvailable: !isPro
           }, 409);
         }
 

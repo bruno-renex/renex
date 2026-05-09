@@ -25,6 +25,7 @@
    * }}
    */
   import { profileCache } from '../stores/profileCache.svelte.js';
+  import AttachmentView from './AttachmentView.svelte';
 
   let { message, showSender = false, onReply = null, onEdit = null, onDelete = null, onReact = null, onJumpTo = null, myHandle = null } = $props();
 
@@ -264,7 +265,13 @@
       </div>
     {/if}
 
-    <div class="text">{message.text}</div>
+    {#if message.attachment}
+      <AttachmentView attachment={message.attachment} />
+    {/if}
+
+    {#if message.text}
+      <div class="text">{message.text}</div>
+    {/if}
 
     <div class="meta">
       <span class="time">{timeStr}</span>

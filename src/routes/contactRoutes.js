@@ -388,6 +388,18 @@ export async function handleContactRoutes(request, env, path, params) {
           ).bind(me, contact, contact, me).run();
         }
 
+        // Live-Push an entfernten Peer → seine Inbox aktualisiert sofort,
+        // ohne dass er die Seite reloaden muss. Konsistent mit reject/cancel.
+        // `action: "removed"` erlaubt dem Frontend, einen spezifischen Toast
+        // zu zeigen und den ggf. offenen Chat zu schließen.
+        await pushToUserDO(env, contact, {
+          id:     crypto.randomUUID(),
+          type:   "contact_update",
+          action: "removed",
+          from:   me,
+          ts:     now,
+        }).catch(() => {});
+
         await bumpContactsVersion(env, me, contact);
         return json(request, { status: "removed", contact });
       }

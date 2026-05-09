@@ -185,8 +185,19 @@
         method: 'POST',
         body: { groupId: chat.key, name: trimmed },
       });
-      if (r.ok) toastStore.push(lang.groupRenamed || 'Gruppe umbenannt', { kind: 'success' });
-      else toastStore.push(r.error || lang.groupRenameFailed || 'Umbenennen fehlgeschlagen', { kind: 'error' });
+      if (r.ok) {
+        // Optimistisches lokales Update — WS-Echo (group_renamed) ist idempotent.
+        inboxStore.renameGroup(chat.key, trimmed);
+        chatStore.renameSelectedIfMatch(chat.key, trimmed);
+        chatStore.appendLocalSystemMessage(
+          chat.key,
+          `${me} hat die Gruppe in "${trimmed}" umbenannt`,
+          Date.now()
+        );
+        toastStore.push(lang.groupRenamed || 'Gruppe umbenannt', { kind: 'success' });
+      } else {
+        toastStore.push(r.error || lang.groupRenameFailed || 'Umbenennen fehlgeschlagen', { kind: 'error' });
+      }
     } finally { busy = false; }
   }
 

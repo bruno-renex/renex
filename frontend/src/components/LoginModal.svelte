@@ -10,6 +10,9 @@
   import { captureException } from '../lib/sentry.js';
   import { renderTurnstile, preloadTurnstileScript } from '../lib/turnstile.js';
   import { isGuestConvertPending, performGuestConvert, clearPendingGuestConvert } from '../lib/guestConvert.js';
+  import LandingFeatures from './LandingFeatures.svelte';
+  import LandingFooter from './LandingFooter.svelte';
+  import LandingParticles from './LandingParticles.svelte';
 
   // Recovery-Login wird im Parent (App.svelte) gerendert, damit das Modal
   // nach Passkey-Auth nicht unmountet (LoginModal selbst verschwindet sobald myUser gesetzt).
@@ -147,6 +150,8 @@
 </script>
 
 <div class="login-modal" role="dialog" aria-labelledby="login-title">
+  <div class="hero-section">
+    <LandingParticles />
   <div class="login-card">
     <div class="logo-wrap">
       <div class="logo" id="login-title">RENE<span class="x">X</span></div>
@@ -234,6 +239,11 @@
       {/each}
     </div>
   </div>
+  </div>
+
+  <!-- Marketing-Sections (scrollen unter dem Hero) -->
+  <LandingFeatures />
+  <LandingFooter />
 </div>
 
 
@@ -243,11 +253,32 @@
     inset: 0;
     background: var(--bg-body);
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    z-index: 1000;
+    /* Safe-area-aware: oben nicht hinter Notch, unten nicht hinter Home-Indicator. */
+    padding: max(20px, var(--safe-top)) max(20px, var(--safe-right)) max(20px, var(--safe-bottom)) max(20px, var(--safe-left));
+    overflow-y: auto;
+  }
+
+  /* Hero-Section: Login-Card zentriert im 1. Viewport. Marketing scrollt drunter.
+     position: relative für Particles-Canvas (absolute drin). */
+  .hero-section {
+    position: relative;
+    min-height: 100vh;
+    min-height: 100dvh;
+    /* Safe-Area + 40px (modal padding top+bottom) abziehen — Card bleibt vertikal zentriert */
+    min-height: calc(100dvh - max(20px, var(--safe-top)) - max(20px, var(--safe-bottom)));
+    display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
-    padding: 20px;
-    overflow-y: auto;
+    width: 100%;
+  }
+
+  /* Login-Card über dem Particles-Canvas (z-index: 0). */
+  .hero-section :global(.login-card) {
+    position: relative;
+    z-index: 1;
   }
 
   .login-card {

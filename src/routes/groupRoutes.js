@@ -633,19 +633,30 @@ export async function handleGroupRoutes(request, env, path, params) {
           return `${d} days`;
         };
 
+        // Deutsch-Label für persistente System-Message (D1, beim Reload sichtbar).
+        // Live-Bubble macht das Frontend selbst i18n-übersetzt.
+        const autoDeleteLabelDe = (d) => {
+          if (d === 1)  return "24h";
+          if (d === 7)  return "7 Tage";
+          if (d === 30) return "30 Tage";
+          return `${d} Tage`;
+        };
+
         if (!days) {
           // Deaktivieren
           await env.RENEX_DB.prepare(
             "DELETE FROM auto_delete_settings WHERE convo_id = ?"
           ).bind(groupId).run();
-          // System-Message
+          // System-Message (deutsch, konsistent mit group_renamed)
           await env.RENEX_DB.prepare(
             `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
              VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
           ).bind(crypto.randomUUID(), groupId, me, now,
-            `${me} disabled Auto-Delete`).run();
-          const ctrl = { id: crypto.randomUUID(), type: "auto_delete_set", action: "cancel", groupId, ts: now };
-          await pushToGroupMembers(env, env.RENEX_DB, groupId, me, ctrl);
+            `${me} hat Auto-Delete deaktiviert`).run();
+          // Push an ALLE Members (senderHandle=null → kein Self-Skip; Frontend
+          // skipt Self via msg.from !== me + optimistisches Update beim Sender).
+          const ctrl = { id: crypto.randomUUID(), type: "auto_delete_set", action: "cancel", groupId, from: me, ts: now };
+          await pushToGroupMembers(env, env.RENEX_DB, groupId, null, ctrl);
           return json(request, { ok: true, status: "off" });
         }
 
@@ -656,15 +667,15 @@ export async function handleGroupRoutes(request, env, path, params) {
            VALUES (?, ?, ?, 'active', ?)
            ON CONFLICT(convo_id) DO UPDATE SET days = excluded.days, proposed_by = excluded.proposed_by, status = 'active', updated_at = excluded.updated_at`
         ).bind(groupId, Number(days), me, now).run();
-        // System-Message
+        // System-Message (deutsch)
         await env.RENEX_DB.prepare(
           `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
            VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
         ).bind(crypto.randomUUID(), groupId, me, now,
-          `${me} set Auto-Delete to ${autoDeleteLabel(Number(days))}`).run();
+          `${me} hat Auto-Delete gesetzt: ${autoDeleteLabelDe(Number(days))}`).run();
 
-        const ctrl = { id: crypto.randomUUID(), type: "auto_delete_set", action: "accept", days: Number(days), groupId, ts: now };
-        await pushToGroupMembers(env, env.RENEX_DB, groupId, me, ctrl);
+        const ctrl = { id: crypto.randomUUID(), type: "auto_delete_set", action: "accept", days: Number(days), groupId, from: me, ts: now };
+        await pushToGroupMembers(env, env.RENEX_DB, groupId, null, ctrl);
         return json(request, { ok: true, status: "active", days: Number(days) });
       }
 

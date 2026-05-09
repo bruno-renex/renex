@@ -1,6 +1,6 @@
 <!--
   DeviceLimitModal — zeigt sich wenn /e2e/inbox/upload mit 409 device_limit_reached
-  antwortet (User hat 5 Free / 10 Pro Devices erreicht).
+  antwortet (User hat 5 Devices erreicht).
 
   Erklärt dem User dass er ein altes Device entfernen muss bevor das aktuelle
   registriert werden kann. Verweist auf Profil → Geräte für die Verwaltung.
@@ -8,7 +8,7 @@
 <script>
   import { i18nStore } from '../stores/i18n.svelte.js';
 
-  /** @type {{ info: { currentDevices: number, maxDevices: number, upgradeAvailable: boolean } | null }} */
+  /** @type {{ info: { currentDevices: number, maxDevices: number } | null }} */
   let { info = $bindable(null) } = $props();
 
   let lang = $derived(i18nStore.lang);
@@ -48,12 +48,6 @@
           .replace("{current}", info.currentDevices)
           .replace("{max}", info.maxDevices)}
       </p>
-
-      {#if info.upgradeAvailable}
-        <p class="dl-upgrade-hint">
-          {(lang.deviceLimitUpgradeHint || "Tipp: Mit RENEX Pro kannst du bis zu 10 Geräte verbinden.")}
-        </p>
-      {/if}
 
       <div class="dl-buttons">
         <button class="btn btn-primary" onclick={close}>
@@ -105,15 +99,6 @@
     color: var(--text-secondary);
     line-height: 1.55;
     margin: 0 0 12px;
-  }
-
-  .dl-upgrade-hint {
-    font-size: 12px;
-    color: var(--accent-voice);
-    background: var(--accent-voice-dim);
-    border-radius: 8px;
-    padding: 8px 12px;
-    margin: 0 0 16px;
   }
 
   .dl-buttons {

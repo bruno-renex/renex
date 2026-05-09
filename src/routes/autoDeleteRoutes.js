@@ -67,6 +67,15 @@ export async function handleAutoDeleteRoutes(request, env, path, params) {
           return json(request, { ok: true, status: "pending", days: Number(days) });
         }
 
+        // Deutsch-Label für persistente D1-System-Messages.
+        // (Live-Bubble macht das Frontend i18n-übersetzt — hier nur Reload-Fallback.)
+        const autoDeleteLabelDe = (d) => {
+          if (d === 1)  return "24h";
+          if (d === 7)  return "7 Tage";
+          if (d === 30) return "30 Tage";
+          return `${d} Tage`;
+        };
+
         if (action === "accept") {
           const row = await env.RENEX_DB.prepare(
             "SELECT * FROM auto_delete_settings WHERE convo_id = ?"
@@ -85,8 +94,22 @@ export async function handleAutoDeleteRoutes(request, env, path, params) {
             ).bind(now, convoId).run();
           }
 
-          // Control-Message an Peer
-          const ctrl = { id: crypto.randomUUID(), from: me, to: peer, type: "auto_delete_set", action: "accept", days: row.days, ts: now };
+          // Persistente System-Message in D1 (analog zu Group). proposed_by ist
+          // der "Aktor" der diese Änderung effektiv ausgelöst hat — er hat
+          // vorgeschlagen, ich habe akzeptiert. Daher Sicht aus Empfänger-Perspektive:
+          // "<proposer> hat Auto-Delete gesetzt: …" — beide Seiten sehen denselben Text.
+          const proposer = row.proposed_by || peer;
+          const sysText = (row.days && row.days > 0)
+            ? `${proposer} hat Auto-Delete gesetzt: ${autoDeleteLabelDe(Number(row.days))}`
+            : `${proposer} hat Auto-Delete deaktiviert`;
+          await env.RENEX_DB.prepare(
+            `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+             VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+          ).bind(crypto.randomUUID(), convoId, proposer, now, sysText).run();
+
+          // Control-Message an Peer. proposed_by mitgeben, damit der Empfänger
+          // die System-Bubble mit konsistentem Namen rendert (gleich wie D1-Message).
+          const ctrl = { id: crypto.randomUUID(), from: me, to: peer, type: "auto_delete_set", action: "accept", days: row.days, proposed_by: proposer, ts: now };
           await pushToUserDO(env, peer, ctrl);
           return json(request, { ok: true, status: row.days ? "active" : "off", days: row.days });
         }
@@ -96,6 +119,7 @@ export async function handleAutoDeleteRoutes(request, env, path, params) {
             "SELECT * FROM auto_delete_settings WHERE convo_id = ?"
           ).bind(convoId).first();
           const originalDays = row?.original_days ?? null;
+          const wasActive = row?.status === "active";
 
           if (originalDays) {
             // Ursprüngliches aktives Setting wiederherstellen
@@ -106,6 +130,18 @@ export async function handleAutoDeleteRoutes(request, env, path, params) {
             await env.RENEX_DB.prepare(
               "DELETE FROM auto_delete_settings WHERE convo_id = ?"
             ).bind(convoId).run();
+          }
+
+          // Persistente D1-System-Message NUR wenn `cancel` ein aktives Setting
+          // deaktiviert (status === 'active'). Bei `decline` (Vorschlag abgelehnt)
+          // oder `cancel` eines `pending`-Vorschlags: KEIN INSERT — das bleibt
+          // ephemerer Konsens-State, kein "wirksamer" Zustandswechsel.
+          if (action === "cancel" && wasActive && !originalDays) {
+            await env.RENEX_DB.prepare(
+              `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+               VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+            ).bind(crypto.randomUUID(), convoId, me, now,
+              `${me} hat Auto-Delete deaktiviert`).run();
           }
 
           // Control-Message an Peer (mit original_days für Client-Restore)

@@ -77,7 +77,9 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 14px 0 12px;
+    /* Top: safe-area-inset für Notch. Bottom: home-indicator-Inset.
+       padding-left wächst in Landscape (iPhone Notch links). */
+    padding: max(14px, var(--safe-top)) 0 max(12px, var(--safe-bottom)) var(--safe-left);
     border-right: 1px solid var(--border-panel);
     background: var(--bg-panel);
     gap: 2px;

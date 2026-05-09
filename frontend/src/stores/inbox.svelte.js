@@ -17,6 +17,13 @@ import { profileCache } from './profileCache.svelte.js';
 
 const SECTIONS = ["chats", "groups", "voice"];
 
+// Sortiert eine Liste {lastSeen?:number, ...} stabil nach lastSeen DESC.
+// Items ohne lastSeen (Kontakte ohne Chat-Historie) landen unten.
+// Tie-Breaker: Insert-Reihenfolge (stabil seit ES2019).
+function _byLastSeenDesc(arr) {
+  return [...arr].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+}
+
 // Defensiv: Server-Daten dürfen niemals doppelte Keys liefern. Behalte den ersten Treffer.
 function _dedupBy(arr, key) {
   const seen = new Set();
@@ -65,11 +72,16 @@ export const inboxStore = {
   setSearchChats(q) { _searchChats = q || ""; },
   setSearchGroups(q) { _searchGroups = q || ""; },
 
-  // Filter-Logik (Search anwenden)
+  // Filter-Logik (Search anwenden) + Sort nach letzter Aktivität (DESC).
+  // Backend liefert beim initialen Load schon sortiert (ORDER BY last_ts DESC),
+  // aber bumpActivity() macht im laufenden Betrieb nur In-Place-Updates ohne
+  // Re-Sort. Daher hier im Getter sortieren — reaktiv via $derived. O(n log n)
+  // bei <500 Kontakten irrelevant.
   get filteredContacts() {
-    if (!_searchChats) return _contacts;
+    const sorted = _byLastSeenDesc(_contacts);
+    if (!_searchChats) return sorted;
     const q = _searchChats.toLowerCase();
-    return _contacts.filter(c => {
+    return sorted.filter(c => {
       const handle = (c.handle || "").toLowerCase();
       // displayName aus profileCache ziehen (falls schon gefetcht) — sonst nur Handle-Match.
       const dn = (profileCache.get(c.handle) || "").toLowerCase();
@@ -78,9 +90,10 @@ export const inboxStore = {
   },
 
   get filteredGroups() {
-    if (!_searchGroups) return _groups;
+    const sorted = _byLastSeenDesc(_groups);
+    if (!_searchGroups) return sorted;
     const q = _searchGroups.toLowerCase();
-    return _groups.filter(g => (g.name || "").toLowerCase().includes(q));
+    return sorted.filter(g => (g.name || "").toLowerCase().includes(q));
   },
 
   unreadFor(key) {
@@ -184,6 +197,9 @@ export const inboxStore = {
             id: g.id,
             name: g.name || "Unnamed",
             memberCount: g.member_count || 0,
+            // Sort-Key für filteredGroups. Fallback auf created_at, damit
+            // brand-neue Gruppen ohne Messages nicht ans Ende rutschen.
+            lastSeen: g.last_ts || g.created_at || null,
           })),
           "id"
         );
@@ -224,6 +240,17 @@ export const inboxStore = {
       next[gIdx] = { ...next[gIdx], lastSeen: ts, lastMessage: preview };
       _groups = next;
     }
+  },
+
+  /** Setzt den Namen einer Gruppe lokal um (idempotent). */
+  renameGroup(groupId, newName) {
+    if (!groupId || !newName) return;
+    const idx = _groups.findIndex(g => g.id === groupId);
+    if (idx < 0) return;
+    if (_groups[idx].name === newName) return;
+    const next = _groups.slice();
+    next[idx] = { ...next[idx], name: newName };
+    _groups = next;
   },
 
   /** Setzt den Unread-Counter für einen Chat auf 0 (lokal). */

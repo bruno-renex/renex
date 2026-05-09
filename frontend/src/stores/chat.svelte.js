@@ -25,6 +25,7 @@ import {
 import { inboxStore } from './inbox.svelte.js';
 import { getCMKIfExists } from '../lib/cmk.js';
 import { isGuestHandle } from '../lib/guestNames.js';
+import { unwrapAttachmentPlaintext } from '../lib/attachmentCrypto.js';
 import {
   isPendingCmkReq, markPendingCmkReq, clearPendingCmkReq,
   isCmkUnavailable, markCmkUnavailable, clearCmkUnavailable, clearAllCmkState,
@@ -325,18 +326,21 @@ export const chatStore = {
    * DM: E2E-Encrypt via lib/chatPipeline.js (CMK + Session + Sig).
    * Group: Plaintext (Group-E2E folgt in Phase 1C).
    */
-  async sendMessage(text) {
-    if (!_selectedChat || !text.trim()) return;
+  async sendMessage(text, opts = {}) {
+    const attachment = opts?.attachment || null;
+    if (!_selectedChat) return;
+    // Mit Attachment darf Text leer sein; ohne Attachment muss Text da sein.
+    if (!attachment && !text.trim()) return;
 
     const myHandle = userStore.myUser || "me";
-    const trimmed = text.trim();
+    const trimmed = (text || "").trim();
     const tempId = crypto.randomUUID();
 
     // Snapshot + clear: weitere Sends sollen NICHT auf der gleichen Reply hängen.
     const replyTo = _replyingTo;
     _replyingTo = null;
 
-    // Optimistic UI
+    // Optimistic UI — Attachment-Meta direkt anzeigen (Photo-Vorschau ohne Round-Trip).
     const optimisticMsg = {
       id: tempId,
       from: myHandle,
@@ -346,6 +350,19 @@ export const chatStore = {
       isMe: true,
       _isOptimistic: true,
       replyTo: replyTo ? { id: replyTo.id, from: replyTo.from, text: replyTo.text } : undefined,
+      attachment: attachment ? {
+        type:       attachment.type,
+        key:        attachment.r2Key,
+        fileKey:    attachment.fileKey,
+        iv:         attachment.iv,
+        fileName:   attachment.fileName,
+        mimeType:   attachment.mimeType,
+        fileSize:   attachment.fileSize,
+        // GIF-Felder (kein R2, direkt vom GIPHY-CDN)
+        gifUrl:     attachment.gifUrl,
+        gifPreview: attachment.gifPreview,
+        gifId:      attachment.gifId,
+      } : undefined,
     };
     _messages = [..._messages, optimisticMsg];
     _draftText = "";
@@ -358,7 +375,7 @@ export const chatStore = {
       let r;
       if (!isGroup) {
         // DM → E2E-encrypted send
-        const result = await sendEncryptedDm(myHandle, peer, trimmed, replyTo);
+        const result = await sendEncryptedDm(myHandle, peer, trimmed, replyTo, attachment);
         r = result.ok
           ? { ok: true, data: { message: result.message } }
           : { ok: false, error: result.error };
@@ -370,7 +387,7 @@ export const chatStore = {
         if (!memberHandles) {
           memberHandles = await _loadGroupMembers(groupId);
         }
-        const result = await sendEncryptedGroup(myHandle, groupId, memberHandles, trimmed, replyTo);
+        const result = await sendEncryptedGroup(myHandle, groupId, memberHandles, trimmed, replyTo, attachment);
         r = result.ok
           ? { ok: true, data: { message: result.message } }
           : { ok: false, error: result.error };
@@ -492,6 +509,18 @@ export const chatStore = {
    * @param {string} text - Plaintext der System-Message
    * @param {number} [ts] - epoch ms (Default: now)
    */
+  /**
+   * Aktualisiert den Namen des aktiven Chats, falls er der angegebenen
+   * Gruppe entspricht. No-op sonst. Triggert reaktiven Re-Render des
+   * ChatHeaders über $derived(chatStore.selectedChat).
+   */
+  renameSelectedIfMatch(groupId, newName) {
+    if (!groupId || !newName) return;
+    if (_selectedChat?.type !== 'group' || _selectedChat?.key !== groupId) return;
+    if (_selectedChat.name === newName) return;
+    _selectedChat = { ..._selectedChat, name: newName };
+  },
+
   appendLocalSystemMessage(convoId, text, ts) {
     if (!_selectedChat || !convoId || !text) return;
     const myKey = _selectedChat.type === 'group'
@@ -646,7 +675,21 @@ async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
       if (!result._cached) {
         console.log(`🔓 decrypt OK id=${rawMsg.id?.slice(0,8)} from=${rawMsg.from}`);
       }
-      const patch = { text, verified };
+      // Attachment-Envelope auspacken: Magic-Prefix → Caption + AttachmentMeta.
+      const { caption, attachmentMeta } = unwrapAttachmentPlaintext(text);
+      const patch = { text: caption, verified };
+      if (attachmentMeta) {
+        // Attachment-Meta mit den (Plaintext-)attachment_key/_type vom Server mergen.
+        patch.attachment = {
+          type:     attachmentMeta.type     || rawMsg.attachment_type     || rawMsg.attachmentType,
+          key:      attachmentMeta.r2Key    || rawMsg.attachment_key      || rawMsg.attachmentKey,
+          fileKey:  attachmentMeta.fileKey,
+          iv:       attachmentMeta.iv,
+          fileName: attachmentMeta.fileName,
+          mimeType: attachmentMeta.mimeType,
+          fileSize: attachmentMeta.fileSize,
+        };
+      }
       // Reply-Preview-Text patchen, wenn die Message eine Reply ist und der Decrypt geklappt hat.
       // _normalizeMessage hat replyTo bereits mit Placeholder "🔐" angelegt — text dort patchen.
       // WICHTIG: id mit-rüberretten, sonst verliert der Empfänger den Jump-to-Original-Klick
@@ -807,7 +850,24 @@ async function _decryptOneGroup(rawMsg, myHandle, groupId, attempt = 0) {
       if (!result._cached) {
         console.log(`🔓 group decrypt OK id=${rawMsg.id?.slice(0,8)} from=${rawMsg.from}`);
       }
-      const patch = { text, verified };
+      // Attachment-Envelope auspacken (analog DM-Pfad).
+      const { caption, attachmentMeta } = unwrapAttachmentPlaintext(text);
+      const patch = { text: caption, verified };
+      if (attachmentMeta) {
+        patch.attachment = {
+          type:       attachmentMeta.type     || rawMsg.attachment_type     || rawMsg.attachmentType,
+          key:        attachmentMeta.r2Key    || rawMsg.attachment_key      || rawMsg.attachmentKey,
+          fileKey:    attachmentMeta.fileKey,
+          iv:         attachmentMeta.iv,
+          fileName:   attachmentMeta.fileName,
+          mimeType:   attachmentMeta.mimeType,
+          fileSize:   attachmentMeta.fileSize,
+          // GIF-Felder (kein R2, direkt vom GIPHY-CDN)
+          gifUrl:     attachmentMeta.gifUrl,
+          gifPreview: attachmentMeta.gifPreview,
+          gifId:      attachmentMeta.gifId,
+        };
+      }
       const replyToId = rawMsg.replyToId || rawMsg.reply_to_id;
       if (replyToId && typeof replyText === 'string') {
         const replyFrom = rawMsg.replyFrom || rawMsg.reply_from;

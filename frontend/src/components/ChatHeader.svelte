@@ -10,6 +10,21 @@
   import { presenceStore } from '../stores/presence.svelte.js';
   import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
   import ChatHeaderMenu from './ChatHeaderMenu.svelte';
+  import GroupMembersModal from './GroupMembersModal.svelte';
+
+  // Group-Mitglieder-Modal — wird durch Klick auf den Info-Bereich des Headers
+  // (Gruppenname / Mitglieder-Count) geöffnet. Nur für type='group'.
+  let membersModalOpen = $state(false);
+  function openMembersModal() {
+    if (chat?.type === 'group') membersModalOpen = true;
+  }
+  function onInfoKey(e) {
+    if (chat?.type !== 'group') return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openMembersModal();
+    }
+  }
 
   let lang = $derived(i18nStore.lang);
   let chat = $derived(chatStore.selectedChat);
@@ -100,19 +115,34 @@
       {/if}
     </div>
 
-    <div class="info">
-      <div class="name">{headerName}</div>
-      <div class="status">
-        {#if chat.type === 'group'}
+    {#if chat.type === 'group'}
+      <button
+        type="button"
+        class="info info-clickable"
+        onclick={openMembersModal}
+        onkeydown={onInfoKey}
+        title={lang.groupMembersShow || 'Mitglieder anzeigen'}
+        aria-label={lang.groupMembersShow || 'Show members'}
+      >
+        <div class="name">{headerName}</div>
+        <div class="status">
           {chat.memberCount || 0} {lang.members || "Mitglieder"}
-        {:else if isPeerOnline}
-          <span class="online-dot"></span>
-          {lang.online || "Online"}
-        {:else}
-          {lang.offline || "Offline"}
-        {/if}
+          <span class="info-chevron" aria-hidden="true">›</span>
+        </div>
+      </button>
+    {:else}
+      <div class="info">
+        <div class="name">{headerName}</div>
+        <div class="status">
+          {#if isPeerOnline}
+            <span class="online-dot"></span>
+            {lang.online || "Online"}
+          {:else}
+            {lang.offline || "Offline"}
+          {/if}
+        </div>
       </div>
-    </div>
+    {/if}
 
     <div class="actions">
       {#if chat.type === 'dm'}
@@ -131,6 +161,14 @@
       <ChatHeaderMenu {chat} />
     </div>
   </header>
+
+  {#if chat.type === 'group'}
+    <GroupMembersModal
+      bind:isOpen={membersModalOpen}
+      groupId={chat.key}
+      groupName={chat.name}
+    />
+  {/if}
 {/if}
 
 <style>
@@ -138,7 +176,9 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 12px 16px;
+    /* iOS Notch / Dynamic Island: padding-top auf max(default, safe-area).
+       padding-left/right wachsen in Landscape mit dem seitlichen Inset. */
+    padding: max(12px, var(--safe-top)) max(16px, var(--safe-right)) 12px max(16px, var(--safe-left));
     border-bottom: 1px solid var(--border-subtle);
     background: var(--bg-panel);
     flex-shrink: 0;
@@ -187,6 +227,34 @@
     flex: 1;
     min-width: 0;
   }
+
+  /* Klickbare Variante (nur Gruppen) — sieht wie ein Text aus, aber mit Hover-Hint */
+  .info-clickable {
+    background: none;
+    border: none;
+    padding: 4px 8px;
+    margin: -4px -8px;   /* visuell-bündig zum Text-Layout */
+    border-radius: 8px;
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    transition: background 0.15s;
+  }
+  .info-clickable:hover { background: var(--bg-panel-alt); }
+  .info-clickable:focus-visible {
+    outline: 2px solid var(--accent-voice);
+    outline-offset: 2px;
+  }
+  .info-chevron {
+    margin-left: 4px;
+    color: var(--text-muted);
+    font-weight: 700;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .info-clickable:hover .info-chevron,
+  .info-clickable:focus-visible .info-chevron { opacity: 1; }
 
   .name {
     font-size: 14px;

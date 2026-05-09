@@ -21,6 +21,7 @@
   import PasskeysModal from './PasskeysModal.svelte';
   import SettingsDevicesPanel from './SettingsDevicesPanel.svelte';
   import DebugOverlay from './DebugOverlay.svelte';
+  import { isStandalone, requestInstallPrompt } from '../lib/pwaInstall.js';
 
   let lang = $derived(i18nStore.lang);
 
@@ -34,6 +35,14 @@
 
   let isOpen = $state(false);
   let openSubmenu = $state(null); // 'account' | 'lang' | 'legal' | null
+
+  // PWA-Install: Menu-Item nur zeigen wenn nicht bereits standalone
+  let canInstall = $derived(!isStandalone());
+
+  function handleInstallApp() {
+    isOpen = false;
+    requestInstallPrompt();
+  }
 
   // Initials aus Handle (oder Display-Name falls vorhanden)
   let initials = $derived.by(() => {
@@ -249,6 +258,12 @@
       <a href="/feedback/" target="_blank" rel="noopener" class="dropdown-item link">
         💬 {lang.footerFeedback || "Feedback"}
       </a>
+
+      {#if canInstall}
+        <button type="button" class="dropdown-item" onclick={handleInstallApp}>
+          📲 {lang.pwaInstallMenuItem || "Als App installieren"}
+        </button>
+      {/if}
 
       <div class="divider"></div>
 

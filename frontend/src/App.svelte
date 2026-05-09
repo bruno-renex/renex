@@ -49,7 +49,9 @@
   import RecoveryVerifyModal from './components/RecoveryVerifyModal.svelte';
   import RecoveryLoginModal from './components/RecoveryLoginModal.svelte';
   import DeviceLimitModal from './components/DeviceLimitModal.svelte';
+  import PwaInstallBanner from './components/PwaInstallBanner.svelte';
   import ToastContainer from './components/ToastContainer.svelte';
+  import { bumpLoginCount } from './lib/pwaInstall.js';
   import { toastStore } from './stores/toast.svelte.js';
   import { startVersionPolling } from './lib/versionCheck.js';
 
@@ -115,6 +117,9 @@
   });
 
   async function _bootstrapApp() {
+    // Engagement-Counter für PWA-Smart-Banner (rein localStorage, kein Server-Touch).
+    try { bumpLoginCount(); } catch {}
+
     // Guest-Convert PRIO-1: muss VOR Initial-Data-Load laufen, sonst lädt
     // loadContacts() für den frisch-registrierten User eine LEERE Liste
     // (Backend hat Migration noch nicht durchgeführt). Convert-API blockiert
@@ -376,9 +381,37 @@
       })
     );
 
+    // Group-Rename: Inbox-Liste + aktiver ChatHeader live updaten.
+    // Backend pusht an alle Members inkl. Renamender (senderHandle=null in
+    // pushToGroupMembers) — daher idempotent zum optimistischen Update in
+    // ChatHeaderMenu.onRename. System-Bubble nur für ANDERE Members lokal
+    // einfügen (Renamender hat sie bereits durch optimistischen Pfad).
+    _wsUnsubs.push(
+      ws.on("group_renamed", (msg) => {
+        console.log("👥 group_renamed", msg);
+        if (!msg.groupId || !msg.newName) return;
+        inboxStore.renameGroup(msg.groupId, msg.newName);
+        chatStore.renameSelectedIfMatch(msg.groupId, msg.newName);
+        const meHandle = userStore.myUser;
+        if (msg.renamedBy && msg.renamedBy !== meHandle) {
+          chatStore.appendLocalSystemMessage(
+            msg.groupId,
+            `${msg.renamedBy} hat die Gruppe in "${msg.newName}" umbenannt`,
+            msg.ts
+          );
+        }
+      })
+    );
+
     // Auto-Delete: propose/accept/decline/cancel — Peer/Group-Mitglied hat Setting
     // geändert. Lokalen Store updaten + bei DM-Proposal Toast zeigen damit der User
     // weiß dass jetzt eine Akzeptier-Aktion im 3-Punkte-Menü ansteht.
+    //
+    // System-Bubbles werden lokal eingefügt für sofortiges Feedback. Backend
+    // persistiert dieselbe Info in D1 — beim nächsten Reload kommt sie aus der
+    // History (deutsch hardcoded, siehe groupRoutes.js / autoDeleteRoutes.js).
+    // Self-Skip via msg.from !== me, da der Sender via optimistisches Update
+    // im autoDeleteStore.set() bereits Feedback bekommt.
     _wsUnsubs.push(
       ws.on("auto_delete_set", (msg) => {
         autoDeleteStore.applyControl(msg);
@@ -396,10 +429,8 @@
           );
         }
 
-        // Group-Last-Write-Wins: bei accept/cancel von einem ANDEREN Member
-        // Toast + lokale System-Bubble live in den Chat-Verlauf einfügen.
-        // Backend hat zwar bereits eine D1-System-Message geschrieben, aber
-        // die wäre erst beim nächsten /chat/list-Reload sichtbar.
+        // ── GROUP (Last-Write-Wins) ────────────────────
+        // accept/cancel von einem ANDEREN Member → Toast + lokale System-Bubble.
         if (msg.groupId && msg.from && msg.from !== me) {
           if (msg.action === "accept") {
             const label = autoDeleteLabel(msg.days, lng);
@@ -424,6 +455,48 @@
             );
             chatStore.appendLocalSystemMessage(
               msg.groupId,
+              `${msg.from} ` +
+              (lng.autoDeleteDisabledByPeer || 'hat Auto-Delete deaktiviert.'),
+              msg.ts
+            );
+          }
+        }
+
+        // ── DM (Konsens-Modell) ───────────────────────
+        // accept = wirksam geworden (vom Peer akzeptiert). cancel = wirksam
+        // deaktiviert. decline = bleibt ephemer (kein wirksamer Zustandswechsel).
+        // convoId = sortierte Handles "alphabet erst".
+        if (!msg.groupId && msg.from && msg.from !== me) {
+          const convoId = [me, msg.from].sort().join(':');
+          if (msg.action === "accept") {
+            // proposer = Urheber des Vorschlags. Konsistent zur persistenten
+            // D1-Message in autoDeleteRoutes.js (proposer als from_user).
+            // Fallback: msg.from (acceptor), falls Backend kein proposed_by liefert.
+            const proposer = msg.proposed_by || msg.from;
+            const label = autoDeleteLabel(msg.days, lng);
+            toastStore.push(
+              `⏱ @${proposer} ` +
+              (lng.autoDeleteSetByPeer || 'hat Auto-Delete gesetzt:') +
+              ' ' + label,
+              { kind: 'info' }
+            );
+            chatStore.appendLocalSystemMessage(
+              convoId,
+              `${proposer} ` +
+              (lng.autoDeleteSetByPeer || 'hat Auto-Delete gesetzt:') +
+              ' ' + label,
+              msg.ts
+            );
+          } else if (msg.action === "cancel" && !msg.original_days) {
+            // Nur bei "wirksam deaktiviert" — wenn original_days gesetzt,
+            // wurde nur ein Vorschlag zurückgezogen, kein wirksamer Wechsel.
+            toastStore.push(
+              `⏱ @${msg.from} ` +
+              (lng.autoDeleteDisabledByPeer || 'hat Auto-Delete deaktiviert.'),
+              { kind: 'info' }
+            );
+            chatStore.appendLocalSystemMessage(
+              convoId,
               `${msg.from} ` +
               (lng.autoDeleteDisabledByPeer || 'hat Auto-Delete deaktiviert.'),
               msg.ts
@@ -755,6 +828,26 @@
             profileCache.invalidate(msg.from);
           }
           inboxStore.loadContacts().catch(() => {});
+
+          // Special-Case: Peer hat MICH entfernt (action === "removed").
+          // → Toast + ggf. offenen Chat schließen, weil Senden eh blockt (403).
+          if (msg?.type === "contact_update"
+              && msg?.action === "removed"
+              && msg?.from) {
+            const lng = i18nStore.lang;
+            const peer = msg.from;
+            const peerDn = profileCache.get(peer) || `@${peer}`;
+            toastStore.push(
+              (lng.contactRemovedByPeer || '{peer} hat dich aus den Kontakten entfernt')
+                .replace('{peer}', peerDn),
+              { kind: 'info' }
+            );
+            // Wenn dieser Chat gerade offen ist → schließen
+            const sel = chatStore.selectedChat;
+            if (sel?.type === 'dm' && (sel.peer === peer || sel.key === peer)) {
+              chatStore.selectChat(null);
+            }
+          }
         })
       );
     }
@@ -889,8 +982,11 @@
      User durchläuft Step 1 (auth) → 2 (phrase) → 3 (success) ohne Unterbrechung. -->
 <RecoveryLoginModal bind:isOpen={recoveryLoginOpen} />
 
-<!-- Device-Limit-Modal: 5 (Free) bzw. 10 (Pro) Geräte erreicht -->
+<!-- Device-Limit-Modal: 5 Geräte erreicht -->
 <DeviceLimitModal bind:info={deviceLimitInfo} />
+
+<!-- PWA-Install-Banner: Smart Banner + iOS/Safari-Anleitung. Trigger via Profile-Menü. -->
+<PwaInstallBanner />
 
 <!-- Toast-Stack (CMK-Rotation, future Notifications) -->
 <ToastContainer />

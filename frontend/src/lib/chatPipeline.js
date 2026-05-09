@@ -28,6 +28,7 @@ import {
   getRotationMap, findCmkForRotationIndex, appendToRotationMap,
 } from './session.js';
 import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
+import { wrapAttachmentPlaintext } from './attachmentCrypto.js';
 import { signMessage, verifyMessageSig } from './messageSig.js';
 import {
   ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
@@ -491,7 +492,7 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
  *   `text` wird mit derselben mk wie der Hauptbody verschlüsselt → Preview ist E2E-geschützt.
  * @returns {Promise<{ok: boolean, message?: object, error?: string}>}
  */
-export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo = null) {
+export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo = null, attachment = null) {
   try {
     const cmk = await ensureSecureDmSession(myHandle, peerHandle);
     if (!cmk) {
@@ -519,7 +520,13 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo =
     const epoch = Math.floor(Date.now() / EPOCH_MS);
     const mk = await deriveMessageKey(skBytes, sid, epoch);
 
-    const { ivB64, ctB64 } = await e2eEncrypt(mk, plaintext);
+    // Wenn ein Attachment dabei ist: Plaintext zu strukturiertem Envelope wrappen.
+    // Server sieht NUR den encrypted body — Filename/MIME/fileKey bleiben privat.
+    const wrappedPlaintext = attachment
+      ? wrapAttachmentPlaintext(plaintext, attachment)
+      : plaintext;
+
+    const { ivB64, ctB64 } = await e2eEncrypt(mk, wrappedPlaintext);
     const sig = await signMessage(ivB64, ctB64, sid, epoch);
     const deviceId = getDeviceId();
 
@@ -534,6 +541,13 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo =
       sig,
       deviceId,
     };
+
+    // Attachment-Plaintext-Felder für DB (Cleanup-Cron + nicht-encrypted Listing).
+    // attachmentKey = R2-Pfad. fileKey/iv/name/mime/size bleiben im encrypted Body.
+    if (attachment?.r2Key) {
+      body.attachmentKey  = attachment.r2Key;
+      body.attachmentType = attachment.type;
+    }
 
     // rotation_index nur mitschicken wenn > 0 (Default 0 schadet nicht, aber
     // unnötiges Body-Field für die Mehrheit der Sends).
@@ -1066,7 +1080,7 @@ export function clearChatPipelineCaches() {
  * @param {string} plaintext
  * @param {{id: string, from: string, text: string}} [replyTo]
  */
-export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plaintext, replyTo = null) {
+export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plaintext, replyTo = null, attachment = null) {
   try {
     const gskBytes = await ensureMyGSK(groupId, memberHandles);
     if (!gskBytes) return { ok: false, error: 'no_gsk' };
@@ -1093,7 +1107,12 @@ export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plain
     const epoch = Math.floor(Date.now() / EPOCH_MS);
     const sid = String(groupId);
 
-    const { ivB64, ctB64 } = await e2eEncrypt(mk, plaintext);
+    // Wenn ein Attachment dabei ist: Plaintext zu strukturiertem Envelope wrappen.
+    const wrappedPlaintext = attachment
+      ? wrapAttachmentPlaintext(plaintext, attachment)
+      : plaintext;
+
+    const { ivB64, ctB64 } = await e2eEncrypt(mk, wrappedPlaintext);
     const sig = await signMessage(ivB64, ctB64, sid, epoch);
     const deviceId = getDeviceId();
 
@@ -1112,6 +1131,12 @@ export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plain
       // liest msg.rotationIndex / rotation_index für die HKDF-Ableitung.
       rotationIndex: chainIndex,
     };
+
+    // Attachment-Plaintext-Felder für DB
+    if (attachment?.r2Key) {
+      body.attachmentKey  = attachment.r2Key;
+      body.attachmentType = attachment.type;
+    }
 
     if (replyTo && replyTo.id && typeof replyTo.text === 'string') {
       const previewText = replyTo.text.length > 200

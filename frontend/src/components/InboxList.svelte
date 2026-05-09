@@ -320,7 +320,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 14px 12px;
+    /* Mobile (Notch): padding-top wächst mit safe-area-inset, sonst 16px. */
+    padding: max(16px, var(--safe-top)) 14px 12px;
     border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
   }

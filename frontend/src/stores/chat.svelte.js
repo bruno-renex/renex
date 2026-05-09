@@ -398,10 +398,20 @@ export const chatStore = {
         // Optimistic-Replace: Klartext lokal behalten (eigene Message muss nicht neu decryptet werden)
         // Reply-Preview ebenfalls als Plaintext halten — sonst würde sie in der Bubble als "🔐" angezeigt
         // bis ein _decryptAllE2E-Sweep läuft (das passiert für eigene Sends nicht sofort).
+        // Attachment-Object lokal preservieren — _normalizeMessage liest nur attachment_key
+        // aus DB-Spalten, das ist bei GIFs leer (gifUrl/gifPreview/gifId stecken im
+        // verschlüsselten Envelope, nicht in DB-Columns). Sonst überschreibt undefined die
+        // optimistischen GIF-Felder und der Sender sieht eine leere Bubble.
         const localReplyTo = replyTo ? { id: replyTo.id, from: replyTo.from, text: replyTo.text } : undefined;
         _messages = _messages.map(m =>
           m.id === tempId
-            ? { ...serverMsg, text: trimmed, status: "sent", replyTo: localReplyTo }
+            ? {
+                ...serverMsg,
+                text: trimmed,
+                status: "sent",
+                replyTo: localReplyTo,
+                attachment: m.attachment || serverMsg.attachment,
+              }
             : m
         );
         // Inbox-Liste live aktualisieren — Sidebar zeigt sofort die letzte Nachricht
@@ -680,14 +690,21 @@ async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
       const patch = { text: caption, verified };
       if (attachmentMeta) {
         // Attachment-Meta mit den (Plaintext-)attachment_key/_type vom Server mergen.
+        // GIFs haben kein R2 — gifUrl/gifPreview/gifId müssen mit-rübergerettet werden,
+        // sonst rendert AttachmentView <img src=undefined>. (Group-Pfad weiter unten
+        // hatte das schon, DM-Pfad war Copy-Paste-Lücke.)
         patch.attachment = {
-          type:     attachmentMeta.type     || rawMsg.attachment_type     || rawMsg.attachmentType,
-          key:      attachmentMeta.r2Key    || rawMsg.attachment_key      || rawMsg.attachmentKey,
-          fileKey:  attachmentMeta.fileKey,
-          iv:       attachmentMeta.iv,
-          fileName: attachmentMeta.fileName,
-          mimeType: attachmentMeta.mimeType,
-          fileSize: attachmentMeta.fileSize,
+          type:       attachmentMeta.type     || rawMsg.attachment_type     || rawMsg.attachmentType,
+          key:        attachmentMeta.r2Key    || rawMsg.attachment_key      || rawMsg.attachmentKey,
+          fileKey:    attachmentMeta.fileKey,
+          iv:         attachmentMeta.iv,
+          fileName:   attachmentMeta.fileName,
+          mimeType:   attachmentMeta.mimeType,
+          fileSize:   attachmentMeta.fileSize,
+          // GIF-Felder (kein R2, direkt vom GIPHY-CDN)
+          gifUrl:     attachmentMeta.gifUrl,
+          gifPreview: attachmentMeta.gifPreview,
+          gifId:      attachmentMeta.gifId,
         };
       }
       // Reply-Preview-Text patchen, wenn die Message eine Reply ist und der Decrypt geklappt hat.

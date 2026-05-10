@@ -587,6 +587,7 @@ Wenn eine strategische Entscheidung geändert wird, hier dokumentieren:
 | 2026-04-28 | Recovery-Cutoff | unspezifiziert | **7 Tage Recent-CMK-Share** beim Add-Device | iMessage-Standard, Privacy-Brand-konform. Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §4.4.3 |
 | 2026-04-28 | Device-State-Storage | nur KV-Index | **D1-Tabelle `devices` + KV als Hot-Cache** | Send-Path bleibt schnell (KV), Cron+Settings-UI sauber (D1). Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §2 |
 | 2026-04-28 | Add-Device-Bestätigung | unspezifiziert | **Cross-Device-Passkey IST die Bestätigung**, Toast nur als Notbremse | Passkey ist Trust-Anchor; zusätzlicher Confirm wäre UX-Friktion. Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §4.1 |
+| 2026-05-10 | Group-Multi-Device-Distribution | unspezifiziert | **Frontend-Re-Distribution bei device_added (self + peer)** mit Backoff-Retry-Race-Schutz | Konsistent mit DM-Pattern (CMK-Redistribute), Backend bleibt zero-knowledge. Detail: [`GROUPS_MULTIDEVICE.md`](./GROUPS_MULTIDEVICE.md) §4 |
 
 ---
 

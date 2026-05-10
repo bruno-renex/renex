@@ -4,6 +4,93 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-05-10 — Phase 1C: Group-Multi-Device Re-Distribution
+
+GSK-Layer nachgezogen für vollwertiges Multi-Device. DM-Multi-Device war
+seit 2026-04-30 fertig, Group-Sender-Keys (GSK) hatten zwei Lücken:
+Peer-Device-Add löste keine GSK-Re-Wrap aus, und Self-Device-Add hatte
+keinen Race-Schutz gegen KV-Eventual-Consistency.
+
+### ✨ Added
+
+**`redistributeGSKsForPeerDeviceAdded`** (`frontend/src/lib/groupCrypto.js`)
+- Neue Funktion. Wird vom `device_added(peer)`-Handler in `App.svelte`
+  gerufen wenn ein Kontakt ein neues Device hinzufügt.
+- Iteriert über alle eigenen Gruppen, prüft per `/groups/members` ob
+  Peer Member ist, und re-sendet die eigene GSK an alle Peer-Devices
+  (inkl. das neue) via `sendMyGSKToMember`.
+- Konsequenz: Neues Peer-Device kann meine zukünftigen Group-Messages
+  sofort decrypten — ohne auf nächste Rotation oder manuellen
+  `request_gsk` warten zu müssen.
+
+**`_fetchUserDevicesEnsuring`** (private, `frontend/src/lib/groupCrypto.js`)
+- Backoff-Retry-Variante von `_fetchUserDevices`: prüft ob ein
+  erwartetes Device im KV-Index ist, retried mit
+  400ms → 800ms → 1500ms → 3000ms-Backoff, fällt auf Push-Info
+  (`expectedJwk`) zurück wenn KV nie propagiert.
+- Identisches Pattern wie `fetchPeerDevicesEnsuring` in chatPipeline.js
+  (DM-Pendant).
+
+### 🐛 Fixed
+
+**Race in `storeMyGSKForOwnDevices`**: bei `device_added(self)` wurde
+`_fetchUserDevices(me)` direkt aufgerufen — wenn KV-Index am Empfänger-
+Edge noch nicht propagiert war, fehlte das gerade hinzugekommene Device
+in der Wrap-Liste, was beim Boot des neuen Devices zu fehlender GSK
+führte. Funktion akzeptiert jetzt optionalen `newDeviceInfo`-Parameter
+für Retry-Logik.
+
+**Race in `sendMyGSKToMember`**: analog für Peer-Side. Bei
+Peer-Device-Add konnte das gerade hinzugekommene Device fehlen.
+`newDeviceInfo`-Parameter dürchgereicht, retry bis es im Index ist.
+
+### 🔒 Security / Architecture
+
+- **Backend zero-knowledge bleibt**: Re-Distribution läuft komplett
+  client-seitig via bestehender `/chat/send` (gsk-Control) und
+  `/e2e/group-gsk/store`-Endpoints. Keine Backend-API-Änderung.
+- **Forward Secrecy intakt**: Wenn ein neues Device sofort sendet
+  bevor die Re-Distribution ankommt, generiert es eine eigene frische
+  GSK statt die alte zu verwenden — keine Schlüssel-Wiederverwendung
+  zwischen Devices ausserhalb der KV-Restore-Pfads.
+- **Recovery-Bundle**: Eigene GSKs sind seit 2026-04-30 im
+  R2-Recovery-Bundle (`collectMyGSKs` / `restoreMyGSKsFromBundle`),
+  Peer-GSKs nicht — die kommen via `request_gsk` neu (Bundle-Bloat-
+  Vermeidung). Dokumentiert in [`GROUPS_MULTIDEVICE.md`](./GROUPS_MULTIDEVICE.md) §5.
+
+### 🧪 Tests (alle ✅)
+
+8 neue Vitest-Tests in `tests/groupCrypto.test.js`:
+
+| # | Test | Was wird abgedeckt |
+|---|---|---|
+| 1 | `storeMyGSKForOwnDevices ohne newDeviceInfo` | Backwards-compat — kein retry-Pfad |
+| 2 | `storeMyGSKForOwnDevices mit newDeviceInfo retried` | Self-Device-Add Race-Schutz, Mock simuliert KV-Eventual-Consistency |
+| 3 | `storeMyGSKForOwnDevices Push-Fallback` | KV propagiert nie → Push-Info wird in Cache gemerged |
+| 4 | `redistributeGSKsForPeerDeviceAdded noop` | Empty groups list |
+| 5 | `redistributeGSKsForPeerDeviceAdded me === peer` | Defensive guard |
+| 6 | `redistributeGSKsForPeerDeviceAdded skipt ohne lokale GSK` | 0 chat/send Calls wenn kein eigener GSK |
+| 7 | `redistributeGSKsForPeerDeviceAdded skipt ohne Peer-Membership` | Members-API filtert |
+| 8 | `redistributeGSKsForPeerDeviceAdded sendet pro gemeinsamer Gruppe` | 2 gemeinsame Gruppen → 2 chat/send |
+| 9 | **5×5 Stress** | 5 Members × 5 Devices, 6. Peer-Device → wrap-Count = 6 |
+
+Total Test-Suite: 73 Tests in `groupCrypto.test.js`, alle grün.
+
+### Geänderte Dateien
+
+- `frontend/src/lib/groupCrypto.js` — `_fetchUserDevicesEnsuring`,
+  `storeMyGSKForOwnDevices(..., newDeviceInfo)`,
+  `sendMyGSKToMember(..., newDeviceInfo)`,
+  `redistributeGSKsForPeerDeviceAdded`
+- `frontend/src/App.svelte` — Self-Hook reicht `newDeviceInfo` durch,
+  Peer-Hook ruft `redistributeGSKsForPeerDeviceAdded`
+- `tests/groupCrypto.test.js` — neuer Multi-Device-describe-Block
+- `docs/GROUPS_MULTIDEVICE.md` — neu (Phase 1C-Spec)
+- `docs/MULTI_DEVICE.md` §13 — Open Items aktualisiert
+- `docs/VISION.md` Anhang B — Decision-Log-Eintrag 2026-05-10
+
+---
+
 ## 2026-05-02 — Security Defense-in-Depth (L1, L2, L3)
 
 Drei kosmetische Härtungen am Krypto-Layer. Keine bekannten Exploits — die

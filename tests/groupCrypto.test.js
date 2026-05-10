@@ -1037,3 +1037,237 @@ describe('GSK Sender-Sig', () => {
     await expect(signGskPayload('g', new Uint8Array(33), Date.now())).rejects.toThrow();
   });
 });
+
+// ======================================================
+// 9. Multi-Device (Phase 1C)
+// ======================================================
+// Tests für GSK-Re-Distribution bei device_added-Events.
+// Spec: docs/GROUPS_MULTIDEVICE.md §4 (Sequence-Diagrams) + §6 (Test-Matrix).
+
+import { redistributeGSKsForPeerDeviceAdded } from '../frontend/src/lib/groupCrypto.js';
+
+// Helper: erzeugt n ECDH-Pubkeys für simulierte Peer-Devices
+async function generatePeerDevices(handle, count) {
+  const devices = [];
+  for (let i = 0; i < count; i++) {
+    const pair = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true, ['deriveKey']
+    );
+    const jwk = await crypto.subtle.exportKey('jwk', pair.publicKey);
+    devices.push({ deviceId: `dev_${handle}_${i}`, jwk });
+  }
+  return devices;
+}
+
+describe('GSK Multi-Device — Self-Device-Add Race-Schutz', () => {
+  beforeEach(async () => {
+    await resetIdb();
+    await setupUser('alice');
+    resetApiMock();
+  });
+
+  it('storeMyGSKForOwnDevices ohne newDeviceInfo: nutzt direkten fetch (kein retry)', async () => {
+    const aliceDevs = await generatePeerDevices('alice', 2);
+    aliceDevs[0].deviceId = 'dev_test_alice'; // = current device, wird gefiltert
+    let inboxCalls = 0;
+    resetApiMock((path) => {
+      if (path.startsWith('/e2e/inbox/get?user=alice')) {
+        inboxCalls++;
+        return { ok: true, data: { devices: aliceDevs } };
+      }
+      return { ok: true };
+    });
+
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const r = await storeMyGSKForOwnDevices('g', gsk);
+    expect(r.ok).toBe(true);
+    expect(r.distributed).toBe(1); // nur das andere Device
+    expect(inboxCalls).toBe(1); // kein retry
+    const stored = _apiCalls.find(c => c.path === '/e2e/group-gsk/store');
+    expect(stored).toBeTruthy();
+    expect(stored.opts.body.payloads.length).toBe(1);
+  });
+
+  it('storeMyGSKForOwnDevices mit newDeviceInfo: retried bis neues Device im KV-Index', async () => {
+    const aliceDevs = await generatePeerDevices('alice', 2);
+    aliceDevs[0].deviceId = 'dev_test_alice'; // current
+    const newDevice = aliceDevs[1];
+    newDevice.deviceId = 'dev_alice_NEW';
+
+    let inboxCalls = 0;
+    resetApiMock((path) => {
+      if (path.startsWith('/e2e/inbox/get?user=alice')) {
+        inboxCalls++;
+        // Erste 2 Calls: NEW-Device fehlt noch (KV-Eventual-Consistency).
+        // Ab Call 3: NEW-Device da.
+        const devs = inboxCalls < 3 ? [aliceDevs[0]] : aliceDevs;
+        return { ok: true, data: { devices: devs } };
+      }
+      return { ok: true };
+    });
+
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const r = await storeMyGSKForOwnDevices('g', gsk, {
+      fromHandle: 'alice',
+      deviceId: 'dev_alice_NEW',
+      jwk: newDevice.jwk,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.distributed).toBe(1); // NEW-Device gewrapped
+    expect(inboxCalls).toBeGreaterThanOrEqual(3); // mindestens 1 retry
+    const stored = _apiCalls.find(c => c.path === '/e2e/group-gsk/store');
+    expect(stored.opts.body.payloads[0].deviceId).toBe('dev_alice_NEW');
+  }, 10000);
+
+  it('storeMyGSKForOwnDevices: Push-Fallback wenn KV nie propagiert', async () => {
+    const aliceDevs = await generatePeerDevices('alice', 2);
+    aliceDevs[0].deviceId = 'dev_test_alice';
+    const newJwk = aliceDevs[1].jwk;
+
+    resetApiMock((path) => {
+      if (path.startsWith('/e2e/inbox/get?user=alice')) {
+        // KV propagiert NIE — alle Calls liefern nur current device
+        return { ok: true, data: { devices: [aliceDevs[0]] } };
+      }
+      return { ok: true };
+    });
+
+    const gsk = crypto.getRandomValues(new Uint8Array(32));
+    const r = await storeMyGSKForOwnDevices('g', gsk, {
+      fromHandle: 'alice',
+      deviceId: 'dev_alice_NEW',
+      jwk: newJwk,
+    });
+    // Auch im Fallback-Pfad muss NEW-Device gewrapped werden (via Push-Info)
+    expect(r.distributed).toBeGreaterThanOrEqual(1);
+    const stored = _apiCalls.find(c => c.path === '/e2e/group-gsk/store');
+    expect(stored.opts.body.payloads.some(p => p.deviceId === 'dev_alice_NEW')).toBe(true);
+  }, 15000);
+});
+
+describe('GSK Multi-Device — Peer-Device-Add Re-Distribution', () => {
+  beforeEach(async () => {
+    await resetIdb();
+    await setupUser('alice');
+    resetApiMock();
+  });
+
+  it('redistributeGSKsForPeerDeviceAdded: noop bei leerer Gruppen-Liste', async () => {
+    const r = await redistributeGSKsForPeerDeviceAdded('alice', 'bob', null, []);
+    expect(r.ok).toBe(true);
+    expect(r.distributed).toBe(0);
+  });
+
+  it('redistributeGSKsForPeerDeviceAdded: rejected wenn me === peer', async () => {
+    const r = await redistributeGSKsForPeerDeviceAdded('alice', 'alice', null, [{ id: 'g1' }]);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('invalid_handles');
+  });
+
+  it('redistributeGSKsForPeerDeviceAdded: skipt Gruppen ohne lokale My-GSK', async () => {
+    // alice hat KEINE GSK in g1 oder g2
+    let chatSendCalls = 0;
+    resetApiMock((path) => {
+      if (path.startsWith('/chat/send')) chatSendCalls++;
+      return { ok: true, data: {} };
+    });
+
+    const r = await redistributeGSKsForPeerDeviceAdded(
+      'alice', 'bob',
+      { fromHandle: 'bob', deviceId: 'dev_bob_NEW', jwk: {} },
+      [{ id: 'g1' }, { id: 'g2' }]
+    );
+    expect(r.distributed).toBe(0);
+    expect(r.skipped).toBe(2);
+    expect(chatSendCalls).toBe(0);
+  });
+
+  it('redistributeGSKsForPeerDeviceAdded: skipt Gruppen ohne Peer-Membership', async () => {
+    await createMyGSK('g1');
+    await createMyGSK('g2');
+
+    resetApiMock((path) => {
+      if (path.startsWith('/groups/members?groupId=g1')) {
+        return { ok: true, data: { members: [{ member_handle: 'alice' }, { member_handle: 'carol' }] } };
+      }
+      if (path.startsWith('/groups/members?groupId=g2')) {
+        return { ok: true, data: { members: [{ member_handle: 'alice' }] } };
+      }
+      if (path.startsWith('/e2e/inbox/get')) return { ok: true, data: { devices: [] } };
+      return { ok: true, data: {} };
+    });
+
+    const r = await redistributeGSKsForPeerDeviceAdded(
+      'alice', 'bob',
+      { fromHandle: 'bob', deviceId: 'dev_bob_NEW', jwk: {} },
+      [{ id: 'g1' }, { id: 'g2' }]
+    );
+    expect(r.distributed).toBe(0);
+    expect(r.skipped).toBe(2);
+    // chat/send NICHT gerufen — Peer ist in keiner Gruppe Member
+    expect(_apiCalls.find(c => c.path === '/chat/send')).toBeUndefined();
+  });
+
+  it('redistributeGSKsForPeerDeviceAdded: sendet GSK an Peer-Device in jeder gemeinsamen Gruppe', async () => {
+    await createMyGSK('g1');
+    await createMyGSK('g2');
+    const bobDevs = await generatePeerDevices('bob', 2);
+
+    resetApiMock((path) => {
+      if (path.startsWith('/groups/members?groupId=g1') ||
+          path.startsWith('/groups/members?groupId=g2')) {
+        return { ok: true, data: { members: [{ member_handle: 'alice' }, { member_handle: 'bob' }] } };
+      }
+      if (path.startsWith('/e2e/inbox/get?user=bob')) {
+        return { ok: true, data: { devices: bobDevs } };
+      }
+      return { ok: true, data: {} };
+    });
+
+    const r = await redistributeGSKsForPeerDeviceAdded(
+      'alice', 'bob',
+      { fromHandle: 'bob', deviceId: bobDevs[1].deviceId, jwk: bobDevs[1].jwk },
+      [{ id: 'g1' }, { id: 'g2' }]
+    );
+    expect(r.distributed).toBe(2);
+    // Genau 2 chat/send Calls mit type:'gsk', je einer pro Gruppe
+    const gskSends = _apiCalls.filter(c => c.path === '/chat/send' && c.opts.body.type === 'gsk');
+    expect(gskSends.length).toBe(2);
+    const groupIds = gskSends.map(c => c.opts.body.convoId).sort();
+    expect(groupIds).toEqual(['g1', 'g2']);
+    // Jeder Send wrapped beide Bob-Devices (alt + neu)
+    for (const send of gskSends) {
+      expect(send.opts.body.payloads.length).toBe(2);
+    }
+  });
+
+  it('5×5 Stress: 5 Members × 5 Devices, neuer 6. Peer-Device → 1 Gruppe re-wrap', async () => {
+    await createMyGSK('g-team');
+    // Alice + 4 weitere Members
+    const memberHandles = ['alice', 'bob', 'carol', 'dan', 'eve'];
+    const bobDevs = await generatePeerDevices('bob', 6); // bob hat jetzt 6 Devices (5 alt + 1 neu)
+
+    resetApiMock((path) => {
+      if (path.startsWith('/groups/members?groupId=g-team')) {
+        return { ok: true, data: { members: memberHandles.map(h => ({ member_handle: h })) } };
+      }
+      if (path.startsWith('/e2e/inbox/get?user=bob')) {
+        return { ok: true, data: { devices: bobDevs } };
+      }
+      return { ok: true, data: {} };
+    });
+
+    const r = await redistributeGSKsForPeerDeviceAdded(
+      'alice', 'bob',
+      { fromHandle: 'bob', deviceId: bobDevs[5].deviceId, jwk: bobDevs[5].jwk },
+      [{ id: 'g-team' }]
+    );
+    expect(r.distributed).toBe(1);
+    // 6 Bob-Devices gewrapped (CHUNK=10 in sendMyGSKToMember → 1 chat/send call mit 6 payloads)
+    const gskSend = _apiCalls.find(c => c.path === '/chat/send' && c.opts.body.type === 'gsk');
+    expect(gskSend).toBeTruthy();
+    expect(gskSend.opts.body.payloads.length).toBe(6);
+    expect(gskSend.opts.body.payloads.some(p => p.deviceId === bobDevs[5].deviceId)).toBe(true);
+  });
+});

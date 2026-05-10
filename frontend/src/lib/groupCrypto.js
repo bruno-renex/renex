@@ -709,6 +709,35 @@ async function _fetchUserDevices(handle) {
   return promise;
 }
 
+// Backoff-Retry-Variante. Schützt gegen KV-Eventual-Consistency direkt nach
+// `device_added`: der KV-Index am Empfänger-Edge propagiert verzögert, daher
+// fehlt das gerade hinzugekommene Device im ersten Fetch. Identisches Pattern
+// wie `fetchPeerDevicesEnsuring` in chatPipeline.js für DMs.
+async function _fetchUserDevicesEnsuring(handle, expectedDeviceId, expectedJwk) {
+  let devs = await _fetchUserDevices(handle);
+  if (!expectedDeviceId) return devs;
+  if (devs.some(d => d.deviceId === expectedDeviceId)) return devs;
+
+  for (const delay of [400, 800, 1500, 3000]) {
+    await new Promise(r => setTimeout(r, delay));
+    // Single-Flight-Cache umgehen: nach Delay frisch fetchen
+    _inFlightDevices.delete(String(handle || '').toLowerCase());
+    devs = await _fetchUserDevices(handle);
+    if (devs.some(d => d.deviceId === expectedDeviceId)) return devs;
+  }
+
+  // KV propagiert nicht — Push-Info als Fallback in Cache mergen.
+  if (expectedJwk) {
+    const merged = [...devs.filter(d => d.deviceId !== expectedDeviceId), {
+      deviceId: expectedDeviceId,
+      jwk: expectedJwk,
+    }];
+    await storePeerDevices(handle, merged);
+    return merged;
+  }
+  return devs;
+}
+
 // ======================================================
 // Distribution: GSK an Other Members senden (chatSend control)
 // ======================================================
@@ -722,9 +751,15 @@ async function _fetchUserDevices(handle) {
  * Ein gsk-Send pro Recipient-User (nicht pro Device) — payloads-Limit
  * (10 pro Message) reicht damit auch bei viel Multi-Device pro Member aus.
  */
-export async function sendMyGSKToMember(groupId, gskBytes, peerHandle) {
+export async function sendMyGSKToMember(groupId, gskBytes, peerHandle, newDeviceInfo = null) {
   try {
-    const devices = await _fetchUserDevices(peerHandle);
+    // Bei device_added(peer): retry bis das neue Peer-Device im KV-Index ist,
+    // sonst fehlt der Wrap für genau dieses neue Device.
+    const expectedPeerDeviceId = (newDeviceInfo && newDeviceInfo.fromHandle?.toLowerCase() === peerHandle.toLowerCase())
+      ? newDeviceInfo.deviceId : null;
+    const devices = expectedPeerDeviceId
+      ? await _fetchUserDevicesEnsuring(peerHandle, expectedPeerDeviceId, newDeviceInfo?.jwk)
+      : await _fetchUserDevices(peerHandle);
     if (devices.length === 0) return { ok: false, reason: 'no_devices' };
 
     // GSK-Sig signed über (groupId, ts, sha256(gskBytes)) — Auth-Layer
@@ -790,16 +825,76 @@ export async function distributeMyGSKToMembers(groupId, gskBytes, memberHandles)
   return { ok: ok > 0, recipients: others.length, delivered: ok };
 }
 
+/**
+ * Re-wrapped die eigenen GSKs an einen Peer, der gerade ein neues Device
+ * hinzugefügt hat. Iteriert über alle Gruppen, in denen me UND peer Member
+ * sind (Quelle: groupList aus Inbox + /groups/members?groupId=).
+ *
+ * Spec: docs/GROUPS_MULTIDEVICE.md §4.2 (Peer-Device-Add Sequence-Diagram).
+ *
+ * @param {string} myHandle
+ * @param {string} peerHandle
+ * @param {{fromHandle: string, deviceId: string, jwk: object}} newDeviceInfo - aus device_added Push
+ * @param {Array<{id: string}>} myGroups - Liste meiner Gruppen (aus inboxStore.groups)
+ */
+export async function redistributeGSKsForPeerDeviceAdded(myHandle, peerHandle, newDeviceInfo, myGroups) {
+  if (!Array.isArray(myGroups) || myGroups.length === 0) return { ok: true, distributed: 0 };
+  const me = String(myHandle || '').toLowerCase();
+  const peer = String(peerHandle || '').toLowerCase();
+  if (!me || !peer || me === peer) return { ok: false, reason: 'invalid_handles' };
+
+  let distributed = 0;
+  let skipped = 0;
+  for (const g of myGroups) {
+    const groupId = g?.id;
+    if (!groupId) continue;
+    try {
+      // Skip Gruppen, in denen ich keine eigene GSK habe — nichts zu re-wrappen.
+      const gsk = await getMyGSK(groupId);
+      if (!gsk) { skipped++; continue; }
+
+      // Membership-Check: ist Peer in dieser Gruppe?
+      let members = [];
+      try {
+        const r = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
+        if (r.ok && Array.isArray(r.data?.members)) {
+          members = r.data.members
+            .map(m => String(m.member_handle || '').toLowerCase())
+            .filter(Boolean);
+        }
+      } catch {}
+      if (!members.includes(peer)) { skipped++; continue; }
+
+      const r = await sendMyGSKToMember(groupId, gsk, peer, newDeviceInfo);
+      if (r.ok) distributed++;
+      else skipped++;
+    } catch (e) {
+      captureException(e, { context: 'redistributeGSKsForPeerDeviceAdded', groupId, peerHandle });
+      skipped++;
+    }
+  }
+  console.log(`📤 Peer-device-added: GSK-Redistribution für ${peerHandle} → ${distributed} Gruppen verteilt, ${skipped} skipped`);
+  return { ok: distributed > 0 || skipped === myGroups.length, distributed, skipped };
+}
+
 // ======================================================
 // Distribution: GSK an eigene andere Devices (KV)
 // ======================================================
 
-export async function storeMyGSKForOwnDevices(groupId, gskBytes) {
+export async function storeMyGSKForOwnDevices(groupId, gskBytes, newDeviceInfo = null) {
   try {
     const me = _getMyHandle();
     if (!me) return { ok: false, reason: 'no_me' };
 
-    const devices = await _fetchUserDevices(me);
+    // Bei device_added(self): retry bis das gerade hinzugefügte Device im
+    // KV-Index sichtbar ist. Sonst landet die GSK-Wrap nicht im KV → neues
+    // Device kann beim Boot keine GSK aus KV restoren.
+    const expectedSelfDeviceId = (newDeviceInfo && newDeviceInfo.fromHandle?.toLowerCase() === me)
+      ? newDeviceInfo.deviceId : null;
+    const devices = expectedSelfDeviceId
+      ? await _fetchUserDevicesEnsuring(me, expectedSelfDeviceId, newDeviceInfo?.jwk)
+      : await _fetchUserDevices(me);
+
     const myDeviceId = getDeviceId();
     const others = devices.filter(d => d.deviceId !== myDeviceId);
     if (others.length === 0) return { ok: true, distributed: 0 };

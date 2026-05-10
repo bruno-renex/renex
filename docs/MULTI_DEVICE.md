@@ -658,13 +658,13 @@ Nach Spec-Finalisierung noch offen — werden in Folge-Specs adressiert:
 
 | Item | Phase | Owner-Spec |
 |---|---|---|
-| BIP39-Onboarding-Flow (UX, Phrase-Display, Backup-Verifikation) | 1B.6 | `RECOVERY.md` (TBD) |
-| Recovery-Bundle: Schema des verschlüsselten JSON | 1B.6 | `RECOVERY.md` |
+| BIP39-Onboarding-Flow (UX, Phrase-Display, Backup-Verifikation) | 1B.6 | `RECOVERY.md` ✅ |
+| Recovery-Bundle: Schema des verschlüsselten JSON | 1B.6 | `RECOVERY.md` ✅ |
 | Cross-Device-Passkey-UX (QR-Code, Bluetooth-Fallback) | 1B.3 | bestehender Add-Device-Modal, Erweiterung |
-| Group-Member-Add: GSK an alle Peer-Devices verteilen | 1C | `GROUPS_MULTIDEVICE.md` (TBD) |
+| Group-Member-Add: GSK an alle Peer-Devices verteilen | 1C | [`GROUPS_MULTIDEVICE.md`](./GROUPS_MULTIDEVICE.md) ✅ (2026-05-10) |
 | Tier-Feld in `users` + `requireSession` | Phase 3 | `MONETIZATION.md` (TBD) |
 | Conformance-Tests für RENEX-Protocol (Multi-Device-Subset) | Phase 2 | `PROTOCOL.md` (TBD) |
-| 5×5-Stress-Test-Harness (Vitest + Wrangler-Local) | 1B.5 | inline in `tests/multidevice.test.js` |
+| 5×5-Stress-Test-Harness (Vitest + Wrangler-Local) | 1B.5 | inline in `tests/multidevice.test.js` + `tests/groupCrypto.test.js` ✅ |
 
 ---
 

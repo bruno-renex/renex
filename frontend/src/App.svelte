@@ -36,7 +36,7 @@
     handleIncomingGSKMessage, handleIncomingRequestGSK,
     getMyGSK, getPeerGSK, storeMyGSKForOwnDevices, sendMyGSKToMember,
     rotateMyGSK, deleteAllGSKsForGroup, deletePeerGSK,
-    fetchMyGSKFromKV,
+    fetchMyGSKFromKV, redistributeGSKsForPeerDeviceAdded,
   } from './lib/groupCrypto.js';
   import { captureException } from './lib/sentry.js';
   import { apiFetch } from './lib/api.js';
@@ -636,14 +636,15 @@
           }
           // Group-GSK: für jede Gruppe in der ich Member bin, eigene GSK
           // (falls vorhanden) für das neue eigene Device per KV ablegen.
-          // Backend-Endpoint /e2e/group-gsk/store wrapped neu auf alle eigenen
-          // Devices, inklusive des neu hinzugekommenen.
+          // newDeviceInfo durchreichen → storeMyGSKForOwnDevices retried bis
+          // das neue Device im KV-Index sichtbar ist (Race-Schutz).
+          // Spec: docs/GROUPS_MULTIDEVICE.md §4.1
           void (async () => {
             const groups = inboxStore.groups || [];
             for (const g of groups) {
               try {
                 const gsk = await getMyGSK(g.id);
-                if (gsk) await storeMyGSKForOwnDevices(g.id, gsk);
+                if (gsk) await storeMyGSKForOwnDevices(g.id, gsk, newDeviceInfo);
               } catch (e) {
                 captureException(e, { context: 'gsk-self-device-add', groupId: g.id });
               }
@@ -651,6 +652,15 @@
           })();
         } else if (msg.from) {
           void redistributeCMKToPeer(me, msg.from, newDeviceInfo);
+          // Phase 1C: GSK-Re-Wrap für alle Gruppen, in denen me + peer beide
+          // Member sind. Ohne diesen Hook könnte das neue Peer-Device meine
+          // zukünftigen Group-Messages nicht decrypten.
+          // Spec: docs/GROUPS_MULTIDEVICE.md §4.2
+          if (newDeviceInfo) {
+            void redistributeGSKsForPeerDeviceAdded(
+              me, msg.from, newDeviceInfo, inboxStore.groups || []
+            );
+          }
           // Frischer Peer (z.B. Gast joined gerade) → Contacts neu laden, sonst
           // erscheint die Konversation erst nach manuellem Reload in der Inbox.
           // Backend hat beim /invite/join schon contacts-Eintrag erzeugt + ETag

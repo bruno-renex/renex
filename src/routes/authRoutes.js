@@ -1,5 +1,5 @@
 import { json, readJson, base64url, base64urlToString, base64urlToArrayBuffer, decodeCBOR, corsHeaders } from '../utils.js';
-import { requireSession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions, verifyTurnstile, pushToGroupMembers } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions, verifyTurnstile, pushToGroupMembers } from '../auth.js';
 import { handleLoginFinish } from '../helpers/loginFinish.js';
 import { readCredentials, writeCredentials, MAX_PASSKEYS } from '../helpers/credentials.js';
 
@@ -415,12 +415,20 @@ export async function handleAuthRoutes(request, env, path, params) {
 
     // =========================
     // AUTH / SESSION CHECK (immer 200 — kein Console-Error im Browser)
+    // requireAnySession akzeptiert echte (sess_*) UND Gast-Sessions
+    // (guest_*) — sonst landet ein frisch via /invite/join geländerter
+    // Gast direkt im Login-Modal weil requireSession seinen Token-Prefix
+    // ablehnt (Block-G-Bug-Fix).
     // =========================
     case "/auth/session": {
       if (request.method === "GET") {
-        const session = await requireSession(request, env);
+        const session = await requireAnySession(request, env);
         if (!session) return json(request, { valid: false });
-        return json(request, { valid: true, handle: session.handle });
+        return json(request, {
+          valid: true,
+          handle: session.handle,
+          isGuest: !!session.isGuest,
+        });
       }
       break;
     }

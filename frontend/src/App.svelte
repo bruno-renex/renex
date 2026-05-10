@@ -298,6 +298,28 @@
           peer: openInviter,
           name: `@${openInviter}`,
         });
+      } else if (userStore.isGuest && !chatStore.selectedChat) {
+        // Gast-Mode: Konversation auto-öffnen. Gast hat per Definition
+        // genau EINE Konversation (DM oder Group, gebunden an die Session).
+        // Reduziertes UI rendert eh nur die ChatView, deshalb müssen wir
+        // sicherstellen dass dort etwas drin ist.
+        const groups = inboxStore.groups || [];
+        const contacts = inboxStore.contacts || [];
+        if (groups.length > 0) {
+          chatStore.selectChat({
+            type: 'group',
+            key: groups[0].id,
+            name: groups[0].name,
+          });
+        } else if (contacts.length > 0) {
+          const c = contacts[0];
+          chatStore.selectChat({
+            type: 'dm',
+            key: c.handle,
+            peer: c.handle,
+            name: `@${c.handle}`,
+          });
+        }
       }
     } else {
       // Query-Params nach Verarbeitung aus der URL entfernen (sonst öffnet
@@ -1014,11 +1036,21 @@
 {#if showLogin}
   <LoginModal onRecoveryClick={() => recoveryLoginOpen = true} />
 {:else if showApp}
-  <div class="app" class:chat-open={!!chatStore.selectedChat}>
-    <IconStrip />
-    <InboxList />
-    <ChatView />
-  </div>
+  {#if userStore.isGuest}
+    <!-- Gast-Modus: keine Sidebar/IconStrip — Gast hat per Definition
+         genau eine Konversation (Group oder DM gebunden an die Session).
+         Volles App-Layout würde den Eindruck erwecken er könne Chats wechseln,
+         Kontakte hinzufügen, Voice-Calls starten — alles aber ohne Daten/Rechte. -->
+    <div class="app guest-mode">
+      <ChatView />
+    </div>
+  {:else}
+    <div class="app" class:chat-open={!!chatStore.selectedChat}>
+      <IconStrip />
+      <InboxList />
+      <ChatView />
+    </div>
+  {/if}
 {/if}
 
 <!-- Voice-Call-Overlay (global, über allem) -->
@@ -1050,6 +1082,13 @@
     height: 100vh;
     height: 100dvh;
     overflow: hidden;
+  }
+
+  /* Gast-Modus: ChatView nimmt das ganze Viewport ein. Kein IconStrip,
+     keine InboxList — Gast hat nur eine Konversation. */
+  .app.guest-mode :global(.chat-view) {
+    flex: 1;
+    width: 100%;
   }
 
   /* Mobile: Chat-View overlay-style wenn offen */

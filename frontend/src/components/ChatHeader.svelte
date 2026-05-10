@@ -8,6 +8,7 @@
   import { voiceStore } from '../stores/voice.svelte.js';
   import { profileCache } from '../stores/profileCache.svelte.js';
   import { presenceStore } from '../stores/presence.svelte.js';
+  import { userStore } from '../stores/user.svelte.js';
   import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
   import ChatHeaderMenu from './ChatHeaderMenu.svelte';
   import GroupMembersModal from './GroupMembersModal.svelte';
@@ -96,11 +97,15 @@
 
 {#if chat}
   <header class="chat-header">
-    <button class="back-btn" onclick={onClose} title="Back" aria-label="Close chat">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M15 18l-6-6 6-6"/>
-      </svg>
-    </button>
+    {#if !userStore.isGuest}
+      <!-- Back-Button im Gast-Mode versteckt: würde sonst auf eine leere App
+           landen (kein IconStrip + kein InboxList = kein Inhalt). -->
+      <button class="back-btn" onclick={onClose} title="Back" aria-label="Close chat">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 18l-6-6 6-6"/>
+        </svg>
+      </button>
+    {/if}
 
     <div class="avatar" class:group={chat.type === 'group'}>
       {#if chat.type === 'group'}

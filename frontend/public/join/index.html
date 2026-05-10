@@ -283,8 +283,11 @@
 </div>
 
 <script type="module">
-  import lang from "/js/i18n.js";
-  import { setGuestSession, getGuestSession } from "/js/shared/guestStorage.js";
+  // Helpers liegen unter /join/lib/* (eigene Kopie der ursprünglichen Vanilla-
+  // Module — der globale /js/-Ordner wurde im Block-F-Cleanup entfernt). So
+  // bleibt die Invite-Page self-contained und vom Vanilla-Cleanup unabhängig.
+  import lang from "/join/lib/i18n.js";
+  import { setGuestSession, getGuestSession } from "/join/lib/guestStorage.js";
 
   const API = "https://api.renex.id";
   const token = new URLSearchParams(location.search).get("token");

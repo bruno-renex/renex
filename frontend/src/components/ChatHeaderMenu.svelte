@@ -22,6 +22,7 @@
   import { userStore } from '../stores/user.svelte.js';
   import { apiFetch } from '../lib/api.js';
   import InviteLinkModal from './InviteLinkModal.svelte';
+  import AddGroupMembersModal from './AddGroupMembersModal.svelte';
 
   let { chat } = $props();
 
@@ -34,6 +35,7 @@
   let busy = $state(false);
   let containerEl = $state(null);
   let showInviteLink = $state(false);
+  let showAddMembers = $state(false);
   let groupMembers = $state([]);
 
   let mute = $derived(notificationsStore.getMuteFor(chat));
@@ -149,20 +151,16 @@
   }
 
   // ── Group: Add Members ───────────────────────────────
-  async function onAddMembers() {
-    if (busy || !chat?.key) return;
-    const handle = prompt(lang.addMembersPrompt || 'Handle eingeben (z.B. anna4):');
-    if (!handle || !handle.trim()) return;
-    busy = true;
+  // Mitglieder hinzufügen → Modal mit Kontakt-Picker (Multi-Select + Suche).
+  // Field-Mismatch zum Backend (`handle` vs. `members:[]`) ist im Modal selbst korrigiert.
+  function onAddMembers() {
+    if (!chat?.key) return;
     close();
-    try {
-      const r = await apiFetch('/groups/invite', {
-        method: 'POST',
-        body: { groupId: chat.key, members: [handle.trim().toLowerCase()] },
-      });
-      if (r.ok) toastStore.push(lang.memberAdded || 'Mitglied hinzugefügt', { kind: 'success' });
-      else toastStore.push(r.error || lang.memberAddFailed || 'Hinzufügen fehlgeschlagen', { kind: 'error' });
-    } finally { busy = false; }
+    showAddMembers = true;
+  }
+  // Bridge: aus dem AddGroupMembersModal heraus auf "Per Link einladen" wechseln.
+  function openInviteLinkFromAdd() {
+    showInviteLink = true;
   }
 
   function onInviteByLink() {
@@ -447,6 +445,15 @@
   convoId={isGroup ? chat?.key : null}
   groupName={isGroup ? (chat?.name || null) : null}
 />
+
+{#if isGroup}
+  <AddGroupMembersModal
+    bind:isOpen={showAddMembers}
+    groupId={chat?.key}
+    groupName={chat?.name || ''}
+    onInviteByLink={openInviteLinkFromAdd}
+  />
+{/if}
 
 <style>
   .menu-wrap { position: relative; display: inline-block; }

@@ -234,6 +234,14 @@ export default {
   searchContactsPlaceholder: "Search contacts…",
   noContactsMatch:      "No contacts found.",
   groupCreateFailed:    "Failed to create group",
+  // ── Add-Members-Modal ──
+  addBtn:               "Add",
+  noContactsYet:        "You have no contacts yet.",
+  alreadyMemberLabel:   "Already in",
+  notInContactsHint:    "Not in your contacts?",
+  inviteByLinkBtn:      "Invite by link",
+  addMembersPartial:    "{ok} added, {fail} failed",
+  addMembersAllFailed:  "Adding failed",
   backBtn:              "Back",
 
   // ── Chat menu (3-dot slide submenus) ──────────────────

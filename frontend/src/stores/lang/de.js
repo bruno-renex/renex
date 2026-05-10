@@ -235,6 +235,14 @@ export default {
   noContactsMatch:      "Keine Kontakte gefunden.",
   groupCreateFailed:    "Gruppen-Erstellung fehlgeschlagen",
   backBtn:              "Zurück",
+  // ── Add-Members-Modal (Kontakt-Picker für bestehende Gruppe) ──
+  addBtn:               "Hinzufügen",
+  noContactsYet:        "Du hast noch keine Kontakte.",
+  alreadyMemberLabel:   "Bereits dabei",
+  notInContactsHint:    "Nicht in deinen Kontakten?",
+  inviteByLinkBtn:      "Per Link einladen",
+  addMembersPartial:    "{ok} hinzugefügt, {fail} fehlgeschlagen",
+  addMembersAllFailed:  "Hinzufügen fehlgeschlagen",
 
   // ── Chat-Menü (3-Punkte Slide-Submenüs) ───────────────
   notifications:           "Benachrichtigungen",

@@ -234,6 +234,14 @@ export default {
   searchContactsPlaceholder: "Buscar contactos…",
   noContactsMatch:      "No se encontraron contactos.",
   groupCreateFailed:    "Error al crear el grupo",
+  // ── Add-Members-Modal ──
+  addBtn:               "Añadir",
+  noContactsYet:        "Aún no tienes contactos.",
+  alreadyMemberLabel:   "Ya está dentro",
+  notInContactsHint:    "¿No está en tus contactos?",
+  inviteByLinkBtn:      "Invitar por enlace",
+  addMembersPartial:    "{ok} añadidos, {fail} fallidos",
+  addMembersAllFailed:  "Error al añadir",
   backBtn:              "Atrás",
 
   // ── Menú de chat (3 puntos, submenús deslizantes) ─────

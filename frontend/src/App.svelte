@@ -217,6 +217,44 @@
       (inboxStore.contacts || []).map(c => c.handle).filter(Boolean)
     );
 
+    // ── Badge + Tab-Title sync ──────────────────────────────────
+    // Frontend ist Source-of-Truth für unread-Counts. Reaktiver Effect
+    // updated bei jeder Änderung:
+    //   - document.title  ("(N) RENEX")
+    //   - SW-Badge        (postMessage SET_BADGE → setAppBadge / clearAppBadge)
+    //
+    // Vorher: SW inkrementierte den Badge bei jedem Push (sw.js:75 count++),
+    //   aber der Frontend-Read-State (markRead) wurde nie zurück-synchronisiert
+    //   → Badge zählte nur hoch. Tab-Title wurde nirgends gesetzt → blieb "RENEX".
+    const ORIGINAL_TITLE = document.title || 'RENEX';
+    const _stopBadgeSync = $effect.root(() => {
+      $effect(() => {
+        const total = (inboxStore.totalUnreadDms || 0) + (inboxStore.totalUnreadGroups || 0);
+        // Tab-Title: WhatsApp/Slack-Pattern "(N) AppName"
+        document.title = total > 0 ? `(${total}) ${ORIGINAL_TITLE}` : ORIGINAL_TITLE;
+        // SW-Badge: Frontend treibt den Counter, SW spiegelt nur. So bleibt
+        // der PWA-App-Icon-Badge bei jedem markRead/Chat-Open synchron.
+        if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) {
+          try {
+            navigator.serviceWorker.controller.postMessage({
+              type: 'SET_BADGE',
+              count: total,
+            });
+          } catch {}
+        }
+      });
+    });
+    _wsUnsubs.push(() => {
+      try { _stopBadgeSync(); } catch {}
+      // Auf Logout/Disconnect Title wieder neutralisieren + Badge clearen
+      document.title = ORIGINAL_TITLE;
+      if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) {
+        try {
+          navigator.serviceWorker.controller.postMessage({ type: 'SET_BADGE', count: 0 });
+        } catch {}
+      }
+    });
+
     // Push-Notification-Deep-Link: SW öffnet die PWA mit /?with=<peer> (DM)
     // oder /?group=<id> (Group). Helper extrahiert Params, öffnet Chat,
     // räumt URL auf. Wird sowohl beim Bootstrap (Cold-Open via Notification)

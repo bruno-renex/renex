@@ -19,6 +19,7 @@
   import { apiFetch } from '../lib/api.js';
   import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
   import { captureException } from '../lib/sentry.js';
+  import { memberActionsStore } from '../stores/memberActions.svelte.js';
 
   let { isOpen = $bindable(false), groupId = null, groupName = '' } = $props();
 
@@ -137,25 +138,52 @@
         <div class="gm-count">{sortedMembers.length} {lang.membersHeading || 'Mitglieder'}</div>
         <ul class="gm-list">
           {#each sortedMembers as m (m.handle)}
-            <li class="gm-item" class:is-me={m.isMe}>
-              <div class="gm-avatar" class:is-guest={m.isGuest}>
-                {getInitials(m.displayName, m.handle)}
-              </div>
-              <div class="gm-info">
-                <div class="gm-name">
-                  <span class="gm-display">{m.displayName}</span>
-                  {#if m.isMe}
-                    <span class="gm-you">({lang.youSuffix || 'Du'})</span>
+            {@const isClickable = !m.isMe && !m.isGuest}
+            <li class="gm-item-wrap">
+              {#if isClickable}
+                <button
+                  type="button"
+                  class="gm-item gm-item-clickable"
+                  onclick={() => { close(); memberActionsStore.open(m.handle); }}
+                  title={lang.openMemberActions || 'Aktionen anzeigen'}
+                >
+                  <div class="gm-avatar" class:is-guest={m.isGuest}>
+                    {getInitials(m.displayName, m.handle)}
+                  </div>
+                  <div class="gm-info">
+                    <div class="gm-name">
+                      <span class="gm-display">{m.displayName}</span>
+                    </div>
+                    <div class="gm-handle">@{m.handle}</div>
+                  </div>
+                  {#if m.role === 'admin'}
+                    <span class="gm-badge gm-badge-admin" title={lang.roleAdmin || 'Admin'}>
+                      👑 {lang.roleAdmin || 'Admin'}
+                    </span>
+                  {/if}
+                </button>
+              {:else}
+                <div class="gm-item" class:is-me={m.isMe}>
+                  <div class="gm-avatar" class:is-guest={m.isGuest}>
+                    {getInitials(m.displayName, m.handle)}
+                  </div>
+                  <div class="gm-info">
+                    <div class="gm-name">
+                      <span class="gm-display">{m.displayName}</span>
+                      {#if m.isMe}
+                        <span class="gm-you">({lang.youSuffix || 'Du'})</span>
+                      {/if}
+                    </div>
+                    {#if !m.isGuest}
+                      <div class="gm-handle">@{m.handle}</div>
+                    {/if}
+                  </div>
+                  {#if m.role === 'admin'}
+                    <span class="gm-badge gm-badge-admin" title={lang.roleAdmin || 'Admin'}>
+                      👑 {lang.roleAdmin || 'Admin'}
+                    </span>
                   {/if}
                 </div>
-                {#if !m.isGuest}
-                  <div class="gm-handle">@{m.handle}</div>
-                {/if}
-              </div>
-              {#if m.role === 'admin'}
-                <span class="gm-badge gm-badge-admin" title={lang.roleAdmin || 'Admin'}>
-                  👑 {lang.roleAdmin || 'Admin'}
-                </span>
               {/if}
             </li>
           {/each}
@@ -255,6 +283,7 @@
     gap: 6px;
   }
 
+  .gm-item-wrap { list-style: none; }
   .gm-item {
     display: flex;
     align-items: center;
@@ -263,10 +292,27 @@
     background: var(--bg-panel-alt);
     border: 1px solid var(--border-subtle);
     border-radius: 10px;
+    width: 100%;
+    box-sizing: border-box;
   }
   .gm-item.is-me {
     border-color: var(--accent-voice);
     background: var(--accent-voice-dim);
+  }
+  .gm-item-clickable {
+    cursor: pointer;
+    text-align: left;
+    color: var(--text-primary);
+    font: inherit;
+    transition: all 0.12s;
+  }
+  .gm-item-clickable:hover {
+    border-color: var(--accent-voice);
+    background: var(--bg-panel);
+  }
+  .gm-item-clickable:focus-visible {
+    outline: 2px solid var(--accent-voice);
+    outline-offset: 1px;
   }
 
   .gm-avatar {

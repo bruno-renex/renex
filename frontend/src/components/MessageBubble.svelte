@@ -27,7 +27,12 @@
   import { profileCache } from '../stores/profileCache.svelte.js';
   import AttachmentView from './AttachmentView.svelte';
 
-  let { message, showSender = false, onReply = null, onEdit = null, onDelete = null, onReact = null, onJumpTo = null, myHandle = null } = $props();
+  let { message, showSender = false, onReply = null, onEdit = null, onDelete = null, onReact = null, onJumpTo = null, onSenderClick = null, myHandle = null } = $props();
+
+  function handleSenderClick(e) {
+    e.stopPropagation();
+    if (onSenderClick && message.from) onSenderClick(message.from);
+  }
 
   function handleReplyPreviewClick(e) {
     e.stopPropagation();
@@ -237,7 +242,17 @@
   {/if}
   <div class="bubble" class:me={message.isMe} class:tampered={message.verified === false} data-msg-id={message.id}>
     {#if showSender && !message.isMe}
-      <div class="sender">{senderName}</div>
+      {#if onSenderClick}
+        <button
+          type="button"
+          class="sender sender-clickable"
+          onclick={handleSenderClick}
+          title={senderName}
+          aria-label="Aktionen für {senderName}"
+        >{senderName}</button>
+      {:else}
+        <div class="sender">{senderName}</div>
+      {/if}
     {/if}
 
     {#if message.replyTo}
@@ -562,6 +577,23 @@
     font-weight: 700;
     color: var(--accent-voice);
     margin-bottom: 4px;
+  }
+  .sender-clickable {
+    background: none;
+    border: none;
+    padding: 1px 4px;
+    margin: 0 0 4px -4px;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    color: var(--accent-voice);
+    text-align: left;
+    transition: background 0.12s;
+  }
+  .sender-clickable:hover { background: rgba(56, 189, 248, 0.15); }
+  .sender-clickable:focus-visible {
+    outline: 2px solid var(--accent-voice);
+    outline-offset: 1px;
   }
 
   .reply-preview {

@@ -8,6 +8,7 @@
   import { userStore } from '../stores/user.svelte.js';
   import { autoDeleteStore, autoDeleteLabel } from '../stores/autoDelete.svelte.js';
   import { toastStore } from '../stores/toast.svelte.js';
+  import { memberActionsStore } from '../stores/memberActions.svelte.js';
   import ChatHeader from './ChatHeader.svelte';
   import MessageBubble from './MessageBubble.svelte';
   import ChatInput from './ChatInput.svelte';
@@ -195,6 +196,9 @@
               onDelete={(m) => handleDelete(m)}
               onReact={(m, e) => handleReact(m, e)}
               onJumpTo={handleJumpTo}
+              onSenderClick={chat.type === "group"
+                ? (handle) => memberActionsStore.open(handle)
+                : null}
             />
           {/if}
         {/each}

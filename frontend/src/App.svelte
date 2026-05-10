@@ -49,6 +49,7 @@
   import RecoveryVerifyModal from './components/RecoveryVerifyModal.svelte';
   import RecoveryLoginModal from './components/RecoveryLoginModal.svelte';
   import DeviceLimitModal from './components/DeviceLimitModal.svelte';
+  import MemberActionsModal from './components/MemberActionsModal.svelte';
   import PwaInstallBanner from './components/PwaInstallBanner.svelte';
   import ToastContainer from './components/ToastContainer.svelte';
   import { bumpLoginCount } from './lib/pwaInstall.js';
@@ -984,6 +985,9 @@
 
 <!-- Device-Limit-Modal: 5 Geräte erreicht -->
 <DeviceLimitModal bind:info={deviceLimitInfo} />
+
+<!-- Member-Actions-Modal: globaler Action-Sheet bei Klick auf Group-Sender / Group-Member -->
+<MemberActionsModal />
 
 <!-- PWA-Install-Banner: Smart Banner + iOS/Safari-Anleitung. Trigger via Profile-Menü. -->
 <PwaInstallBanner />

@@ -61,6 +61,14 @@ export default {
   voiceMitmFp:          "🚨 Alerta de seguridad: cifrado de audio comprometido (huella no coincide). Llamada cancelada.",
   voiceMitmSig:         "🚨 Alerta de seguridad: firma del llamante no válida. Llamada cancelada.",
   connectionDegraded:   "Conexión inestable…",
+  voiceErrorNoCmk:      "Falta la clave de cifrado con este contacto. Envía primero un mensaje de texto y vuelve a intentarlo.",
+  voiceErrorBusy:       "El destinatario está actualmente en otra llamada.",
+  voiceErrorSignaling:  "Falló la conexión con el servidor. Inténtalo de nuevo.",
+  voiceErrorIce:        "No se pudo establecer la conexión de audio (red/cortafuegos).",
+  voiceErrorIncompat:   "El otro dispositivo usa una versión incompatible de la app.",
+  voiceErrorPermission: "Falta el permiso del micrófono. Permítelo en los ajustes del navegador.",
+  voiceErrorNoMic:      "No se encontró micrófono.",
+  voiceErrorMicBusy:    "El micrófono está siendo usado por otra aplicación.",
 
   // ── Grupos ───────────────────────────────────────────
   groupNamePlaceholder: "Nombre del grupo",

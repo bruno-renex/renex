@@ -22,7 +22,10 @@ import { apiFetch } from '../lib/api.js';
 import { captureException } from './../lib/sentry.js';
 
 const POLL_MS = 30_000;
-const ONLINE_GRACE_MS = 90_000;  // wenn ts < now - 90s → als offline werten (KV-TTL ist 5min, wir wollen schneller)
+// Frontend-Heartbeat pingt alle 25s → Backend refresht presence-KV bei jedem ping.
+// 120s deckt komfortabel ~5 Ping-Cycles ab (verträgt 1-2 verpasste Pings ohne Flackern).
+// KV-TTL ist 5min, also auch eine sichere Untergrenze gegen falsche "online"-Anzeigen.
+const ONLINE_GRACE_MS = 120_000;
 
 // _status[handle] = { online: bool, ts?, lastSeen? }
 let _status = $state({});

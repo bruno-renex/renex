@@ -395,6 +395,11 @@ export class UserSessionDO {
       const m = typeof message === "string" ? JSON.parse(message) : null;
       if (m?.type === "ping") {
         ws.send(JSON.stringify({ type: "pong", ts: m.ts || Date.now() }));
+        // KV-Presence refreshen — sonst läuft TTL (5min) ab und der User
+        // erscheint fälschlich als offline obwohl WS aktiv ist. Frontend
+        // pingt alle 25s → bleibt komfortabel innerhalb der TTL.
+        // Fire-and-forget: pong nicht durch KV-Latenz blockieren.
+        void this._setOnline().catch(() => {});
       }
     } catch {}
   }

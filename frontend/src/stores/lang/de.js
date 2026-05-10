@@ -61,6 +61,14 @@ export default {
   voiceMitmFp:          "🚨 Sicherheitswarnung: Audio-Verschlüsselung kompromittiert (Fingerprint-Mismatch). Anruf wurde abgebrochen.",
   voiceMitmSig:         "🚨 Sicherheitswarnung: Anrufer-Signatur ungültig. Anruf wurde abgebrochen.",
   connectionDegraded:   "Verbindung schwach…",
+  voiceErrorNoCmk:      "Verschlüsselungsschlüssel mit diesem Kontakt fehlt. Sende erst eine Textnachricht und versuche es danach erneut.",
+  voiceErrorBusy:       "Der Empfänger ist gerade in einem anderen Anruf.",
+  voiceErrorSignaling:  "Verbindung zum Server fehlgeschlagen. Bitte erneut versuchen.",
+  voiceErrorIce:        "Audio-Verbindung konnte nicht aufgebaut werden (Netzwerk/Firewall).",
+  voiceErrorIncompat:   "Das andere Gerät verwendet eine inkompatible App-Version.",
+  voiceErrorPermission: "Mikrofon-Berechtigung fehlt. Bitte in den Browser-Einstellungen erlauben.",
+  voiceErrorNoMic:      "Kein Mikrofon gefunden.",
+  voiceErrorMicBusy:    "Mikrofon wird von einer anderen App benutzt.",
 
   // ── Gruppen ──────────────────────────────────────────
   groupNamePlaceholder: "Gruppenname",

@@ -61,6 +61,14 @@ export default {
   voiceMitmFp:          "🚨 Security alert: audio encryption compromised (fingerprint mismatch). Call aborted.",
   voiceMitmSig:         "🚨 Security alert: caller signature invalid. Call aborted.",
   connectionDegraded:   "Connection unstable…",
+  voiceErrorNoCmk:      "Encryption key with this contact is missing. Send a text message first, then try again.",
+  voiceErrorBusy:       "The recipient is currently in another call.",
+  voiceErrorSignaling:  "Connection to the server failed. Please try again.",
+  voiceErrorIce:        "Could not establish audio connection (network/firewall).",
+  voiceErrorIncompat:   "The other device is running an incompatible app version.",
+  voiceErrorPermission: "Microphone permission is missing. Please allow it in your browser settings.",
+  voiceErrorNoMic:      "No microphone found.",
+  voiceErrorMicBusy:    "Microphone is in use by another app.",
 
   // ── Groups ───────────────────────────────────────────
   groupNamePlaceholder: "Group name",

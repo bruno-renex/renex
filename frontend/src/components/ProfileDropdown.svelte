@@ -19,6 +19,7 @@
   import { sessionStore } from '../stores/session.svelte.js';
   import DisplayNameModal from './DisplayNameModal.svelte';
   import PasskeysModal from './PasskeysModal.svelte';
+  import DeleteAccountModal from './DeleteAccountModal.svelte';
   import SettingsDevicesPanel from './SettingsDevicesPanel.svelte';
   import DebugOverlay from './DebugOverlay.svelte';
   import { isStandalone, requestInstallPrompt } from '../lib/pwaInstall.js';
@@ -28,6 +29,7 @@
   // Modal-States (lifted up — die Modals selbst werden hier gerendert)
   let showDisplayNameModal = $state(false);
   let showPasskeysModal = $state(false);
+  let showDeleteAccountModal = $state(false);
   let showDevicesModal = $state(false);
   let showDebugOverlay = $state(false);
   let myUser = $derived(userStore.myUser);
@@ -152,7 +154,7 @@
           <button
             type="button"
             class="dropdown-item logout"
-            onclick={() => notImplemented(lang.deleteAccount || "Account löschen")}
+            onclick={() => { showDeleteAccountModal = true; close(); }}
           >
             {lang.deleteAccount || "Account löschen"}
           </button>
@@ -285,6 +287,7 @@
 <PasskeysModal bind:isOpen={showPasskeysModal} />
 <SettingsDevicesPanel bind:isOpen={showDevicesModal} />
 <DebugOverlay bind:isOpen={showDebugOverlay} />
+<DeleteAccountModal bind:isOpen={showDeleteAccountModal} />
 
 <style>
   .profile-wrapper {

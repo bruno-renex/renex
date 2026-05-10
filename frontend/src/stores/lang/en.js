@@ -333,6 +333,14 @@ export default {
   deleteAccountPlaceholder:   "Your username",
   cancelBtn:                  "Cancel",
   deleteAccountConfirmBtn:    "Delete account",
+  deleteAccountFailed:        "Deletion failed",
+  daWipeMessages:             "All messages + attachments",
+  daWipeContacts:             "All contacts (other side sees „Account deleted\")",
+  daWipeGroups:                "You'll be removed from all groups",
+  daWipeDevices:              "All devices logged out immediately",
+  daWipePasskeys:             "All passkeys",
+  daWipeBackup:               "Recovery backup on the server",
+  daHandleLocked:             "Username locked for 300 days",
 
   // ── Footer ───────────────────────────────────────────
   footerImprint:              "Imprint",

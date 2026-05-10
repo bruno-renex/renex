@@ -1,5 +1,5 @@
 import { json, readJson, base64url, base64urlToString, base64urlToArrayBuffer, decodeCBOR, corsHeaders } from '../utils.js';
-import { requireSession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions, verifyTurnstile } from '../auth.js';
+import { requireSession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions, verifyTurnstile, pushToGroupMembers } from '../auth.js';
 import { handleLoginFinish } from '../helpers/loginFinish.js';
 import { readCredentials, writeCredentials, MAX_PASSKEYS } from '../helpers/credentials.js';
 
@@ -623,10 +623,113 @@ export async function handleAuthRoutes(request, env, path, params) {
           { expirationTtl: 300 * 24 * 60 * 60 }
         );
 
-        // 7. Nachrichten in D1 löschen
+        // 7a. R2-Attachments aller eigenen Messages löschen — DSGVO Art. 17.
+        // Aus dem messages-Insert-Pfad: r2Key-Format ist `files/{convoId}/{uuid}`,
+        // bei GIFs ist attachment_key NULL bzw. attachment_type='gif' → skip
+        // (GIPHY-URLs sind kein eigener Speicher).
+        if (env.RENEX_FILES) {
+          const attachRows = await env.RENEX_DB.prepare(
+            `SELECT attachment_key FROM messages
+             WHERE (from_user = ? OR to_user = ?)
+               AND attachment_key IS NOT NULL
+               AND (attachment_type IS NULL OR attachment_type != 'gif')`
+          ).bind(handle, handle).all();
+          const keys = (attachRows.results || [])
+            .map(r => r.attachment_key)
+            .filter(Boolean);
+          // Parallele R2-Deletes mit Concurrency-Cap (Worker hat ein Subrequest-Limit)
+          const CONC = 10;
+          for (let i = 0; i < keys.length; i += CONC) {
+            await Promise.allSettled(
+              keys.slice(i, i + CONC).map(k => env.RENEX_FILES.delete(k).catch(() => {}))
+            );
+          }
+        }
+
+        // 7b. Group-Memberships aufräumen mit Admin-Nachfolge.
+        // Pattern recycled aus /groups/leave (groupRoutes.js:300).
+        const memberOfRows = await env.RENEX_DB.prepare(
+          `SELECT cm.convo_id, cm.role, c.type
+             FROM conversation_members cm
+             JOIN conversations c ON c.id = cm.convo_id
+            WHERE cm.member_handle = ? AND c.type = 'group'`
+        ).bind(handle).all();
+        for (const row of (memberOfRows.results || [])) {
+          const groupId = row.convo_id;
+          // Member entfernen
+          await env.RENEX_DB.prepare(
+            "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+          ).bind(groupId, handle).run();
+          env.RENEX_KV.delete(`grp_members:${groupId}`).catch(() => {});
+
+          // War User Admin? → ältesten verbleibenden Member promoten
+          if (row.role === "admin") {
+            const otherAdmin = await env.RENEX_DB.prepare(
+              "SELECT 1 FROM conversation_members WHERE convo_id = ? AND role = 'admin' LIMIT 1"
+            ).bind(groupId).first();
+            if (!otherAdmin) {
+              const successor = await env.RENEX_DB.prepare(
+                "SELECT member_handle FROM conversation_members WHERE convo_id = ? ORDER BY joined_at ASC LIMIT 1"
+              ).bind(groupId).first();
+              if (successor) {
+                await env.RENEX_DB.prepare(
+                  "UPDATE conversation_members SET role = 'admin' WHERE convo_id = ? AND member_handle = ?"
+                ).bind(groupId, successor.member_handle).run();
+              }
+            }
+          }
+
+          // Verbleibenden Members signalisieren — group_member_left mit reason
+          await pushToGroupMembers(env, env.RENEX_DB, groupId, null, {
+            id: crypto.randomUUID(),
+            type: "group_member_left",
+            groupId,
+            handle,
+            reason: "account_deleted",
+            ts: Date.now(),
+          }, { bypassCache: true }).catch(() => {});
+
+          // Wenn letzter Member weg → ganze Gruppe löschen (inkl. Settings)
+          const remaining = await env.RENEX_DB.prepare(
+            "SELECT COUNT(*) as c FROM conversation_members WHERE convo_id = ?"
+          ).bind(groupId).first();
+          if ((remaining?.c ?? 0) === 0) {
+            await env.RENEX_DB.prepare("DELETE FROM conversations WHERE id = ?").bind(groupId).run();
+            await env.RENEX_DB.prepare("DELETE FROM auto_delete_settings WHERE convo_id = ?").bind(groupId).run();
+          }
+        }
+
+        // 7c. Nachrichten in D1 löschen (jetzt sind R2-Files schon weg)
         await env.RENEX_DB.prepare(
           "DELETE FROM messages WHERE from_user = ? OR to_user = ?"
         ).bind(handle, handle).run();
+
+        // 7d. Devices
+        await env.RENEX_DB.prepare(
+          "DELETE FROM devices WHERE user_handle = ?"
+        ).bind(handle).run();
+
+        // 7e. Push-Subscriptions (alle Browser/Geräte)
+        await env.RENEX_DB.prepare(
+          "DELETE FROM push_subscriptions WHERE user_handle = ?"
+        ).bind(handle).run();
+
+        // 7f. Notification-Mutes
+        await env.RENEX_DB.prepare(
+          "DELETE FROM notification_mutes WHERE user_handle = ?"
+        ).bind(handle).run();
+
+        // 7g. Call-Log
+        await env.RENEX_DB.prepare(
+          "DELETE FROM call_log WHERE caller = ? OR callee = ?"
+        ).bind(handle, handle).run();
+
+        // 7h. Auto-Delete-Settings für DM-Konvos mit diesem User entfernen
+        // (DM-convo_id Format = "alice:bob" alphabetisch sortiert).
+        await env.RENEX_DB.prepare(
+          `DELETE FROM auto_delete_settings
+           WHERE convo_id LIKE ? OR convo_id LIKE ? OR proposed_by = ?`
+        ).bind(`${handle}:%`, `%:${handle}`, handle).run();
 
         // 8. Eigene Kontaktzeilen löschen, Gegenseite auf account_deleted setzen
         await env.RENEX_DB.prepare(

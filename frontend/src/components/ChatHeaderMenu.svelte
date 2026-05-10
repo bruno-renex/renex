@@ -205,7 +205,16 @@
     try {
       const r = await apiFetch(`/groups/members?groupId=${encodeURIComponent(chat.key)}`);
       if (r.ok && Array.isArray(r.data?.members)) {
-        groupMembers = r.data.members.filter(m => m.handle !== me);
+        // Backend liefert { member_handle, role, joined_at } (snake_case).
+        // Auf { handle, role, joinedAt } mappen, damit das Render-Markup
+        // (m.handle) greift. Eigenen User ausfiltern (kann sich nicht selbst kicken).
+        groupMembers = r.data.members
+          .map(m => ({
+            handle:   m.member_handle,
+            role:     m.role,
+            joinedAt: m.joined_at,
+          }))
+          .filter(m => m.handle && m.handle !== me);
       }
     } catch {}
   }

@@ -130,10 +130,13 @@
         </ol>
       {:else if strategy === 'macos-safari'}
         <ol class="pwa-steps">
-          <li>{lang.pwaMacStep1 || 'Öffne in Safari das Menü „Datei".'}</li>
+          <li>{lang.pwaMacStep1 || 'Öffne in Safari das Menü „Ablage".'}</li>
           <li>{lang.pwaMacStep2 || 'Wähle „Zum Dock hinzufügen…"'}</li>
           <li>{lang.pwaMacStep3 || 'Bestätige im Dialog.'}</li>
         </ol>
+        <p class="pwa-fallback pwa-hint-small">
+          {lang.pwaMacRequirementHint || 'Erfordert Safari 17 oder neuer (macOS Sonoma+).'}
+        </p>
       {:else}
         <p class="pwa-fallback">{lang.pwaUnsupportedHint || 'Dein Browser unterstützt keine direkte Installation. Versuche es in Chrome, Edge oder Safari.'}</p>
       {/if}
@@ -266,6 +269,11 @@
     font-size: 13px;
     line-height: 1.5;
     margin: 0;
+  }
+  .pwa-hint-small {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 10px;
   }
 
   .pwa-modal-footer {

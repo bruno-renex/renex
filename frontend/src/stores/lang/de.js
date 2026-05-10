@@ -173,9 +173,10 @@ export default {
   pwaIosStep1:             "Tippe auf das Teilen-Symbol unten in Safari",
   pwaIosStep2:             'Wähle „Zum Home-Bildschirm" aus dem Menü.',
   pwaIosStep3:             'Bestätige mit „Hinzufügen" oben rechts.',
-  pwaMacStep1:             'Öffne in Safari das Menü „Datei".',
+  pwaMacStep1:             'Öffne in Safari das Menü „Ablage".',
   pwaMacStep2:             'Wähle „Zum Dock hinzufügen…"',
   pwaMacStep3:             "Bestätige im Dialog.",
+  pwaMacRequirementHint:   "Erfordert Safari 17 oder neuer (macOS Sonoma+).",
   pwaUnsupportedHint:      "Dein Browser unterstützt keine direkte Installation. Versuche es in Chrome, Edge oder Safari.",
 
   // ── Landing Marketing ──────────────────────────────

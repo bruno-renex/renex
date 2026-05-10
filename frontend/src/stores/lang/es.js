@@ -176,6 +176,7 @@ export default {
   pwaMacStep1:             "En Safari, abre el menú \"Archivo\".",
   pwaMacStep2:             "Elige \"Añadir al Dock…\"",
   pwaMacStep3:             "Confirma en el diálogo.",
+  pwaMacRequirementHint:   "Requiere Safari 17 o más reciente (macOS Sonoma+).",
   pwaUnsupportedHint:      "Tu navegador no permite la instalación directa. Prueba Chrome, Edge o Safari.",
 
   // ── Landing Marketing ──────────────────────────────

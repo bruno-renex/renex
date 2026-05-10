@@ -226,7 +226,9 @@
     try {
       const r = await apiFetch('/groups/remove', {
         method: 'POST',
-        body: { groupId: chat.key, member: handle },
+        // Backend liest body.handle (nicht .member). Field-Mismatch war der
+        // gleiche Bug wie schon /groups/invite — siehe groupRoutes.js:526.
+        body: { groupId: chat.key, handle },
       });
       if (r.ok) {
         toastStore.push(lang.memberRemoved || 'Mitglied entfernt', { kind: 'success' });

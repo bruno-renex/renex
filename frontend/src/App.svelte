@@ -44,6 +44,7 @@
   import IconStrip from './components/IconStrip.svelte';
   import InboxList from './components/InboxList.svelte';
   import ChatView from './components/ChatView.svelte';
+  import GuestBanner from './components/GuestBanner.svelte';
   import VoiceCallOverlay from './components/VoiceCallOverlay.svelte';
   import RecoveryOnboardingModal from './components/RecoveryOnboardingModal.svelte';
   import RecoveryVerifyModal from './components/RecoveryVerifyModal.svelte';
@@ -73,9 +74,26 @@
     };
   }
 
+  // ── Guest-Register-Flow ───────────────────────────────────
+  // Gast klickt "Account erstellen" im GuestBanner → Redirect zu /?registerGuest=1.
+  // Wir wollen dann das LoginModal anzeigen (für Passkey-Create), auch wenn die
+  // Gast-Session noch aktiv ist. Nach erfolgreichem Register kickt der $effect
+  // unten den performGuestConvert.
+  let wantsRegisterAsGuest = $state(
+    typeof location !== 'undefined' &&
+    new URLSearchParams(location.search).get('registerGuest') === '1'
+  );
+
   // Show/hide logic
-  let showApp     = $derived(!!myUser && (sessionState === 'authed' || sessionState === 'guest' || sessionState === 'checking' || sessionState === 'idle'));
-  let showLogin   = $derived(!myUser && (sessionState === 'anonymous' || sessionState === 'idle' || sessionState === 'checking'));
+  let showApp     = $derived(
+    !!myUser &&
+    (sessionState === 'authed' || sessionState === 'guest' || sessionState === 'checking' || sessionState === 'idle') &&
+    !(userStore.isGuest && wantsRegisterAsGuest)  // Force-Login statt Guest-UI
+  );
+  let showLogin   = $derived(
+    (!myUser && (sessionState === 'anonymous' || sessionState === 'idle' || sessionState === 'checking')) ||
+    (userStore.isGuest && wantsRegisterAsGuest)   // Gast will Account erstellen
+  );
 
   // ── Recovery-State (Spec: docs/RECOVERY.md §5, §6) ──
   let recoveryNeedsOnboarding = $state(false);
@@ -87,6 +105,64 @@
   // nach erfolgreicher Passkey-Auth NICHT unmountet wird (LoginModal verschwindet
   // sobald myUser gesetzt → sonst würde Step 2 (Phrase) nie sichtbar).
   let recoveryLoginOpen = $state(false);
+
+  // ── Guest-Register Post-Login Convert ─────────────────
+  // Nach erfolgreichem Passkey-Register (Gast → Echter Account) ist die
+  // Session AUTHED. Jetzt erst kann /invite/convert aufgerufen werden
+  // (requireSession-Endpoint), um die Migration der Group-/DM-/Contact-
+  // Daten von guest_xxx → realHandle zu starten.
+  // Trigger: sessionState wechselt zu 'authed' UND pendingGuestConvert
+  // ist in sessionStorage (vom GuestBanner-Klick gesetzt).
+  let _convertAttempted = false;
+  $effect(() => {
+    if (
+      sessionState === 'authed' &&
+      !_convertAttempted &&
+      readPendingGuestConvert()
+    ) {
+      _convertAttempted = true;
+      void (async () => {
+        try {
+          console.log('🔁 Post-Register: /invite/convert wird aufgerufen');
+          const conv = await performGuestConvert();
+          if (conv.ok) {
+            toastStore.push(
+              i18nStore.lang.convertSuccess || 'Gast-Konto übernommen ✓',
+              { kind: 'success' }
+            );
+            wantsRegisterAsGuest = false;
+            // URL aufräumen
+            try {
+              const url = new URL(location.href);
+              url.searchParams.delete('registerGuest');
+              history.replaceState({}, '', url.toString());
+            } catch {}
+            // Inbox neu laden, sonst fehlt der frisch-migrierte Inviter/Group
+            await Promise.allSettled([
+              inboxStore.loadContacts(),
+              inboxStore.loadGroups(),
+            ]);
+            // Den frisch-migrierten Chat öffnen
+            if (conv.convoType === 'group' && conv.convoId) {
+              chatStore.selectChat({ type: 'group', key: conv.convoId, name: 'Group' });
+            } else if (conv.inviterHandle) {
+              chatStore.selectChat({
+                type: 'dm',
+                key: conv.inviterHandle,
+                peer: conv.inviterHandle,
+                name: `@${conv.inviterHandle}`,
+              });
+            }
+          } else {
+            console.warn('⚠️ Post-Register-Convert fehlgeschlagen:', conv.error);
+            toastStore.push(conv.error || 'Convert fehlgeschlagen', { kind: 'error' });
+          }
+        } catch (e) {
+          captureException(e, { context: 'postRegisterGuestConvert' });
+        }
+      })();
+    }
+  });
 
   // ── WebSocket + Initial Data Loads (when authenticated) ──
   let _bootstrapped = $state(false);
@@ -126,7 +202,13 @@
     // (Backend hat Migration noch nicht durchgeführt). Convert-API blockiert
     // nicht — bei Fehler läuft Bootstrap wie ein normaler frischer User.
     let convertedInviter = null;
-    if (isGuestConvertPending()) {
+    // Skip performGuestConvert solange Session noch Gast ist — /invite/convert
+    // braucht eine ECHTE Session (requireSession). Bei einem Klick auf "Account
+    // erstellen" im GuestBanner landet der User mit ?registerGuest=1 hier
+    // BEVOR er den Passkey-Register-Flow durchlaufen hat. Der eigentliche
+    // Convert läuft dann via $effect (siehe unten) nach Session-Wechsel
+    // guest → authed.
+    if (isGuestConvertPending() && !userStore.isGuest) {
       console.log('🔁 Guest-Convert pending → /invite/convert wird aufgerufen');
       // Pending VOR performGuestConvert lesen — der Call clearPendingGuestConvert intern.
       const pendingPre = readPendingGuestConvert();
@@ -200,13 +282,15 @@
       }
     } catch {}
 
-    // Initial Data parallel laden (Errors silent — App-Boot darf nicht blockieren)
+    // Initial Data parallel laden (Errors silent — App-Boot darf nicht blockieren).
+    // Gäste: voiceStore + notificationsStore skippen (Voice-Calls + Notifications-
+    // Settings sind by-design nur für echte Sessions, sonst 401-Cascade).
+    const isGuestBoot = userStore.isGuest;
     await Promise.allSettled([
       inboxStore.loadContacts(),
       inboxStore.loadGroups(),
       inboxStore.loadUnread(),
-      voiceStore.loadHistory(),
-      notificationsStore.load(),
+      ...(isGuestBoot ? [] : [voiceStore.loadHistory(), notificationsStore.load()]),
     ]);
 
     // Presence-Polling starten — Backend hat KEINEN WS-Broadcast bei
@@ -597,9 +681,15 @@
       if (!me || !groupId || !leaver) return;
       chatStore.invalidateGroupMembers(groupId);
 
-      // Wenn ICH der Leaver bin: alle GSKs für diese Gruppe lokal löschen.
+      // Wenn ICH der Leaver bin (z.B. anderer Admin hat mich gekickt, oder
+      // ein anderes Device hat /groups/leave gerufen): GSKs droppen + Group
+      // aus der Inbox entfernen + ggf. aktuelle Chat-View deselektieren.
       if (leaver === me) {
         void deleteAllGSKsForGroup(groupId);
+        inboxStore.removeGroup(groupId);
+        if (chatStore.selectedChat?.type === 'group' && chatStore.selectedChat?.key === groupId) {
+          chatStore.selectChat(null);
+        }
         return;
       }
 
@@ -965,23 +1055,28 @@
     })();
     document.addEventListener('visibilitychange', _onVisibilityChange);
 
-    // Recovery-Status check (Spec: RECOVERY.md §5, §6)
-    // - hasSalt=false → Onboarding-Modal (Initial-Setup oder Migration für Existing-User)
-    // - hasSalt=true && verified=false → Verify-Modal (2. Login)
-    // - sonst: kein Modal, App lädt normal
-    void _checkRecovery();
+    // Recovery-Pfade sind für Gäste irrelevant (keine Phrase, kein Bundle, keine
+    // dauerhafte Identität). Sonst 401-Cascade auf /e2e/recovery/status + /bundle.
+    if (!userStore.isGuest) {
+      // Recovery-Status check (Spec: RECOVERY.md §5, §6)
+      // - hasSalt=false → Onboarding-Modal (Initial-Setup oder Migration für Existing-User)
+      // - hasSalt=true && verified=false → Verify-Modal (2. Login)
+      // - sonst: kein Modal, App lädt normal
+      void _checkRecovery();
 
-    // Bundle-Restore (Spec: RECOVERY.md §13)
-    // - Wenn cached masterKey existiert + Bundle in R2 vorhanden:
-    //   alle CMKs aus Bundle in IDB importieren (no-op wenn bereits da).
-    // - Schützt gegen den Fall: Tab/Browser-State teilweise verloren,
-    //   aber masterKey-Cache überlebte → CMKs auto-restoren statt cmk_req-Loop.
-    void bootstrapBundleRestore();
+      // Bundle-Restore (Spec: RECOVERY.md §13)
+      // - Wenn cached masterKey existiert + Bundle in R2 vorhanden:
+      //   alle CMKs aus Bundle in IDB importieren (no-op wenn bereits da).
+      // - Schützt gegen den Fall: Tab/Browser-State teilweise verloren,
+      //   aber masterKey-Cache überlebte → CMKs auto-restoren statt cmk_req-Loop.
+      void bootstrapBundleRestore();
+    }
 
     // Recovery-Prompt-Hint: Inkognito/neuer-Browser-Fall — Bundle existiert in R2,
     // aber masterKey nicht im Cache. User würde sonst nur 🔐-Messages sehen ohne
     // zu wissen wie er die freischalten kann. Toast zeigt klickbaren Hint.
-    void (async () => {
+    // Gäste: skip — sie haben keine Phrase/Bundle.
+    if (!userStore.isGuest) void (async () => {
       const needsPrompt = await checkRecoveryPromptNeeded();
       if (needsPrompt) {
         const text = i18nStore.lang.recoveryPromptToast || '🔐 Chat-History wiederherstellen — Phrase eingeben';
@@ -1040,8 +1135,10 @@
     <!-- Gast-Modus: keine Sidebar/IconStrip — Gast hat per Definition
          genau eine Konversation (Group oder DM gebunden an die Session).
          Volles App-Layout würde den Eindruck erwecken er könne Chats wechseln,
-         Kontakte hinzufügen, Voice-Calls starten — alles aber ohne Daten/Rechte. -->
+         Kontakte hinzufügen, Voice-Calls starten — alles aber ohne Daten/Rechte.
+         GuestBanner oben zeigt Session-Countdown, msgs-left, Account-erstellen-CTA. -->
     <div class="app guest-mode">
+      <GuestBanner />
       <ChatView />
     </div>
   {:else}
@@ -1084,20 +1181,26 @@
     overflow: hidden;
   }
 
-  /* Gast-Modus: ChatView nimmt das ganze Viewport ein. Kein IconStrip,
+  /* Gast-Modus: GuestBanner oben, ChatView nimmt den Rest. Kein IconStrip,
      keine InboxList — Gast hat nur eine Konversation. */
+  .app.guest-mode {
+    flex-direction: column;
+  }
   .app.guest-mode :global(.chat-view) {
     flex: 1;
     width: 100%;
+    min-height: 0;
   }
 
-  /* Mobile: Chat-View overlay-style wenn offen */
+  /* Mobile: Chat-View overlay-style wenn offen.
+     Gast-Modus ausgenommen: dort gibt's nur ChatView, kein InboxList — also
+     immer sichtbar (sonst würde der Gast eine leere Page sehen, ohne Input). */
   @media (max-width: 768px) {
     .app.chat-open :global(.panel-list),
     .app.chat-open :global(.icon-strip) {
       display: none;
     }
-    .app:not(.chat-open) :global(.chat-view) {
+    .app:not(.chat-open):not(.guest-mode) :global(.chat-view) {
       display: none;
     }
   }

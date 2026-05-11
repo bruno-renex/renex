@@ -417,6 +417,12 @@ export const chatStore = {
         // Inbox-Liste live aktualisieren — Sidebar zeigt sofort die letzte Nachricht
         // statt „No chat yet" bis zum nächsten Reload.
         inboxStore.bumpActivity(_selectedChat.key, trimmed, serverMsg.ts || Date.now());
+        // Guest-Counter: GuestBanner hört auf dieses Event und inkrementiert
+        // msgCount optimistic + pingt nach 1.5s frisch das Backend. Vorher
+        // sah der Gast den Counter erst nach dem 30s/60s-Polling-Tick.
+        if (userStore.isGuest && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('renex:guest-message-sent'));
+        }
       } else {
         _messages = _messages.map(m =>
           m.id === tempId ? { ...m, status: "failed" } : m

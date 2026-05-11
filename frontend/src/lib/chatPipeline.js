@@ -186,11 +186,21 @@ async function tryFetchAndUnwrapCMK(fromHandle, opts = {}) {
  * Prüft ob es schon Chat-Historie zwischen me + peer gibt.
  * Wenn ja → CMK existiert irgendwo (auf älterem Device oder propagiert grad in KV).
  * Verhindert dann das Erstellen einer NEUEN CMK (würde divergente Sessions schaffen).
+ *
+ * WICHTIG: System-Messages (type='system', z.B. "👤 guest_xxx joined the chat"
+ * vom /invite/join-Handler) zählen NICHT als echte Chat-Historie — sie sind
+ * Backend-generierte Marker, kein Hinweis auf eine existierende CMK. Wenn wir
+ * sie als Historie zählen würden, blockiert das die Initial-CMK-Erstellung
+ * beim ersten Send eines Gasts (Konversation wird permanent kaputt).
+ * Limit auf 5 erhöht damit die ersten paar System-Messages ggfs. übersprungen
+ * werden können bevor wir auf "keine echte Historie" entscheiden.
  */
 async function hasChatHistory(peerHandle) {
   try {
-    const r = await apiFetch(`/chat/list?with=${encodeURIComponent(peerHandle)}&limit=1`);
-    return r.ok && Array.isArray(r.data?.messages) && r.data.messages.length > 0;
+    const r = await apiFetch(`/chat/list?with=${encodeURIComponent(peerHandle)}&limit=5`);
+    if (!r.ok || !Array.isArray(r.data?.messages)) return false;
+    const realMessages = r.data.messages.filter(m => m && m.type !== 'system');
+    return realMessages.length > 0;
   } catch {
     return false;
   }
@@ -1080,6 +1090,27 @@ export function clearChatPipelineCaches() {
  * @param {string} plaintext
  * @param {{id: string, from: string, text: string}} [replyTo]
  */
+// @-Mention-Extraction für Push-Notifications (E2E-safe: läuft auf Plaintext
+// im Client, Server sieht nur die abgeleiteten Felder mentions[] + mentionsEveryone).
+// Sprach-aware: @everyone (EN) | @alle (DE) | @todos (ES) lösen "@all" aus.
+const _ALL_MENTION_TOKENS = new Set(['everyone', 'alle', 'todos']);
+function _extractMentions(plaintext, memberHandles) {
+  if (!plaintext || typeof plaintext !== 'string') {
+    return { mentions: [], mentionsEveryone: false };
+  }
+  const memberSet = new Set((memberHandles || []).map(h => String(h).toLowerCase()));
+  const mentionsEveryone = /@(everyone|alle|todos)\b/i.test(plaintext);
+  const mentions = [];
+  const re = /@([a-z0-9_]+)/gi;
+  let m;
+  while ((m = re.exec(plaintext)) !== null) {
+    const h = m[1].toLowerCase();
+    if (_ALL_MENTION_TOKENS.has(h)) continue;
+    if (memberSet.has(h) && !mentions.includes(h)) mentions.push(h);
+  }
+  return { mentions, mentionsEveryone };
+}
+
 export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plaintext, replyTo = null, attachment = null) {
   try {
     const gskBytes = await ensureMyGSK(groupId, memberHandles);
@@ -1116,6 +1147,11 @@ export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plain
     const sig = await signMessage(ivB64, ctB64, sid, epoch);
     const deviceId = getDeviceId();
 
+    // @-Mentions aus dem Plaintext extrahieren (E2E-safe: Backend sieht ct,
+    // nicht den Plaintext; Push-Filter braucht aber zu wissen ob @-mentions
+    // drin sind → hier am Client vorbereiten, Server liest die abgeleiteten Felder).
+    const { mentions, mentionsEveryone } = _extractMentions(plaintext, memberHandles);
+
     const body = {
       to: myHandle,             // Backend braucht gültigen Member; Self-Push wird via pushToGroupMembers excluded.
       convoId: groupId,
@@ -1130,6 +1166,10 @@ export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plain
       // chainIndex landet im backend als rotation_index; decryptIncomingGroupMessage
       // liest msg.rotationIndex / rotation_index für die HKDF-Ableitung.
       rotationIndex: chainIndex,
+      // Mention-Metadata für Push-Filter (mentions_only / mentions_and_everyone).
+      // Backend liest sie in chatSend.js und reicht sie an pushToUser durch.
+      ...(mentions.length > 0 ? { mentions } : {}),
+      ...(mentionsEveryone ? { mentionsEveryone: true } : {}),
     };
 
     // Attachment-Plaintext-Felder für DB
@@ -1390,6 +1430,14 @@ export async function decryptEditedGroupMessage(event, originalMsg, myHandle, gr
     const senderHandle = String(originalMsg.from || event.from || '').toLowerCase();
     if (!senderHandle) return null;
 
+    // chainIndex: aus event (Top-Level) oder ciphertext-embedded.
+    // editEncryptedGroup sendet ihn als body.rotationIndex; Backend embedded
+    // ihn zusätzlich ins ciphertext-JSON (chatRoutes.js:381). Beide Quellen
+    // konsultieren — falls eine fehlt, fällt's auf die andere zurück.
+    let chainIndex = null;
+    if (typeof event.rotationIndex === 'number') chainIndex = event.rotationIndex;
+    else if (typeof parsed.rotationIndex === 'number') chainIndex = parsed.rotationIndex;
+
     const isOwn = senderHandle === String(myHandle).toLowerCase();
     const originalTs = typeof originalMsg?.ts === 'number' ? originalMsg.ts : null;
 
@@ -1416,13 +1464,27 @@ export async function decryptEditedGroupMessage(event, originalMsg, myHandle, gr
     }
     if (candidates.length === 0) return null;
 
+    // Pro GSK-Kandidat: probiere zuerst HKDF-Pfad (Forward-Secrecy, matched
+    // editEncryptedGroup), fallback direkter GSK-Key (für Legacy-Edits ohne
+    // chainIndex — z.B. Edits VOR Phase-1D-Rollout).
     for (const gskBytes of candidates) {
+      // 1. HKDF-Chain (current encrypt path)
+      if (chainIndex !== null) {
+        try {
+          const mk = await deriveGroupMessageKey(gskBytes, groupId, senderHandle, chainIndex);
+          const plaintext = await e2eDecrypt(mk, ivB64, ctB64);
+          if (typeof plaintext === 'string') return plaintext;
+        } catch {
+          // Falsche GSK oder chainIndex → fallback Direct-GSK
+        }
+      }
+      // 2. Direct-GSK (legacy fallback)
       try {
         const gskKey = await importGskAesKey(gskBytes);
         const plaintext = await e2eDecrypt(gskKey, ivB64, ctB64);
         if (typeof plaintext === 'string') return plaintext;
       } catch {
-        // Falsche GSK → nächste Kandidatin probieren
+        // Falsche GSK → nächste Kandidatin
       }
     }
     return null;

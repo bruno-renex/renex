@@ -158,6 +158,11 @@ export async function initSentry() {
         'Non-Error promise rejection captured',
         'NetworkError',
         'AbortError',
+        // Expected attachment-Edge-Cases — AttachmentView zeigt UI-Hinweis,
+        // kein Crash. Single-flight in downloadHelper.js kann trotz
+        // .catch()-Observer in seltenen Microtask-Races leaken.
+        'attachment_gone',
+        'attachment_forbidden',
       ],
       beforeSend(event) {
         if (event.request?.url) {

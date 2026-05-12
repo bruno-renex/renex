@@ -495,6 +495,20 @@ export async function getSigPubForDevice(fromHandle, fromDeviceId) {
   return d?.sigPub || null;
 }
 
+/**
+ * Findet die historischen Sig-Pubkeys eines Peer-Devices (nach Device-Key-Rotation).
+ * Fallback für Sig-Verify alter Messages: wenn Verify mit dem aktuellen Pubkey
+ * fehlschlägt, kann der Caller durch die Historie iterieren.
+ *
+ * @returns {Promise<Array<{jwk: object, retiredAt: number}>>}
+ */
+export async function getSigPubHistoryForDevice(fromHandle, fromDeviceId) {
+  const devices = await loadPeerDevicesIdb(fromHandle);
+  const d = devices.find(x => x.deviceId === fromDeviceId);
+  const hist = d?.sigPubHistory;
+  return Array.isArray(hist) ? hist : [];
+}
+
 // ======================================================
 // CMK-Wrap-for-Inbox-Devices
 // ECDH(myPriv × peerPub) → AES-GCM → encrypt CMK

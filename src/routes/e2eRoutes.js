@@ -257,10 +257,34 @@ export async function handleE2eRoutes(request, env, path, params) {
 
         // Signing Public Key (optional — für Message-Signatur-Verifikation)
         if (sigPub && typeof sigPub === "object") {
-          await env.RENEX_KV.put(
-            `e2e:inbox:sigpub:${handle}:${deviceId}`,
-            JSON.stringify(sigPub)
-          );
+          // Historie für Verify alter Messages: bevor wir den aktuellen Pubkey
+          // überschreiben, alten Pubkey in History anhängen (max. 5 Einträge,
+          // 90 Tage TTL). Verhindert Sig-Verify-FAIL nach Device-Key-Rotation
+          // (Recovery, Re-Registration).
+          const sigPubKey = `e2e:inbox:sigpub:${handle}:${deviceId}`;
+          const histKey   = `e2e:inbox:sigpub-hist:${handle}:${deviceId}`;
+          try {
+            const prevRaw = await env.RENEX_KV.get(sigPubKey);
+            if (prevRaw) {
+              const prev = JSON.parse(prevRaw);
+              // Nur archivieren wenn der neue Pubkey wirklich anders ist als der alte.
+              if (prev && (prev.x !== sigPub.x || prev.y !== sigPub.y)) {
+                let hist = [];
+                try {
+                  const histRaw = await env.RENEX_KV.get(histKey);
+                  if (histRaw) hist = JSON.parse(histRaw);
+                  if (!Array.isArray(hist)) hist = [];
+                } catch {}
+                // Neueste zuerst, cap auf 5
+                hist.unshift({ jwk: prev, retiredAt: now });
+                hist = hist.slice(0, 5);
+                await env.RENEX_KV.put(histKey, JSON.stringify(hist), { expirationTtl: 90 * 24 * 60 * 60 });
+              }
+            }
+          } catch (e) {
+            console.warn("sigpub-history update failed (non-fatal):", e.message);
+          }
+          await env.RENEX_KV.put(sigPubKey, JSON.stringify(sigPub));
         }
 
         // State 'new' → 'syncing' nach erfolgreichem KV-Write
@@ -387,15 +411,26 @@ export async function handleE2eRoutes(request, env, path, params) {
 
         const deviceEntries = await Promise.all(
           deviceIds.map(async (deviceId) => {
-            const [raw, rawSig] = await Promise.all([
+            const [raw, rawSig, rawHist] = await Promise.all([
               env.RENEX_KV.get(`e2e:inbox:${user}:${deviceId}`),
               env.RENEX_KV.get(`e2e:inbox:sigpub:${user}:${deviceId}`),
+              env.RENEX_KV.get(`e2e:inbox:sigpub-hist:${user}:${deviceId}`),
             ]);
             if (!raw) return null;
             try {
               const entry = { deviceId, jwk: JSON.parse(raw) };
               if (rawSig) {
                 try { entry.sigPub = JSON.parse(rawSig); } catch {}
+              }
+              // sigPubHistory: archivierte Pubkeys nach Device-Key-Rotation.
+              // Frontend nutzt sie als Fallback wenn Verify mit aktuellem Pubkey fehlschlägt.
+              if (rawHist) {
+                try {
+                  const hist = JSON.parse(rawHist);
+                  if (Array.isArray(hist) && hist.length > 0) {
+                    entry.sigPubHistory = hist;
+                  }
+                } catch {}
               }
               return entry;
             } catch { return null; }

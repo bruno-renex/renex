@@ -16,7 +16,7 @@ import {
 } from './cmkRequestState.js';
 import {
   getOrCreateCMK, getCMKIfExists, importAndStoreCMKFromPeer,
-  storePeerDevices, findSenderDeviceJwk, getSigPubForDevice,
+  storePeerDevices, findSenderDeviceJwk, getSigPubForDevice, getSigPubHistoryForDevice,
   wrapCMKForInboxDevices, unwrapCMKFromPeer,
   createAndStoreCMK,
   incrementCmkEncryptCounter, rotateCMKForPeer,
@@ -470,12 +470,35 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
       try {
         verified = await verifyMessageSig(ivB64, ctB64, sid, ep, msg.sig, sigPub);
         if (verified === false) {
-          // Tampering! Loud-Log damit's im Sentry / Devtools sichtbar wird.
-          console.error(
-            `🚨 Sig-Verify FAILED — Message id=${String(msg.id).slice(0, 8)} ` +
-            `from=${msg.from} deviceId=${senderDeviceId.slice(0, 8)} ` +
-            `(Tampering oder Schlüssel-Mismatch)`
-          );
+          // Verify gegen aktuelles sigPub fehlgeschlagen — meistens Device-Key-Rotation
+          // (Recovery, Re-Registration). Historische Pubkeys durchprobieren.
+          const history = await getSigPubHistoryForDevice(msg.from, senderDeviceId);
+          let historicMatch = false;
+          for (const entry of history) {
+            if (!entry?.jwk) continue;
+            try {
+              const ok = await verifyMessageSig(ivB64, ctB64, sid, ep, msg.sig, entry.jwk);
+              if (ok === true) {
+                historicMatch = true;
+                verified = true;
+                console.log(
+                  `🔐 Sig-Verify via historic pubkey OK — id=${String(msg.id).slice(0, 8)} ` +
+                  `from=${msg.from} deviceId=${senderDeviceId.slice(0, 8)} ` +
+                  `(retired ${new Date(entry.retiredAt || 0).toISOString().slice(0, 10)})`
+                );
+                break;
+              }
+            } catch {}
+          }
+          if (!historicMatch) {
+            // Auch History matcht nicht → echtes Tampering oder verlorene Historie.
+            // Loud-Log damit's im Sentry / Devtools sichtbar wird.
+            console.error(
+              `🚨 Sig-Verify FAILED — Message id=${String(msg.id).slice(0, 8)} ` +
+              `from=${msg.from} deviceId=${senderDeviceId.slice(0, 8)} ` +
+              `(weder aktueller noch historischer Pubkey passt — möglicherweise Tampering)`
+            );
+          }
         }
       } catch (e) {
         // Verify-Exception (z.B. Crypto-Fehler) → behandeln wie verified=null
@@ -1336,10 +1359,31 @@ export async function decryptIncomingGroupMessage(msg, myHandle, groupId) {
         try {
           verified = await verifyMessageSig(ivB64, ctB64, sid, usedEpoch, msg.sig, sigPub);
           if (verified === false) {
-            console.error(
-              `🚨 Group-Sig-Verify FAILED — id=${String(msg.id).slice(0, 8)} ` +
-              `from=${senderHandle} group=${String(groupId).slice(0, 8)}`
-            );
+            // Fallback: historische Sig-Pubkeys nach Device-Key-Rotation probieren.
+            const history = await getSigPubHistoryForDevice(senderHandle, senderDeviceId);
+            let historicMatch = false;
+            for (const entry of history) {
+              if (!entry?.jwk) continue;
+              try {
+                const ok = await verifyMessageSig(ivB64, ctB64, sid, usedEpoch, msg.sig, entry.jwk);
+                if (ok === true) {
+                  historicMatch = true;
+                  verified = true;
+                  console.log(
+                    `🔐 Group-Sig-Verify via historic pubkey OK — id=${String(msg.id).slice(0, 8)} ` +
+                    `from=${senderHandle} (retired ${new Date(entry.retiredAt || 0).toISOString().slice(0, 10)})`
+                  );
+                  break;
+                }
+              } catch {}
+            }
+            if (!historicMatch) {
+              console.error(
+                `🚨 Group-Sig-Verify FAILED — id=${String(msg.id).slice(0, 8)} ` +
+                `from=${senderHandle} group=${String(groupId).slice(0, 8)} ` +
+                `(weder aktueller noch historischer Pubkey passt)`
+              );
+            }
           }
         } catch (e) {
           captureException(e, { context: 'verifyGroupMessageSig', from: senderHandle });

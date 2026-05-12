@@ -650,6 +650,57 @@ describe('GSK Lifecycle', () => {
     // Persistiert ist der neue
     expect(Array.from(await getMyGSK('rot'))).toEqual(Array.from(r.newGsk));
   });
+
+  it('ensureMyGSK: Multi-Device-User retried KV-fetch bevor createMyGSK (Race-Schutz)', async () => {
+    // Regression-Schutz: Wenn ich >1 Device habe und lokal noch keine GSK
+    // existiert, MUSS ensureMyGSK den KV-Fetch mehrfach versuchen — sonst
+    // entstehen divergierende GSKs zwischen Devices, was beim Empfänger
+    // (Peer-GSK ist handle-keyed) zu permanenten Decrypt-Fails führt.
+    let fetchCalls = 0;
+    resetApiMock((path) => {
+      if (path.startsWith('/e2e/group-gsk/fetch')) {
+        fetchCalls++;
+        return { ok: false };
+      }
+      if (path.startsWith('/e2e/inbox/get')) {
+        return {
+          ok: true,
+          data: { devices: [
+            { deviceId: 'dev_test_alice', jwk: {} },
+            { deviceId: 'dev_alice_OTHER', jwk: {} },
+          ] },
+        };
+      }
+      return { ok: true };
+    });
+
+    const gsk = await ensureMyGSK('eg-multi', []);
+    expect(gsk).toBeInstanceOf(Uint8Array);
+    // 1 initial + 4 retries (Backoff 400/800/1500/3000ms) = 5 Versuche
+    expect(fetchCalls).toBeGreaterThanOrEqual(5);
+  }, 10000);
+
+  it('ensureMyGSK: Single-Device-User skipt Retry (sofort createMyGSK)', async () => {
+    // Gegen-Test: kein Retry-Overhead wenn der User nur 1 Device hat.
+    let fetchCalls = 0;
+    resetApiMock((path) => {
+      if (path.startsWith('/e2e/group-gsk/fetch')) {
+        fetchCalls++;
+        return { ok: false };
+      }
+      if (path.startsWith('/e2e/inbox/get')) {
+        return {
+          ok: true,
+          data: { devices: [{ deviceId: 'dev_test_alice', jwk: {} }] },
+        };
+      }
+      return { ok: true };
+    });
+
+    const gsk = await ensureMyGSK('eg-single', []);
+    expect(gsk).toBeInstanceOf(Uint8Array);
+    expect(fetchCalls).toBe(1); // genau 1 Versuch, kein Backoff
+  });
 });
 
 // ======================================================

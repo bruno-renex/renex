@@ -1156,6 +1156,31 @@ export async function ensureMyGSK(groupId, memberHandles) {
     return gsk;
   }
 
+  // Multi-Device-Race-Schutz: wenn ich >1 Device habe, könnte ein anderes
+  // Device (z.B. mein gerade-eben hinzugefügtes Primary) die GSK bereits per
+  // `device_added(self)` in den KV gelegt haben — KV-Eventual-Consistency
+  // verzögert aber den ersten Fetch. Würden wir hier sofort `createMyGSK`
+  // aufrufen, divergierten die GSKs zwischen meinen Devices; der Empfänger
+  // speichert peer-GSKs handle-keyed und clobbert sich gegenseitig, was zu
+  // permanenten Decrypt-Fails bei Multi-Device-Senders führt.
+  // Backoff-Pattern identisch zu `_fetchUserDevicesEnsuring` (siehe oben).
+  const me = _getMyHandle();
+  if (me) {
+    const myDeviceId = getDeviceId();
+    const myDevices = await _fetchUserDevices(me);
+    const hasOtherDevice = myDevices.some(d => d.deviceId && d.deviceId !== myDeviceId);
+    if (hasOtherDevice) {
+      for (const delay of [400, 800, 1500, 3000]) {
+        await new Promise(r => setTimeout(r, delay));
+        gsk = await fetchMyGSKFromKV(groupId);
+        if (gsk) {
+          await setMyGSK(groupId, gsk);
+          return gsk;
+        }
+      }
+    }
+  }
+
   // Wirklich frisch — erst jetzt neu generieren.
   gsk = await createMyGSK(groupId);
   // Distribute fire-and-forget (Send blockiert nicht auf KV-Round-Trip)

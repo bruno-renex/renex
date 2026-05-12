@@ -42,7 +42,25 @@
     try {
       const r = await apiFetch(`/groups/members?groupId=${encodeURIComponent(groupId)}`);
       if (r.ok && Array.isArray(r.data?.members)) {
-        members = r.data.members;
+        // Dedup defensiv: Backend hat PK(convo_id, member_handle), aber
+        // each_key_duplicate-Crashes in Sentry zeigen, dass Duplikate trotzdem
+        // entstehen (Race? Migration?). Erst-Vorkommen wird gemeldet.
+        const seen = new Set();
+        const deduped = [];
+        for (const m of r.data.members) {
+          const h = m.member_handle;
+          if (!h) continue;
+          if (seen.has(h)) {
+            captureException(new Error('Duplicate member handle in /groups/members response'), {
+              context: 'GroupMembersModal.load',
+              extra: { handle: h, groupId, totalMembers: r.data.members.length },
+            });
+            continue;
+          }
+          seen.add(h);
+          deduped.push(m);
+        }
+        members = deduped;
         // Display-Names für Nicht-Gast-Handles prefetchen — der Cache
         // liefert reaktiv die Namen an die UI.
         const handlesToFetch = members

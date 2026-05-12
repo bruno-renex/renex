@@ -163,7 +163,13 @@
           </svg>
         </button>
       {/if}
-      <ChatHeaderMenu {chat} />
+      <!-- Gäste haben kein 3-Punkte-Menu: Settings (Mute, Auto-Delete) brauchen
+           Persistenz, Admin-Aktionen sind nicht zugänglich, "Kontakt entfernen"
+           passt nicht zur temporären Gast-Identität. Trade-off: Gast kann
+           Gruppe nicht aktiv verlassen — Tab schließen / 24h-Expiry. -->
+      {#if !userStore.isGuest}
+        <ChatHeaderMenu {chat} />
+      {/if}
     </div>
   </header>
 

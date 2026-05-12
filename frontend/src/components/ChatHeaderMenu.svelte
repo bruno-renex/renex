@@ -21,6 +21,7 @@
   import { autoDeleteStore, autoDeleteLabel, ALLOWED_DAYS } from '../stores/autoDelete.svelte.js';
   import { userStore } from '../stores/user.svelte.js';
   import { apiFetch } from '../lib/api.js';
+  import { captureException } from '../lib/sentry.js';
   import InviteLinkModal from './InviteLinkModal.svelte';
   import AddGroupMembersModal from './AddGroupMembersModal.svelte';
 
@@ -208,13 +209,25 @@
         // Backend liefert { member_handle, role, joined_at } (snake_case).
         // Auf { handle, role, joinedAt } mappen, damit das Render-Markup
         // (m.handle) greift. Eigenen User ausfiltern (kann sich nicht selbst kicken).
-        groupMembers = r.data.members
-          .map(m => ({
-            handle:   m.member_handle,
-            role:     m.role,
-            joinedAt: m.joined_at,
-          }))
-          .filter(m => m.handle && m.handle !== me);
+        // Dedup defensiv: Backend hat PK(convo_id, member_handle), aber Sentry-
+        // Reports zeigen each_key_duplicate-Crashes — Quelle (Race? Migration?)
+        // unklar. Erst-Auftreten wird via captureException reportet inkl. Group-ID.
+        const seen = new Set();
+        const out = [];
+        for (const raw of r.data.members) {
+          const handle = raw.member_handle;
+          if (!handle || handle === me) continue;
+          if (seen.has(handle)) {
+            captureException(new Error('Duplicate member handle in /groups/members response'), {
+              context: 'ChatHeaderMenu.loadMembers',
+              extra: { handle, groupId: chat.key, totalMembers: r.data.members.length },
+            });
+            continue;
+          }
+          seen.add(handle);
+          out.push({ handle, role: raw.role, joinedAt: raw.joined_at });
+        }
+        groupMembers = out;
       }
     } catch {}
   }
@@ -251,6 +264,9 @@
         body: { groupId: chat.key },
       });
       if (r.ok) {
+        // 1. Group aus Sidebar/Inbox entfernen (sonst bleibt sie sichtbar bis nächster /groups/list-Reload)
+        inboxStore.removeGroup(chat.key);
+        // 2. Chat-View deselektieren
         chatStore.selectChat(null);
         toastStore.push(lang.groupLeft || 'Gruppe verlassen', { kind: 'success' });
       } else {
@@ -397,7 +413,12 @@
           <button class="menu-item" onclick={() => applyMute('all', null)} disabled={busy}>{lang.muteForever || 'Bis ich es wieder einschalte'}</button>
           {#if isGroup}
             <div class="menu-sep"></div>
-            <button class="menu-item" onclick={() => applyMute('mentions_only', null)} disabled={busy}>@ {lang.muteMentionsOnly || 'Nur @-Erwähnungen'}</button>
+            <button class="menu-item" onclick={() => applyMute('mentions_only', null)} disabled={busy}>
+              {lang.muteMentionsOnly || 'Nur @-Erwähnungen'}
+            </button>
+            <button class="menu-item" onclick={() => applyMute('mentions_and_everyone', null)} disabled={busy}>
+              {lang.muteMentionsAndEveryone || '@-Erwähnungen + @alle'}
+            </button>
           {/if}
         </div>
 

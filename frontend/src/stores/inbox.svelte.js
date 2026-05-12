@@ -239,6 +239,34 @@ export const inboxStore = {
       const next = _groups.slice();
       next[gIdx] = { ...next[gIdx], lastSeen: ts, lastMessage: preview };
       _groups = next;
+      return;
+    }
+    // Weder Contact noch Group bekannt — typisch wenn ein frischer Gast joint
+    // ODER ein anderer Member uns gerade in eine Group hinzugefügt hat: das
+    // initial `loadContacts/loadGroups` beim App-Boot kannte den Eintrag noch
+    // nicht. Race-Condition zwischen `guest_joined`/`group_added` WS-Event und
+    // dem ersten `message`. Fallback: Inbox vom Backend frisch holen damit
+    // der neue Eintrag erscheint. Fire-and-forget — UI updated sich beim
+    // nächsten Tick. Best-effort beide Listen weil wir aus dem Key nicht
+    // sicher ableiten können ob es ein DM-Handle oder Group-UUID ist.
+    void this.loadContacts().catch(() => {});
+    void this.loadGroups().catch(() => {});
+  },
+
+  /**
+   * Entfernt eine Gruppe lokal aus der Inbox-Liste (z.B. nach `/groups/leave`
+   * oder nach Empfang von `group_member_removed` wenn ich selbst der Target
+   * war). Idempotent — silent no-op wenn die Gruppe nicht (mehr) gelistet ist.
+   */
+  removeGroup(groupId) {
+    if (!groupId) return;
+    if (!_groups.some(g => g.id === groupId)) return;
+    _groups = _groups.filter(g => g.id !== groupId);
+    // Unread-Counter für diese Gruppe ebenfalls droppen
+    if (_unreadCounts[groupId]) {
+      const next = { ..._unreadCounts };
+      delete next[groupId];
+      _unreadCounts = next;
     }
   },
 

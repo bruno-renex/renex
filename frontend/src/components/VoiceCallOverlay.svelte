@@ -55,6 +55,44 @@
   function onToggleVideo() { voiceStore.toggleVideo(); }
   function onTogglePtt() { voiceStore.togglePttMode(); }
 
+  // Error-Messages aus dem Store (z.B. 'no_cmk', 'NotAllowedError') sind
+  // technisch — User-facing in lesbaren Klartext umsetzen. Fallback auf
+  // den Raw-String falls der Code unbekannt ist (developer-debugging).
+  function readableError(err) {
+    if (!err) return '';
+    if (err === 'no_cmk') {
+      return lang.voiceErrorNoCmk
+        || 'Verschlüsselungsschlüssel mit diesem Kontakt fehlt. Sende erst eine Textnachricht und versuche es danach erneut.';
+    }
+    if (err === 'busy') {
+      return lang.voiceErrorBusy || 'Der Empfänger ist gerade in einem anderen Anruf.';
+    }
+    if (err === 'ring_failed' || err === 'answer_failed') {
+      return lang.voiceErrorSignaling || 'Verbindung zum Server fehlgeschlagen. Bitte erneut versuchen.';
+    }
+    if (err === 'ice_failed') {
+      return lang.voiceErrorIce || 'Audio-Verbindung konnte nicht aufgebaut werden (Netzwerk/Firewall).';
+    }
+    if (err === 'incompatible_peer') {
+      return lang.voiceErrorIncompat || 'Das andere Gerät verwendet eine inkompatible App-Version.';
+    }
+    if (typeof err === 'string') {
+      const lower = err.toLowerCase();
+      if (lower.includes('notallowed') || lower.includes('permission')) {
+        return lang.voiceErrorPermission
+          || 'Mikrofon-Berechtigung fehlt. Bitte in den Browser-Einstellungen erlauben.';
+      }
+      if (lower.includes('notfound') || lower.includes('devicenotfound')) {
+        return lang.voiceErrorNoMic || 'Kein Mikrofon gefunden.';
+      }
+      if (lower.includes('notreadable') || lower.includes('trackstart')) {
+        return lang.voiceErrorMicBusy
+          || 'Mikrofon wird von einer anderen App benutzt.';
+      }
+    }
+    return err;
+  }
+
   let pttMode = $derived(voiceStore.pttMode);
   let pttPressed = $derived(voiceStore.pttPressed);
   let isCallActive = $derived(state === 'active' || state === 'connecting');
@@ -164,7 +202,7 @@
             : (lang.voiceMitmSig || '🚨 Anrufer-Signatur ungültig. Anruf abgebrochen.')}
         </div>
       {:else if voiceStore.errorMsg}
-        <div class="error-banner">⚠️ {voiceStore.errorMsg}</div>
+        <div class="error-banner">⚠️ {readableError(voiceStore.errorMsg)}</div>
       {/if}
       <!-- Peer Info -->
       <div class="peer-info">

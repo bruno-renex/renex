@@ -241,6 +241,12 @@ function _resetUiState() {
   _isReconnecting = false;
 }
 
+// Bei Fehlern länger sichtbar lassen, damit User die Fehlermeldung lesen
+// kann. Sonst (sauberes Hangup/Decline) reicht die kurze Fade-Animation.
+function _scheduleReset() {
+  setTimeout(_resetUiState, _errorMsg ? 3500 : 600);
+}
+
 /**
  * Zentraler Mic-State-Apply: berücksichtigt PTT-Mode + manuellen Mute.
  * Wahrheitstabelle:
@@ -452,7 +458,12 @@ export const voiceStore = {
   },
 
   get isInCall() {
-    return _state !== STATES.IDLE && _state !== STATES.ENDED;
+    // ENDED mit Fehler: Overlay bleibt sichtbar bis _scheduleReset → IDLE,
+    // damit der User die Fehlermeldung (z.B. fehlende Mic-Permission, no_cmk)
+    // lesen kann statt eine 600ms-Blink-Animation zu sehen.
+    if (_state === STATES.IDLE) return false;
+    if (_state === STATES.ENDED) return !!_errorMsg;
+    return true;
   },
 
   /**
@@ -495,7 +506,7 @@ export const voiceStore = {
         await _hardReset();
         _writeHistoryEntry(true);
         _state = STATES.ENDED;
-        setTimeout(_resetUiState, 600);
+        _scheduleReset();
         return { ok: false, error: 'no_cmk' };
       }
 
@@ -525,7 +536,7 @@ export const voiceStore = {
         await _hardReset();
         _writeHistoryEntry(true);
         _state = STATES.ENDED;
-        setTimeout(_resetUiState, 600);
+        _scheduleReset();
         return { ok: false, error: _errorMsg };
       }
       // Backend hat call_log inserted — gepufferte ICE-Candidates senden
@@ -539,7 +550,7 @@ export const voiceStore = {
       await _hardReset();
       _writeHistoryEntry(true);
       _state = STATES.ENDED;
-      setTimeout(_resetUiState, 600);
+      _scheduleReset();
       return { ok: false, error: _errorMsg };
     }
   },
@@ -549,6 +560,36 @@ export const voiceStore = {
    * Setzt UI auf "incoming ringing", speichert den Offer für späteren acceptCall.
    */
   async receiveCall(payload) {
+    const fromHandle = payload?.from;
+    // Helper: silent auto-decline (Schema-Fehler, no_cmk, decrypt-fail, MITM).
+    // Schreibt Missed-Call-Eintrag in History, damit der User auf dem Pixel
+    // wenigstens sieht dass jemand versucht hat anzurufen — sonst wäre der
+    // Anrufversuch komplett unsichtbar wenn die CMK noch nicht propagiert ist.
+    const autoDecline = async (reason) => {
+      console.error(`🚨 Voice incoming auto-decline (${reason}) von ${fromHandle}`);
+      try {
+        await apiFetch('/voice/decline', {
+          method: 'POST',
+          body: { callId: payload?.callId },
+        });
+      } catch {}
+      if (fromHandle && _state === STATES.IDLE) {
+        _history = [
+          {
+            id: crypto.randomUUID(),
+            peer: { handle: fromHandle, displayName: null },
+            direction: 'incoming',
+            ts: Date.now(),
+            duration: 0,
+            missed: true,
+            withVideo: false,
+            reason,
+          },
+          ..._history,
+        ].slice(0, 50);
+      }
+    };
+
     if (_state !== STATES.IDLE) {
       // Bereits in einem Call — Backend hätte busy returnen sollen, aber
       // defensiv: wir lehnen den 2. Anruf ab.
@@ -564,16 +605,9 @@ export const voiceStore = {
     // CMK muss existieren (Caller hat ensureSecureDmSession schon gemacht
     // und seine CMK ggf. via /e2e/cmk/store an unsere Devices verteilt).
     const me = userStore.myUser;
-    const fromHandle = payload.from;
     const ec = payload.sdp?.ec;
     if (!ec || !isVoiceEnvelope(ec) || payload.sdp?.type !== 'offer') {
-      console.error(`🚨 Voice incoming offer ohne ec-Envelope von ${fromHandle} — Schema-Mismatch (alte App?)`);
-      try {
-        await apiFetch('/voice/decline', {
-          method: 'POST',
-          body: { callId: payload.callId },
-        });
-      } catch {}
+      await autoDecline('schema_mismatch');
       return;
     }
     let cmk = await getCMKIfExists(fromHandle);
@@ -582,26 +616,14 @@ export const voiceStore = {
       cmk = await ensureSecureDmSession(me, fromHandle);
     }
     if (!cmk) {
-      console.error(`🚨 Voice incoming offer von ${fromHandle}: keine CMK — decline`);
-      try {
-        await apiFetch('/voice/decline', {
-          method: 'POST',
-          body: { callId: payload.callId },
-        });
-      } catch {}
+      await autoDecline('no_cmk');
       return;
     }
     let plainSdp;
     try {
       plainSdp = await decryptSdp(cmk, ec, 'offer', fromHandle, me, payload.callId);
     } catch (e) {
-      console.error(`🚨 Voice offer-decrypt failed von ${fromHandle}: ${e?.message}`);
-      try {
-        await apiFetch('/voice/decline', {
-          method: 'POST',
-          body: { callId: payload.callId },
-        });
-      } catch {}
+      await autoDecline(`decrypt_failed:${e?.message || 'unknown'}`);
       return;
     }
     // Auth-Verify VOR Annahme: wenn der Caller einen signierten fp mitschickt,
@@ -610,13 +632,7 @@ export const voiceStore = {
     if (payload.auth) {
       const v = await _verifyAuth(plainSdp, payload.auth, payload.callId, 'offer', fromHandle);
       if (!v.ok) {
-        console.error(`🚨 Voice MITM-Verdacht (offer): ${v.reason}`);
-        try {
-          await apiFetch('/voice/decline', {
-            method: 'POST',
-            body: { callId: payload.callId },
-          });
-        } catch {}
+        await autoDecline(`mitm_${v.reason}`);
         return;
       }
     }
@@ -784,7 +800,7 @@ export const voiceStore = {
         await _hardReset();
         _writeHistoryEntry(true);
         _state = STATES.ENDED;
-        setTimeout(_resetUiState, 600);
+        _scheduleReset();
         return;
       }
       // call_log ist jetzt status='connected' — gepufferte Candidates senden
@@ -796,7 +812,7 @@ export const voiceStore = {
       await _hardReset();
       _writeHistoryEntry(true);
       _state = STATES.ENDED;
-      setTimeout(_resetUiState, 600);
+      _scheduleReset();
     } finally {
       voiceStore._incomingOffer = null;
     }
@@ -818,7 +834,7 @@ export const voiceStore = {
       captureException(e, { context: 'voice.declineCall' });
     }
     await _hardReset();
-    setTimeout(_resetUiState, 600);
+    _scheduleReset();
   },
 
   /**
@@ -856,7 +872,7 @@ export const voiceStore = {
     }
 
     await _hardReset();
-    setTimeout(_resetUiState, 600);
+    _scheduleReset();
   },
 
   /**
@@ -867,7 +883,7 @@ export const voiceStore = {
     _writeHistoryEntry(missed);
     _state = STATES.ENDED;
     await _hardReset();
-    setTimeout(_resetUiState, 600);
+    _scheduleReset();
   },
 
   /**

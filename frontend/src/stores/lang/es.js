@@ -117,6 +117,7 @@ export default {
   mute24h:              "24 horas",
   muteForever:          "Hasta que lo reactive",
   muteMentionsOnly:     "Solo @-menciones",
+  muteMentionsAndEveryone: "@-menciones + @todos",
 
   // ── Chat-Header-Menu (3 puntos) ─────────────────────
   moreActions:           "Más",
@@ -484,6 +485,12 @@ export default {
   guestLabel:              "Invitado",
   registerToAddContacts:   "Regístrate para añadir contactos",
   guestMsgLimit:           "⚠️ Límite de mensajes alcanzado — ¡regístrate para seguir escribiendo!",
+  // GuestBanner (info de sesión sobre el chat)
+  guestSessionExpiresIn:   "La sesión caduca en",
+  guestSessionExpired:     "Sesión de invitado caducada",
+  guestMessagesLeft:       "Mensajes restantes",
+  guestMsgLimitReached:    "Límite de mensajes alcanzado",
+  guestCreateAccount:      "Crear cuenta",
   guestJoined:         (name) => `👤 Te uniste como <strong>${name}</strong>`,
   expired:             "Expirado",
   guestLimitReached:   "Has usado todos tus mensajes de invitado. Crea una cuenta gratuita con Passkey para seguir leyendo y escribiendo — en segundos, sin contraseña.",

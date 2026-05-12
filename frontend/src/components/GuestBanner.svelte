@@ -106,10 +106,15 @@
     if (!sess?.token) return;
     try {
       sessionStorage.setItem('pendingGuestConvert', JSON.stringify({
-        token:         sess.token,
-        convoId:       sess.convoId,
-        convoType:     sess.convoType,
-        inviterHandle: sess.inviterHandle,
+        token:           sess.token,
+        convoId:         sess.convoId,
+        convoType:       sess.convoType,
+        inviterHandle:   sess.inviterHandle,
+        // Wichtig: oldGuestHandle (z.B. 'guest_d1f75096') brauchen wir nach dem
+        // Convert um IDB-Keys von cmk:guest_xxx:peer → cmk:realHandle:peer
+        // umzubenennen + Storage-Key (per-pair Handle-abhängig) zu re-encrypten.
+        // Wird in App.svelte $effect an migrateMyHandle() übergeben.
+        oldGuestHandle:  sess.guestHandle,
       }));
     } catch {}
     window.location.href = '/?registerGuest=1';

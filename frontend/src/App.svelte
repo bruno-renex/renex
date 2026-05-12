@@ -121,11 +121,27 @@
       readPendingGuestConvert()
     ) {
       _convertAttempted = true;
+      // Pending VOR performGuestConvert lesen — der Call clearPendingGuestConvert intern.
+      const pendingPre = readPendingGuestConvert();
       void (async () => {
         try {
           console.log('🔁 Post-Register: /invite/convert wird aufgerufen');
           const conv = await performGuestConvert();
           if (conv.ok) {
+            // IDB-Migration: alle CMK/GSK/rotation-map-Keys von guest_xxx → realHandle
+            // umbenennen UND re-encrypten (Storage-Key ist per-pair handle-bound,
+            // ohne Re-Encryption decrypted nichts mehr). Muss VOR dem Inbox-Reload
+            // passieren, damit der erste Decrypt-Sweep die migrierten Keys findet.
+            if (pendingPre?.oldGuestHandle && conv.realHandle) {
+              try {
+                const r = await migrateMyHandle(pendingPre.oldGuestHandle, conv.realHandle);
+                if (r?.renamed > 0) {
+                  console.log(`🔁 Self-Migration: ${r.renamed} IDB-Keys umgeschrieben (${pendingPre.oldGuestHandle} → ${conv.realHandle})`);
+                }
+              } catch (e) {
+                captureException(e, { context: 'postRegisterConvert.migrateMyHandle' });
+              }
+            }
             toastStore.push(
               i18nStore.lang.convertSuccess || 'Gast-Konto übernommen ✓',
               { kind: 'success' }
@@ -659,9 +675,17 @@
         const groupId = msg.groupId;
         if (!me || !groupId) return;
         chatStore.invalidateGroupMembers(groupId);
-        // Wenn ICH der Joinende bin: nichts zu tun (eigene GSK kommt via /e2e/group-gsk/fetch
-        // beim ersten Send, oder via request_gsk wenn ich Peer-GSKs brauche).
-        if (msg.handle && msg.handle.toLowerCase() === me) return;
+
+        // Wenn ICH der Joinende bin: Inbox-Liste neuladen damit die neue Gruppe
+        // in der Sidebar erscheint. Backend sendet `group_added` typischerweise
+        // nur beim Group-Create (initial members), NICHT beim nachträglichen
+        // Invite — daher hier explizit reloaden.
+        // Eigene GSK kommt via /e2e/group-gsk/fetch beim ersten Send, oder via
+        // request_gsk wenn ich Peer-GSKs zum Lesen brauche.
+        if (msg.handle && msg.handle.toLowerCase() === me) {
+          inboxStore.loadGroups().catch(() => {});
+          return;
+        }
 
         // Andernfalls: ich bin schon Member → meine eigene GSK an den neuen Member
         // senden, damit er meine zukünftigen Sends (und alte mit gleichem GSK) lesen kann.

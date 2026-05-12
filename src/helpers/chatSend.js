@@ -296,7 +296,13 @@ export async function handleChatSend(request, env) {
     from: me,
     // DM:    to = peer handle (für Delivered-Status + DO-Routing)
     // Gruppe: to = null  (Empfänger kommen aus conversation_members)
-    to: isGroupMessage ? null : other,
+    // Ausnahme: gsk/request_gsk in Gruppen — der Sender wrappt pro Member separat;
+    // `to` muss durchgereicht werden damit andere Members das Broadcast-Echo
+    // erkennen (handleIncomingGSKMessage filtert via `to !== me`). Ohne das
+    // kommen "no_payload_for_device" Warnings für alle nicht-ihm-bestimmten gsks.
+    to: isGroupMessage
+      ? ((type === "gsk" || type === "request_gsk") ? other : null)
+      : other,
     ts: Date.now(),
     status: "sent"
   };
@@ -503,14 +509,29 @@ export async function handleChatSend(request, env) {
   }
 
   // ======================================================
-  // UNREAD COUNTER (nur DMs — Gruppen haben kein per-Member Tracking)
+  // UNREAD COUNTER
+  //  - DM:     1 Counter (owner=Empfänger, sender=me)
+  //  - Gruppe: pro Member (ausser Sender) 1 Counter (owner=member, sender=group_id).
+  //            Sonst verschwindet der Badge nach Reload/Offline-Push, weil der
+  //            Frontend-Live-Increment (chat.svelte.js receiveMessage) nur bei
+  //            offenem WS feuert.
   // ======================================================
-  if (!isGroupMessage && msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "cmk_unavailable" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "cmk_reset" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
-    // Atomares Increment via D1 — kein Read-Modify-Write Race Condition
-    await env.RENEX_DB.prepare(
-      `INSERT INTO unread_counters (owner, sender, count) VALUES (?, ?, 1)
-       ON CONFLICT(owner, sender) DO UPDATE SET count = count + 1`
-    ).bind(other, me).run();
+  if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "cmk_unavailable" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "cmk_reset" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
+    if (isGroupMessage) {
+      // Atomar via INSERT-FROM-SELECT — ein Round-Trip statt N.
+      await env.RENEX_DB.prepare(
+        `INSERT INTO unread_counters (owner, sender, count)
+           SELECT member_handle, ?, 1 FROM conversation_members
+           WHERE convo_id = ? AND member_handle != ?
+         ON CONFLICT(owner, sender) DO UPDATE SET count = count + 1`
+      ).bind(cid, cid, me).run();
+    } else {
+      // Atomares Increment via D1 — kein Read-Modify-Write Race Condition
+      await env.RENEX_DB.prepare(
+        `INSERT INTO unread_counters (owner, sender, count) VALUES (?, ?, 1)
+         ON CONFLICT(owner, sender) DO UPDATE SET count = count + 1`
+      ).bind(other, me).run();
+    }
   }
 
   // ======================================================

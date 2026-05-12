@@ -99,17 +99,22 @@ export async function pushToUser(env, handle, payload) {
 }
 
 // ── @MENTION DETECTION ──────────────────────────────────
+// Sprach-aware: @everyone (EN) | @alle (DE) | @todos (ES) lösen "mentionsAll" aus.
+// Wird nur als Server-Side-Fallback genutzt — bei E2E-Messages ist msg.message
+// null, dann muss der Client mentions[] + mentionsEveryone im Body mitschicken.
+const ALL_MENTION_TOKENS = new Set(["everyone", "alle", "todos"]);
+
 export function detectMentions(messageText, groupMembers) {
   if (!messageText) return { mentionsAll: false, mentionedHandles: [] };
 
-  const mentionsAll = /@everyone\b/i.test(messageText);
+  const mentionsAll = /@(everyone|alle|todos)\b/i.test(messageText);
   const mentionedHandles = [];
 
   const mentionRegex = /@([a-z0-9_]+)/gi;
   let match;
   while ((match = mentionRegex.exec(messageText)) !== null) {
     const handle = match[1].toLowerCase();
-    if (handle !== "everyone" && groupMembers.includes(handle)) {
+    if (!ALL_MENTION_TOKENS.has(handle) && groupMembers.includes(handle)) {
       mentionedHandles.push(handle);
     }
   }

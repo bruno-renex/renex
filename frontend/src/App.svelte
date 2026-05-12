@@ -1137,6 +1137,9 @@
   function _onVisibilityChange() {
     if (document.visibilityState === 'visible') {
       _runHeartbeat();
+      // PWA-Resume nach Suspend: Push-Nachrichten sind während Background
+      // angekommen, aber WS war gekappt → offenen Chat refreshen.
+      chatStore.refreshSelected();
     }
   }
 

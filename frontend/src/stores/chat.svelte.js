@@ -184,12 +184,42 @@ export const chatStore = {
    */
   async handleMessageEdited(event) {
     const id = event?.messageId;
-    if (!id) return;
+    // DEBUG (Step A): nachvollziehen warum Empfänger den Edit nicht sieht.
+    console.log('🛠️ EDIT-DBG event received', {
+      id: id?.slice(0, 8),
+      from: event?.from,
+      hasCipher: !!event?.ciphertext,
+      cipherLen: event?.ciphertext?.length,
+      rotIdx: event?.rotationIndex,
+      groupId: event?.groupId,
+      convoId: event?.convoId,
+      messagesInStore: _messages.length,
+      selectedChatKey: _selectedChat?.key,
+      selectedChatType: _selectedChat?.type,
+    });
+    if (!id) { console.warn('🛠️ EDIT-DBG abort: no event.messageId'); return; }
     const m = _messages.find(x => x.id === id);
-    if (!m) return;
+    if (!m) {
+      console.warn('🛠️ EDIT-DBG message not in _messages (Chat nicht aktiv) — Cache invalidieren damit beim Re-Open der frische Text geladen wird', {
+        id: id.slice(0, 8),
+      });
+      // FIX: Cache invalidieren auch wenn die Message gerade nicht im aktiven
+      // Chat ist. Sonst liefert decryptIncomingMessage beim nächsten /chat/list
+      // den alten gecachten Text statt aus dem edited_message-Field zu lesen.
+      invalidateDecryptCacheFor(id);
+      return;
+    }
     invalidateDecryptCacheFor(id);
     const myHandle = userStore.myUser;
     const original = m._raw || m;
+    console.log('🛠️ EDIT-DBG message found, original meta:', {
+      hasRaw: !!m._raw,
+      sid: original.sid,
+      epoch: original.epoch,
+      rotIdx: original.rotation_index ?? original.rotationIndex,
+      from: m.from,
+      to: m.to,
+    });
     // Group vs DM erkennen — robuster Fallback gegen Reload-Race:
     //  1. event.groupId  — Backend setzt es jetzt explizit (chatRoutes.js editEvent)
     //  2. event.convoId  — falls UUID-Format → Group
@@ -210,7 +240,13 @@ export const chatStore = {
       newText = await decryptEditedGroupMessage(event, original, myHandle, groupId);
     } else {
       const peer = m.from === myHandle ? m.to : m.from;
+      console.log('🛠️ EDIT-DBG DM decrypt attempt, peer:', peer);
       newText = await decryptEditedMessage(event, original, myHandle, peer);
+    }
+    if (typeof newText !== 'string') {
+      console.warn('🛠️ EDIT-DBG decrypt FAILED — newText is', typeof newText, newText);
+    } else {
+      console.log('🛠️ EDIT-DBG decrypt OK, patching UI with new text (len ' + newText.length + ')');
     }
     if (typeof newText === 'string') {
       // _raw aktualisieren, damit ein nachträgliches _decryptOne (z.B. nach
@@ -314,6 +350,52 @@ export const chatStore = {
       _messages = [];
     } finally {
       _isLoading = false;
+    }
+  },
+
+  /**
+   * Refresh des aktuell geöffneten Chats ohne Reset/Flicker.
+   * Use-Case: PWA war suspended (Background), WS wurde gekappt, Push-Nachrichten
+   * landeten am Gerät aber nicht im _messages-State. Beim Resume (visibilitychange
+   * → visible) holen wir die letzten Messages frisch und mergen per ID-Dedup.
+   * Idempotent: bei Doppel-Aufruf ohne neue Server-Messages no-op.
+   */
+  async refreshSelected() {
+    if (!_selectedChat) return;
+    const chat = _selectedChat;
+    const myHandle = userStore.myUser;
+    try {
+      const peerOrConvo = chat.type === "dm" ? (chat.peer || chat.key) : chat.key;
+      const r = await apiFetch(`/chat/list?with=${encodeURIComponent(peerOrConvo)}`);
+      if (!r.ok || !Array.isArray(r.data?.messages)) return;
+
+      // Während des Fetches kann der User den Chat gewechselt haben → discard.
+      if (!_selectedChat || _selectedChat.key !== chat.key || _selectedChat.type !== chat.type) return;
+
+      const visible = r.data.messages.filter(m => m.type !== 'gsk' && m.type !== 'request_gsk');
+      const existingIds = new Set(_messages.map(m => m.id).filter(Boolean));
+      const fresh = [];
+      for (const m of visible) {
+        if (m.id && existingIds.has(m.id)) continue;
+        fresh.push(_normalizeMessage(m, myHandle));
+      }
+      if (fresh.length === 0) {
+        // Trotzdem Badge clearen: /chat/list hat serverseitig unread_counters
+        // bereits gelöscht — lokal nachziehen.
+        inboxStore.markRead(chat.key);
+        return;
+      }
+
+      _messages = [..._messages, ...fresh].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      inboxStore.markRead(chat.key);
+
+      if (chat.type === "dm" && chat.peer) {
+        void _decryptAllE2E(chat.peer, myHandle);
+      } else if (chat.type === "group") {
+        void _decryptAllGroupE2E(chat.key, myHandle);
+      }
+    } catch (e) {
+      captureException(e, { context: "chatStore.refreshSelected" });
     }
   },
 
@@ -867,7 +949,29 @@ const GROUP_DECRYPT_RETRY_DELAYS_MS = [3000, 8000, 25000, 60000];
 
 async function _decryptOneGroup(rawMsg, myHandle, groupId, attempt = 0) {
   try {
-    const result = await decryptIncomingGroupMessage(rawMsg, myHandle, groupId);
+    // Wenn die Message editiert wurde: edited_message als Cipher verwenden — analog
+    // zum DM-Pfad in _decryptOne. Ohne diesen Block würde der ORIGINAL-ct vom DB-Row
+    // entschlüsselt, der edited_message ignoriert → Empfänger sieht alten Text auch
+    // nach Re-Open des Chats.
+    let toDecrypt = rawMsg;
+    const editedJson = rawMsg.edited_message || rawMsg.editedMessage;
+    if (editedJson) {
+      try {
+        const parsed = JSON.parse(editedJson);
+        if (parsed && parsed.iv && parsed.ct) {
+          toDecrypt = {
+            ...rawMsg,
+            ivB64: parsed.iv, iv_b64: parsed.iv,
+            ctB64: parsed.ct, ct_b64: parsed.ct,
+            sig: parsed.sig || null,
+            rotation_index: parsed.rotationIndex ?? rawMsg.rotation_index,
+            rotationIndex:  parsed.rotationIndex ?? rawMsg.rotationIndex,
+          };
+        }
+      } catch {}
+    }
+
+    const result = await decryptIncomingGroupMessage(toDecrypt, myHandle, groupId);
     const { text, verified, replyText } = result;
     if (text != null) {
       if (!result._cached) {

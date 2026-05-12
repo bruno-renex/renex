@@ -37,13 +37,14 @@ function validateDisplayName(name) {
 }
 
 export async function handleAuthRoutes(request, env, path, params) {
-  // /users/:handle/profile  (GET, öffentlich für eingeloggte User)
+  // /users/:handle/profile  (GET, öffentlich für eingeloggte User UND Gäste)
+  // Gäste brauchen Profile-Lookups für DisplayName-Anzeige der Group-Members.
   const profileMatch = path.match(/^\/users\/([a-z0-9_]+)\/profile$/);
   if (profileMatch) {
     if (request.method !== "GET") {
       return json(request, { error: "Method not allowed" }, 405);
     }
-    const session = await requireSession(request, env);
+    const session = await requireAnySession(request, env);
     if (!session) return json(request, { error: "Not authenticated" }, 401);
     const targetHandle = profileMatch[1];
     const profile = await readProfile(env, targetHandle);
@@ -482,7 +483,9 @@ export async function handleAuthRoutes(request, env, path, params) {
     // =========================
     case "/auth/ws-ticket": {
       if (request.method === "POST") {
-        const session = await requireSession(request, env);
+        // Gäste brauchen ebenfalls WebSocket-Tickets — sonst keine Live-Events,
+        // sie sehen Messages erst beim nächsten /chat/list-Reload.
+        const session = await requireAnySession(request, env);
         if (!session) return json(request, { error: "Not authenticated" }, 401);
 
         const ticket = `wst_${crypto.randomUUID()}`;

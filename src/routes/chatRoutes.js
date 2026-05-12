@@ -185,7 +185,8 @@ export async function handleChatRoutes(request, env, path, params) {
     // ======================================================
     case "/chat/unread": {
       if (request.method === "GET") {
-        const session = await requireSession(request, env);
+        // Gäste haben Unread-Counter pro DM (z.B. wenn Inviter offline → Guest sammelt unread)
+        const session = await requireAnySession(request, env);
         if (!session) {
           return json(request, { error: "Not authenticated" }, 401);
         }

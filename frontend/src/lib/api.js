@@ -15,6 +15,25 @@ import { captureException } from './sentry.js';
 const API = "https://api.renex.id";
 
 /**
+ * Liest den Guest-Token aus localStorage (gespeichert von /join/lib/guestStorage.js).
+ * Wird als X-Guest-Token Header an Backend geschickt — Safari-ITP-Fallback
+ * wenn der `guest_session` Cookie cross-origin (app.renex.id ↔ api.renex.id)
+ * geblockt wird oder verloren geht. Das Backend liest beide Quellen
+ * (Cookie + Header) — Header gewinnt wenn beide vorhanden.
+ */
+function _readGuestToken() {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    const raw = localStorage.getItem("guestSession");
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data?.token) return null;
+    if (data.expiresAt && Date.now() > data.expiresAt) return null;
+    return String(data.token);
+  } catch { return null; }
+}
+
+/**
  * Hauptfunktion für API-Calls.
  * @param {string} path  - z.B. "/auth/session"
  * @param {object} options - { method, body, headers }
@@ -28,11 +47,16 @@ export async function apiFetch(path, options = {}) {
                     || body instanceof ArrayBuffer
                     || (typeof Blob !== "undefined" && body instanceof Blob);
 
+  // Guest-Token als Header setzen, wenn Gast-Session existiert.
+  // Caller-Headers haben Vorrang (falls explizit überschrieben werden soll).
+  const guestToken = _readGuestToken();
+
   const init = {
     method,
     credentials: "include",
     headers: {
       ...(body && method !== "GET" && !isBinaryBody ? { "Content-Type": "application/json" } : {}),
+      ...(guestToken ? { "X-Guest-Token": guestToken } : {}),
       ...headers,
     },
     signal,

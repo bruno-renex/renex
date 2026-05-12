@@ -101,6 +101,28 @@ export const ws = {
     _listeners.clear();
   },
 
+  /**
+   * Reconnect WITHOUT clearing listeners. Wird genutzt wenn der Handle
+   * gewechselt hat (z.B. Guest-Convert): ws-Ticket muss frisch geholt
+   * werden damit das Backend uns am DO des NEUEN Handle anschließt —
+   * sonst gehen Pushes an den alten Handle und unser Tab kriegt nichts.
+   * Bestehende Event-Listener bleiben aktiv, nur die Connection wird
+   * geschlossen und neu aufgebaut.
+   */
+  async reconnect() {
+    if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
+    if (_pingTimer) { clearInterval(_pingTimer); _pingTimer = null; }
+    if (_pongTimeoutTimer) { clearTimeout(_pongTimeoutTimer); _pongTimeoutTimer = null; }
+    if (_ws) {
+      try { _ws.close(); } catch {}
+      _ws = null;
+    }
+    _isConnected = false;
+    _reconnectDelay = 1000;
+    if (!_running) _running = true;
+    await _connect();
+  },
+
   send(obj) {
     if (!_ws || _ws.readyState !== WebSocket.OPEN) {
       return false;

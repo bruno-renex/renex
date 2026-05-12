@@ -153,6 +153,17 @@
               url.searchParams.delete('registerGuest');
               history.replaceState({}, '', url.toString());
             } catch {}
+            // WebSocket reconnecten — vorher lief er unter guest_xxx's DO,
+            // jetzt brauchen wir frischen Ticket für realHandle's DO. Sonst
+            // gehen Push-Events (Messages, request_gsk, etc.) an den alten DO
+            // und unser Tab kriegt nichts → andere Members sehen unsere
+            // Sends erst nach Reload (Bug-Report).
+            try {
+              await ws.reconnect();
+              console.log('🔁 WS reconnected unter realHandle');
+            } catch (e) {
+              captureException(e, { context: 'postConvert.wsReconnect' });
+            }
             // Inbox neu laden, sonst fehlt der frisch-migrierte Inviter/Group
             await Promise.allSettled([
               inboxStore.loadContacts(),

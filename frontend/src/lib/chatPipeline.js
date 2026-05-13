@@ -131,7 +131,7 @@ async function fetchPeerDevices(handle) {
  *     — das würde Divergenzen verschärfen (Mac hatte CMK_M, iPhone created CMK_iPhone,
  *     fetch overwrote CMK_M → Mac kann test9's Messages mit CMK_T9 nicht mehr lesen).
  */
-async function tryFetchAndUnwrapCMK(fromHandle, opts = {}) {
+export async function tryFetchAndUnwrapCMK(fromHandle, opts = {}) {
   const { storeIfFresh = true } = opts;
   // Single-Flight pro (handle, storeIfFresh): 18 parallele decryptIncomingMessage
   // sollen NICHT 18× /e2e/cmk/fetch hämmern → sonst Cloudflare 429.

@@ -29,12 +29,94 @@ import {
 import { signMessage, verifyMessageSig } from '../lib/messageSig.js';
 import { getDeviceId } from '../lib/e2eKeys.js';
 import { getSigPubForDevice, getCMKIfExists } from '../lib/cmk.js';
-import { ensureSecureDmSession } from '../lib/chatPipeline.js';
+import { ensureSecureDmSession, tryFetchAndUnwrapCMK, sendCmkRequest } from '../lib/chatPipeline.js';
+import { dmSessionId, getRotationMap } from '../lib/session.js';
 import {
   encryptSdp, decryptSdp,
   encryptIce, decryptIce,
   isVoiceEnvelope,
 } from '../lib/voiceCrypto.js';
+
+/**
+ * Helper: kurzen CMK-Fingerprint für Logging (erste 4 hex bytes — keine echte
+ * Identifikation, nur damit Mismatches im Log unterscheidbar sind).
+ */
+function _cmkFp(cmkBytes) {
+  if (!cmkBytes || cmkBytes.length < 4) return '?';
+  return Array.from(cmkBytes.slice(0, 4))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Rotation-aware Voice-Decrypt mit KV-Fetch-Fallback. Strategie identisch zu
+ * chat-decrypt (chatPipeline.decryptIncomingMessage):
+ *
+ *   1. primaryCmk (lokaler active) probieren — Standard-Pfad
+ *   2. Rotation-Map durchgehen (newest first) — falls Rotation asymmetric
+ *   3. KV-Fetch (Peer's wrapped CMK) — falls Peer einen neuen CMK an unser
+ *      Device gewrappt hat den wir lokal noch nicht haben (frisches device
+ *      hinzugefügt, recovery, etc.)
+ *
+ * @param {(cmk: Uint8Array) => Promise<any>} decryptFn
+ * @param {Uint8Array} primaryCmk
+ * @param {string} me
+ * @param {string} peer
+ * @returns {Promise<any>}
+ * @throws letzten Decrypt-Error wenn alles fehlschlägt
+ */
+async function _decryptVoiceWithRotation(decryptFn, primaryCmk, me, peer) {
+  const tried = [];
+  let lastErr;
+
+  // 1. Primary
+  try {
+    tried.push(_cmkFp(primaryCmk));
+    return await decryptFn(primaryCmk);
+  } catch (e) { lastErr = e; }
+
+  // 2. Rotation-Map (newest first)
+  try {
+    const sid = dmSessionId(me, peer);
+    const map = await getRotationMap(sid);
+    if (map && map.length > 0) {
+      for (let i = map.length - 1; i >= 0; i--) {
+        const cmkBytes = map[i]?.cmkBytes;
+        if (!Array.isArray(cmkBytes) || cmkBytes.length !== 32) continue;
+        const candidate = new Uint8Array(cmkBytes);
+        const fp = _cmkFp(candidate);
+        if (tried.includes(fp)) continue;
+        tried.push(fp);
+        try {
+          return await decryptFn(candidate);
+        } catch (e) { lastErr = e; }
+      }
+    }
+  } catch {}
+
+  // 3. KV-Fetch (Peer hat möglicherweise neuen CMK gewrappt der lokal fehlt)
+  try {
+    const fetched = await tryFetchAndUnwrapCMK(peer, { storeIfFresh: false });
+    if (fetched instanceof Uint8Array && fetched.length === 32) {
+      const fp = _cmkFp(fetched);
+      if (tried.includes(fp)) {
+        console.log(`📞 Voice decrypt: KV-fetch returnte identischen CMK ${fp} (skip)`);
+      } else {
+        tried.push(fp);
+        try {
+          return await decryptFn(fetched);
+        } catch (e) { lastErr = e; }
+      }
+    } else {
+      console.log(`📞 Voice decrypt: KV-fetch returnte ${fetched ? 'invalid bytes' : 'null'} (kein wrap verfügbar)`);
+    }
+  } catch (e) {
+    console.warn(`📞 Voice decrypt: KV-fetch failed: ${e?.message}`);
+  }
+
+  console.warn(`📞 Voice decrypt failed — versucht: [${tried.join(', ')}], lastErr=${lastErr?.message}`);
+  throw lastErr || new Error('voice_decrypt_failed_all_keys');
+}
 
 /**
  * Erstellt ein signiertes auth-Objekt für eine Voice-SDP.
@@ -522,6 +604,8 @@ export const voiceStore = {
       // SDP-Inhalt (insb. ICE-Candidates mit IPs) nicht.
       const auth = await _buildAuth(offer.sdp, _callId, 'offer');
       const ec = await encryptSdp(cmk, offer.sdp, 'offer', me, peer.handle, _callId);
+      // Diagnose: log AAD-Komponenten zur Vergleichbarkeit mit Receiver-Side
+      console.log(`📞 Voice encrypt offer: me=${me} to=${peer.handle} callId=${String(_callId).slice(0,8)} ivLen=${ec.iv?.length} ctLen=${ec.ct?.length} cmkFp=${_cmkFp(cmk)}`);
       const r = await apiFetch('/voice/ring', {
         method: 'POST',
         body: {
@@ -619,12 +703,40 @@ export const voiceStore = {
       await autoDecline('no_cmk');
       return;
     }
+    // Diagnose: log AAD-Komponenten + Caller's deviceId (für Multi-Device-Tracking)
+    const callerDeviceId = payload.auth?.fromDeviceId || '?';
+    console.log(`📞 Voice decrypt offer: me=${me} from=${fromHandle}/${callerDeviceId.slice(0,8)} callId=${String(payload.callId).slice(0,8)} cmkFp=${_cmkFp(cmk)}`);
     let plainSdp;
     try {
-      plainSdp = await decryptSdp(cmk, ec, 'offer', fromHandle, me, payload.callId);
-    } catch (e) {
-      await autoDecline(`decrypt_failed:${e?.message || 'unknown'}`);
-      return;
+      plainSdp = await _decryptVoiceWithRotation(
+        (k) => decryptSdp(k, ec, 'offer', fromHandle, me, payload.callId),
+        cmk, me, fromHandle
+      );
+    } catch (firstErr) {
+      // First decrypt fail — wahrscheinlich Multi-Device-CMK-Divergenz auf Peer-Seite
+      // (z.B. Peer hat 2 Devices mit unterschiedlichen CMKs für unsere DM).
+      // Send cmk_req → das gerade rufende Peer-Device redistributiert seinen
+      // CMK an unser Device, dann KV-fetch + retry.
+      console.warn(`📞 Voice decrypt failed first try, sending cmk_req + retrying`);
+      try {
+        await sendCmkRequest(fromHandle);
+      } catch {}
+      // Kurz warten damit Peer den cmk_req sehen + redistributen + KV propagieren kann
+      await new Promise(r => setTimeout(r, 2500));
+      // Retry mit forciertem KV-fetch (storeIfFresh: true diesmal, damit der neue
+      // wirklich lokal landet — peer hat ja gerade frisch redistributiert)
+      try {
+        const fresh = await tryFetchAndUnwrapCMK(fromHandle, { storeIfFresh: true });
+        if (fresh instanceof Uint8Array && fresh.length === 32 && _cmkFp(fresh) !== _cmkFp(cmk)) {
+          console.log(`📞 Voice retry: KV liefert NEUEN CMK ${_cmkFp(fresh)} (war ${_cmkFp(cmk)}) — versuche decrypt`);
+          plainSdp = await decryptSdp(fresh, ec, 'offer', fromHandle, me, payload.callId);
+        } else {
+          throw firstErr;
+        }
+      } catch (e) {
+        await autoDecline(`decrypt_failed:${e?.message || 'unknown'}`);
+        return;
+      }
     }
     // Auth-Verify VOR Annahme: wenn der Caller einen signierten fp mitschickt,
     // muss der zur SDP passen + signature mit Caller-sigPub verifyen. Failure
@@ -680,7 +792,10 @@ export const voiceStore = {
     }
     let plainSdp;
     try {
-      plainSdp = await decryptSdp(_callCmk, ec, 'answer', peerHandle, me, _callId);
+      plainSdp = await _decryptVoiceWithRotation(
+        (k) => decryptSdp(k, ec, 'answer', peerHandle, me, _callId),
+        _callCmk, me, peerHandle
+      );
     } catch (e) {
       console.error(`🚨 Voice answer-decrypt failed: ${e?.message}`);
       _errorMsg = 'decrypt_failed';
@@ -733,7 +848,10 @@ export const voiceStore = {
     const fromHandle = payload.from;
     let candidateObj;
     try {
-      candidateObj = await decryptIce(_callCmk, ec, fromHandle, me, _callId);
+      candidateObj = await _decryptVoiceWithRotation(
+        (k) => decryptIce(k, ec, fromHandle, me, _callId),
+        _callCmk, me, fromHandle
+      );
     } catch (e) {
       console.warn(`📞 ICE-decrypt failed von ${fromHandle}: ${e?.message}`);
       return;

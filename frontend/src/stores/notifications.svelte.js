@@ -20,7 +20,7 @@ let _loaded = $state(false);
  */
 export function chatToConvoId(chat) {
   if (!chat) return null;
-  if (chat.type === 'group') return chat.key;
+  if (chat.type === 'group' || chat.type === 'channel') return chat.key;
   if (chat.type === 'dm') {
     const me   = userStore.myUser;
     const peer = chat.peer || chat.key;

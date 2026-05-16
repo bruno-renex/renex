@@ -16,6 +16,7 @@
   import { sessionStore } from './stores/session.svelte.js';
   import { inboxStore } from './stores/inbox.svelte.js';
   import { chatStore } from './stores/chat.svelte.js';
+  import { serverStore } from './stores/serverStore.svelte.js';
   import { voiceStore } from './stores/voice.svelte.js';
   import { notificationsStore } from './stores/notifications.svelte.js';
   import { autoDeleteStore, autoDeleteLabel } from './stores/autoDelete.svelte.js';
@@ -46,11 +47,13 @@
   import ChatView from './components/ChatView.svelte';
   import GuestBanner from './components/GuestBanner.svelte';
   import VoiceCallOverlay from './components/VoiceCallOverlay.svelte';
+  import VoiceLogOverlay from './components/VoiceLogOverlay.svelte';
   import RecoveryOnboardingModal from './components/RecoveryOnboardingModal.svelte';
   import RecoveryVerifyModal from './components/RecoveryVerifyModal.svelte';
   import RecoveryLoginModal from './components/RecoveryLoginModal.svelte';
   import DeviceLimitModal from './components/DeviceLimitModal.svelte';
   import MemberActionsModal from './components/MemberActionsModal.svelte';
+  import LinkWarningModal from './components/LinkWarningModal.svelte';
   import PwaInstallBanner from './components/PwaInstallBanner.svelte';
   import ToastContainer from './components/ToastContainer.svelte';
   import { bumpLoginCount } from './lib/pwaInstall.js';
@@ -520,6 +523,51 @@
         }
         if (msg.type === "reaction_updated") {
           chatStore.handleReactionUpdated(msg);
+          // In-App-Toast: jemand hat auf MEINE Message reagiert.
+          // Filter: nur "added" (kein Spam bei Removal), nur fremde Reaktoren
+          // (kein Multi-Device-Self-Echo), nur wenn ich der Message-Autor bin,
+          // und nur wenn der betreffende Chat NICHT gerade offen ist (sonst
+          // sieht der User die Reaktion bereits live im ChatView).
+          if (
+            msg.action === "added"
+            && msg.from
+            && msg.from !== userStore.myUser
+            && msg.msgAuthor === userStore.myUser
+            && msg.emoji
+          ) {
+            const sel = chatStore.selectedChat;
+            const isGroupReact = !!msg.groupName;
+            const chatKey = isGroupReact ? msg.convoId : msg.from;
+            const isViewingChat = sel
+              && ((sel.type === 'group' && sel.key === chatKey)
+                  || (sel.type === 'dm' && (sel.peer === chatKey || sel.key === chatKey)));
+            if (!isViewingChat) {
+              const lng = i18nStore.lang;
+              const peerDn = profileCache.get(msg.from) || `@${msg.from}`;
+              const tmpl = isGroupReact
+                ? (lng.reactionToastGroup || '{emoji} {peer} hat in {group} reagiert')
+                : (lng.reactionToastDm    || '{emoji} {peer} hat reagiert');
+              // Click-Target: zum reagierten Chat öffnen + zur Message scrollen.
+              // ChatView's $effect picks pendingJumpTo + messages.length auf und
+              // jumpt sobald das Bubble-DOM-Element verfügbar ist.
+              const chatNav = isGroupReact
+                ? { type: 'group', key: msg.convoId, name: msg.groupName || 'Group' }
+                : { type: 'dm',    key: msg.from,    peer: msg.from, name: `@${msg.from}` };
+              toastStore.push(
+                tmpl
+                  .replace('{emoji}', msg.emoji)
+                  .replace('{peer}', peerDn)
+                  .replace('{group}', msg.groupName || ''),
+                {
+                  kind: 'info',
+                  ttl: 7000, // länger als default — User braucht Zeit zu antippen
+                  action: msg.messageId
+                    ? () => { void chatStore.selectChatAndJump(chatNav, msg.messageId); }
+                    : undefined,
+                }
+              );
+            }
+          }
           return;
         }
         // Group-E2E (Phase 1C): GSK-Distribution + Anfrage-Pattern.
@@ -786,9 +834,12 @@
           // newDeviceInfo durchreichen → storeMyGSKForOwnDevices retried bis
           // das neue Device im KV-Index sichtbar ist (Race-Schutz).
           // Spec: docs/GROUPS_MULTIDEVICE.md §4.1
+          // Phase 4c: dasselbe für Channels (bekannte via serverStore-Cache).
           void (async () => {
             const groups = inboxStore.groups || [];
-            for (const g of groups) {
+            const channels = serverStore.getKnownChannels();
+            const convos = [...groups, ...channels.map(c => ({ id: c.id }))];
+            for (const g of convos) {
               try {
                 const gsk = await getMyGSK(g.id);
                 if (gsk) await storeMyGSKForOwnDevices(g.id, gsk, newDeviceInfo);
@@ -803,9 +854,17 @@
           // Member sind. Ohne diesen Hook könnte das neue Peer-Device meine
           // zukünftigen Group-Messages nicht decrypten.
           // Spec: docs/GROUPS_MULTIDEVICE.md §4.2
+          // Phase 4c: Channels mit-iteriert via serverStore-Channel-Cache.
+          // Self-Healing-Fallback via `request_gsk` deckt nicht-gecachte
+          // Channels automatisch beim nächsten Decrypt-Attempt ab.
           if (newDeviceInfo) {
+            const channels = serverStore.getKnownChannels();
+            const allConvos = [
+              ...(inboxStore.groups || []),
+              ...channels.map(c => ({ id: c.id })),
+            ];
             void redistributeGSKsForPeerDeviceAdded(
-              me, msg.from, newDeviceInfo, inboxStore.groups || []
+              me, msg.from, newDeviceInfo, allConvos
             );
           }
           // Frischer Peer (z.B. Gast joined gerade) → Contacts neu laden, sonst
@@ -1025,6 +1084,20 @@
           }
           inboxStore.loadContacts().catch(() => {});
 
+          // In-App-Toast bei neuer Kontaktanfrage — User sieht Anfrage sofort
+          // auch wenn er gerade in einem anderen Chat ist (InboxList ist auf
+          // Mobile bei offenem Chat per CSS hidden).
+          if (msg?.type === "contact_request" && msg?.from) {
+            const lng = i18nStore.lang;
+            const peer = msg.from;
+            const peerDn = profileCache.get(peer) || `@${peer}`;
+            toastStore.push(
+              (lng.contactRequestToast || '📩 Neue Kontaktanfrage von {peer}')
+                .replace('{peer}', peerDn),
+              { kind: 'info' }
+            );
+          }
+
           // Special-Case: Peer hat MICH entfernt (action === "removed").
           // → Toast + ggf. offenen Chat schließen, weil Senden eh blockt (403).
           if (msg?.type === "contact_update"
@@ -1060,6 +1133,7 @@
       void voiceStore._handleAnswer(msg);
     }));
     _wsUnsubs.push(ws.on("voice:ice", (msg) => {
+      console.log("📞 voice:ice WS-event arrived", { callId: msg?.callId, from: msg?.from });
       void voiceStore._handleIce(msg);
     }));
     _wsUnsubs.push(ws.on("voice:hangup", (msg) => {
@@ -1138,8 +1212,13 @@
     if (document.visibilityState === 'visible') {
       _runHeartbeat();
       // PWA-Resume nach Suspend: Push-Nachrichten sind während Background
-      // angekommen, aber WS war gekappt → offenen Chat refreshen.
+      // angekommen, aber WS war gekappt → offenen Chat + Inbox-Daten refreshen.
+      // DO buffert keine Events: ohne Refetch sieht der User neue Kontakt-
+      // anfragen, Gruppen-Adds und Unread-Counts erst nach PWA-Restart.
       chatStore.refreshSelected();
+      void inboxStore.loadContacts().catch(() => {});
+      void inboxStore.loadGroups().catch(() => {});
+      void inboxStore.loadUnread().catch(() => {});
     }
   }
 
@@ -1191,6 +1270,9 @@
 <!-- Voice-Call-Overlay (global, über allem) -->
 <VoiceCallOverlay />
 
+<!-- Temporäres Voice-Debug-Overlay — aktiv via ?voice-debug=1 (siehe Component) -->
+<VoiceLogOverlay />
+
 <!-- Recovery-Modale (blocken App-Entry bis erledigt) -->
 <RecoveryOnboardingModal bind:isOpen={recoveryNeedsOnboarding} />
 <RecoveryVerifyModal bind:isOpen={recoveryNeedsVerify} />
@@ -1203,6 +1285,7 @@
 
 <!-- Member-Actions-Modal: globaler Action-Sheet bei Klick auf Group-Sender / Group-Member -->
 <MemberActionsModal />
+<LinkWarningModal />
 
 <!-- PWA-Install-Banner: Smart Banner + iOS/Safari-Anleitung. Trigger via Profile-Menü. -->
 <PwaInstallBanner />

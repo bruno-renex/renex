@@ -2,8 +2,8 @@
 
 > **AI-FREE FOREVER. PASSKEY-ONLY. HUMANS ONLY.**
 
-**Version:** 1.0
-**Letzte Aktualisierung:** 2026-05-09
+**Version:** 1.1
+**Letzte Aktualisierung:** 2026-05-14
 **Lizenz:** CC BY 4.0 — du darfst dieses Manifest zitieren, mit Attribution.
 
 ---
@@ -212,3 +212,96 @@ Jahren als selbstverständlich gilt: gut. Dann haben wir gewonnen.
 > Wenn du dem hier zustimmst: [`CONTRIBUTING.md`](./CONTRIBUTING.md). Mach mit.
 > Wenn du dem hier widersprichst: schreib uns, mit Argumenten. Wir lesen.
 > Wenn du dem hier gleichgültig gegenüberstehst: dann ist RENEX vielleicht nicht für dich. Auch ok.
+
+---
+
+## Anhang A: Skeptic FAQ
+
+Sieben Fragen, die zuverlässig kommen — von skeptischen Investoren, von Hacker-News-Kommentatoren, von Redditors, von Journalisten. Wir beantworten sie hier einmal schriftlich. Wenn du gefragt wirst: hierhin verlinken.
+
+Diese Antworten sind bewusst ehrlich, nicht marketing-glatt. Wir nennen die Grenzen unserer eigenen Versprechen, weil sonst jemand anders das tut — und weniger fair.
+
+### 1. Warum nicht einfach Discord + Passkeys?
+
+Discord hat Passkeys — als zweiten Faktor, nicht als primäres Auth. Email und Phone bleiben Pflicht. Sie können das nicht aufgeben: Email ist ihr Recovery-, Marketing- und Compliance-Anker.
+
+Schwerwiegender: Discord **ist** eine Bot-Plattform. Ein nennenswerter Teil ihres Developer-Ökosystems sind Bots. Ein "AI-Free Discord" würde das eigene Geschäftsmodell killen. Selbst wenn sie morgen einen Passkey-only-Modus ankündigen — niemand glaubt ihnen. Und die DMs sind weiterhin nicht E2E-verschlüsselt.
+
+Wir können das Versprechen halten, weil wir nichts zu schützen haben außer das Versprechen.
+
+### 2. Wie verhindert ihr Sybil-Angriffe?
+
+Nicht vollständig. Niemand kann das. Wir erhöhen die **Kosten pro Fake-Identität**:
+
+- Turnstile-Captcha → ~$0.001/Solve (niedrige Hürde)
+- Passkey-Registration → echtes Gerät + Biometrie-Setup, ~5 Min Mensch-Arbeit pro Account
+- Rate-Limits + Behavioral-Signale → skaliert nicht für Farmen
+- Hardware-Attestation (Roadmap Phase 9) → Bypass kostet ~$200/Gerät
+
+Realistisch: Wir drücken die Account-Kosten von ~$0 (Email-Signup anderswo) auf ~$5–50 heute, mit Phase 9 auf ~$200. Damit wird Spam ökonomisch unattraktiv. Das reicht für eine Community-Plattform.
+
+"Sybil-resistant" wäre eine Lüge. "Sybil-teuer" ist die Wahrheit.
+
+### 3. Wie beweist ihr „human"?
+
+Wir beweisen es nicht. Wir machen Automatisierung teuer.
+
+- **Architektonisch:** Kein Public API, keine Webhooks, keine Bot-Tokens. RENEX ist nicht skriptbar ohne Reverse-Engineering plus Captcha-Farm.
+- **Technisch:** Passkey + Hardware-Attestation + Captcha + Rate-Limits → hohe Setup-Kosten pro Fake.
+- **Sozial:** AGB explizit, sofortiger Bann, "Pure Human Verified"-Badge als Community-Signal.
+
+We don't prove humanity — we make automation uneconomical. Das ist intellektuell ehrlich. Jede stärkere Aussage wäre Marketing, und Marketing-Versprechen brechen vor Gericht und auf Reddit.
+
+### 4. Warum wechseln Communities von Discord?
+
+Die meisten wechseln nicht. Das ist die Wahrheit über Network-Effects.
+
+Was wir verkaufen, ist nicht "Switch", sondern **"Second Home"**:
+
+- Privacy-bewusste Inner-Circles innerhalb größerer Discord-Communities
+- Indie-Dev-Communities, die Bot-Spam satthaben
+- Clans, die nach Datenleak oder Discord-Policy-Drama einen sauberen Restart wollen
+
+User bleiben auf Discord für ihre Hauptcommunity und nutzen RENEX für die Kerngruppe daneben. Wir ersetzen nicht Discord — wir ersetzen die WhatsApp-Gruppe, die ohnehin daneben läuft.
+
+Niche-First. Sechs bis zwölf Monate Network-Effects einplanen. Wer in diesem Markt schneller wächst, wächst meistens mit Bots.
+
+### 5. Was ist euer unfairer Vorteil?
+
+Zwei echte Moats, zwei kleinere Hebel:
+
+1. **„AI-Free" als Brand-Moat.** Discord, Slack, Telegram können das nicht imitieren, ohne ihr Bot- und Developer-Business zu killen. Ein "AI-Free Mode" wäre bei jedem Incumbent unglaubwürdig. Glaubwürdigkeit ist nicht imitierbar, wenn man zu viel zu verlieren hat.
+2. **Schweizer Jurisdiction.** DSG-Standard, kein CLOUD-Act, kein FISA. Rechtlicher Vorteil, nicht bloß Standort-Marketing.
+3. Open Standard + AGPL-Server → schützt vor Big-Tech-Forks-und-Hide.
+4. Solo-Dev + Bootstrap → schnelle Iteration, kein Investor-Druck, principled statt ausverkaufen.
+
+Der schwere Moat ist Punkt 1.
+
+### 6. Wie onboardet ihr Nutzer ohne Friction?
+
+Nicht friction-frei. Friction-low.
+
+- **Kein App-Download** — PWA, ein Klick zu "Add to Home Screen".
+- **Keine Email, keine SMS, keine Verifikation** — Handle-only-Identity.
+- **Sign-In via Passkey** — 1-Klick auf bekanntem Gerät, QR-Scan auf neuem.
+- **Recovery-Phrase ist Schritt 2, nicht Schritt 1.** Wird beim ersten Login angeboten, nicht erzwungen.
+- **Aggressives Install-Tutorial mit GIF/Video**, weil iOS-PWA-Push einen manuellen Schritt braucht.
+
+Wo es bricht: Safari/iOS-Passkey-UX ist 2026 immer noch nicht perfekt. User ohne Touch-ID/Face-ID-Gerät verlieren wir — das ist der Preis fürs Versprechen.
+
+30 Sekunden Passkey-Setup gegen null Spam und null Datenleak: fairer Trade.
+
+### 7. Wie verhindert ihr Growth-Death durch zu starke Security?
+
+Wir akzeptieren, dass Security-First ein Wachstumsfilter ist. Wir kompensieren an vier Stellen:
+
+1. **Security als Empowerment, nicht als Last.** "YOU ARE THE KEY" verkauft Kontrolle, nicht Paranoia.
+2. **Friction nur dort, wo nötig.** Login ist 1 Klick. E2E läuft unsichtbar. Verify-Contact ist TOFU + Auto-Toast (Apple-Style), nicht Modal-Hölle.
+3. **UX-Quality > Security-Theatre.** Performance, Latency, später Voice — Gamer-First. Wer RENEX startet, soll merken, dass es schneller ist, nicht dass es paranoider ist.
+4. **Realistische Wachstumserwartung.** Year-1-Ziel sind 5'000 aktive User. Nicht 5 Millionen. Wir planen für Slow-Path und Knappheits-Hype (Founder's Pass), nicht für Massen-Push.
+
+Der ehrliche harte Fall: Wenn ein User Recovery-Phrase **und** alle Devices verliert, ist der Account weg. Das steht in der AGB. Das wird in der UI gewarnt. Das ist Architektur, kein Bug. Wer das nicht akzeptiert, ist nicht unsere Zielgruppe.
+
+---
+
+> Diese FAQ ist Living Document. Wenn eine Frage hier nicht ehrlich beantwortet ist: schreib uns, mit Argumenten. Wir aktualisieren.

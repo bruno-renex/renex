@@ -1,5 +1,5 @@
 import { json, readJson, param, isUUID, checkCsrf } from '../utils.js';
-import { requireSession, requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, revokeAllSessions } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, revokeAllSessions, getToken } from '../auth.js';
 import { verifyWebAuthnAssertion, createWebAuthnChallenge } from '../helpers/webauthnVerify.js';
 
 // ======================================================
@@ -570,9 +570,23 @@ export async function handleE2eRoutes(request, env, path, params) {
             console.warn("CMK-wrap cleanup für revoked device fehlgeschlagen (non-fatal):", e?.message);
           }
 
-          // (2) Alle User-Sessions invalidieren
+          // (2) Alle User-Sessions invalidieren — ABER die des initiierenden
+          // Devices behalten, damit dessen laufende CMK-Rotation +
+          // Distribution nicht mit einem 401-Burst gegen `/e2e/cmk/store`,
+          // `/chat/send` etc. abbricht. Sonst würde der Initiator lokal neue
+          // CMKs anlegen, aber Peers würden sie nie kriegen — User kann
+          // direkt nach dem Revoke nicht senden, und Peers haben den alten
+          // CMK (siehe Vorfall 2026-05-16 bertha18a-Mac).
+          //
+          // Edge-Case Self-Compromise: User markiert AKTUELLES Device als
+          // kompromittiert (actingDeviceId === deviceId). In dem Fall MUSS
+          // die aktuelle Session weg — sonst überlebt der Angreifer auf
+          // dem als geleakt markierten Device. Wenn actingDeviceId fehlt,
+          // verhalten wir uns konservativ wie früher (alles widerrufen).
+          const isSelfCompromise = !actingDeviceId || actingDeviceId === deviceId;
+          const initiatorToken = isSelfCompromise ? null : getToken(request);
           try {
-            await revokeAllSessions(env, handle);
+            await revokeAllSessions(env, handle, initiatorToken ? { exceptToken: initiatorToken } : undefined);
           } catch (e) {
             console.warn("revokeAllSessions bei device-revoke fehlgeschlagen (non-fatal):", e?.message);
           }

@@ -123,7 +123,7 @@ describe('fetchServerVersion', () => {
 // startVersionPolling
 // ────────────────────────────────────────────────────────
 describe('startVersionPolling', () => {
-  it('Erste Prüfung NICHT sofort, erst nach intervalMs', async () => {
+  it('Erste Prüfung NICHT sofort, erst nach initialDelayMs', async () => {
     setMetaTag('v1');
     let serverVersion = 'v2';
     globalThis.fetch = vi.fn(() => Promise.resolve({
@@ -132,7 +132,7 @@ describe('startVersionPolling', () => {
 
     const onMismatch = vi.fn();
     vi.useFakeTimers();
-    const stop = startVersionPolling(onMismatch, { intervalMs: 100 });
+    const stop = startVersionPolling(onMismatch, { intervalMs: 100, initialDelayMs: 100 });
     expect(globalThis.fetch).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(100);
@@ -151,7 +151,7 @@ describe('startVersionPolling', () => {
 
     const onMismatch = vi.fn();
     vi.useFakeTimers();
-    const stop = startVersionPolling(onMismatch, { intervalMs: 100 });
+    const stop = startVersionPolling(onMismatch, { intervalMs: 100, initialDelayMs: 100 });
 
     await vi.advanceTimersByTimeAsync(100);
     await vi.advanceTimersByTimeAsync(100);
@@ -169,7 +169,7 @@ describe('startVersionPolling', () => {
 
     const onMismatch = vi.fn();
     vi.useFakeTimers();
-    const stop = startVersionPolling(onMismatch, { intervalMs: 100 });
+    const stop = startVersionPolling(onMismatch, { intervalMs: 100, initialDelayMs: 100 });
     await vi.advanceTimersByTimeAsync(500);
     expect(onMismatch).not.toHaveBeenCalled();
 
@@ -183,7 +183,7 @@ describe('startVersionPolling', () => {
     }));
 
     vi.useFakeTimers();
-    const stop = startVersionPolling(() => {}, { intervalMs: 100 });
+    const stop = startVersionPolling(() => {}, { intervalMs: 100, initialDelayMs: 100 });
 
     await vi.advanceTimersByTimeAsync(100);
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
@@ -211,7 +211,7 @@ describe('startVersionPolling', () => {
 
     const onMismatch = vi.fn();
     vi.useFakeTimers();
-    const stop = startVersionPolling(onMismatch, { intervalMs: 100 });
+    const stop = startVersionPolling(onMismatch, { intervalMs: 100, initialDelayMs: 100 });
 
     await vi.advanceTimersByTimeAsync(100);
     expect(onMismatch).not.toHaveBeenCalled();  // erster Call schlug fehl

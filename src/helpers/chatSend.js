@@ -1,5 +1,5 @@
 import { json, readJson, dmConvoId } from '../utils.js';
-import { requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, pushToGroupMembers, GUEST_HANDLE_RE } from '../auth.js';
+import { requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, pushToGroupMembers, getConvoMemberHandles, isConvoMember, GUEST_HANDLE_RE } from '../auth.js';
 import { pushToUser, detectMentions } from './pushSend.js';
 
 // ======================================================
@@ -210,10 +210,9 @@ export async function handleChatSend(request, env) {
     if (!bodyConvoId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(bodyConvoId)) {
       return json(request, { error: "GSK messages require a valid group context" }, 400);
     }
-    const gskSenderMember = await env.RENEX_DB.prepare(
-      "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-    ).bind(bodyConvoId, me).first();
-    if (!gskSenderMember) return json(request, { error: "Not a group member" }, 403);
+    // Type-aware: groups → conversation_members, channels → server_members
+    const gskSenderIsMember = await isConvoMember(env.RENEX_DB, bodyConvoId, me);
+    if (!gskSenderIsMember) return json(request, { error: "Not a group member" }, 403);
   }
 
   // E2E Versions-Guard — gilt NUR für echte E2E-Nachrichten
@@ -238,16 +237,12 @@ export async function handleChatSend(request, env) {
   // Gruppe: Sender UND Empfänger müssen Mitglieder der Konversation sein
   let isAllowed = false;
   if (bodyConvoId) {
-    // Gruppen-Nachricht: Mitgliedschaft prüfen
-    const senderMember = await env.RENEX_DB.prepare(
-      "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-    ).bind(bodyConvoId, me).first();
-
-    const recipientMember = await env.RENEX_DB.prepare(
-      "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-    ).bind(bodyConvoId, other).first();
-
-    isAllowed = !!(senderMember && recipientMember);
+    // Gruppen-/Channel-Nachricht: Mitgliedschaft prüfen (type-aware)
+    const [senderIsMember, recipientIsMember] = await Promise.all([
+      isConvoMember(env.RENEX_DB, bodyConvoId, me),
+      isConvoMember(env.RENEX_DB, bodyConvoId, other),
+    ]);
+    isAllowed = senderIsMember && recipientIsMember;
   } else if (isGuest) {
     // Gast-DM: darf nur in der zugewiesenen Konversation schreiben
     const guestCid = dmConvoId(me, other);
@@ -518,13 +513,29 @@ export async function handleChatSend(request, env) {
   // ======================================================
   if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "cmk_unavailable" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "cmk_reset" && msg.type !== "auto_delete_set" && msg.type !== "gsk" && msg.type !== "request_gsk") {
     if (isGroupMessage) {
-      // Atomar via INSERT-FROM-SELECT — ein Round-Trip statt N.
-      await env.RENEX_DB.prepare(
-        `INSERT INTO unread_counters (owner, sender, count)
-           SELECT member_handle, ?, 1 FROM conversation_members
-           WHERE convo_id = ? AND member_handle != ?
-         ON CONFLICT(owner, sender) DO UPDATE SET count = count + 1`
-      ).bind(cid, cid, me).run();
+      // Type-aware: Channels haben Members in server_members, Groups in conversation_members.
+      // Zwei separate Statements statt UNION-INSERT-FROM-SELECT (SQLite-Parser
+      // hat Probleme mit ON CONFLICT nach Subquery-Source).
+      const convoType = await env.RENEX_DB.prepare(
+        "SELECT type, server_id FROM conversations WHERE id = ?"
+      ).bind(cid).first();
+
+      if (convoType?.type === 'channel' && convoType.server_id) {
+        await env.RENEX_DB.prepare(
+          `INSERT INTO unread_counters (owner, sender, count)
+             SELECT user_handle, ?, 1 FROM server_members
+             WHERE server_id = ? AND user_handle != ?
+           ON CONFLICT(owner, sender) DO UPDATE SET count = count + 1`
+        ).bind(cid, convoType.server_id, me).run();
+      } else {
+        // Group (legacy)
+        await env.RENEX_DB.prepare(
+          `INSERT INTO unread_counters (owner, sender, count)
+             SELECT member_handle, ?, 1 FROM conversation_members
+             WHERE convo_id = ? AND member_handle != ?
+           ON CONFLICT(owner, sender) DO UPDATE SET count = count + 1`
+        ).bind(cid, cid, me).run();
+      }
     } else {
       // Atomares Increment via D1 — kein Read-Modify-Write Race Condition
       await env.RENEX_DB.prepare(
@@ -542,11 +553,8 @@ export async function handleChatSend(request, env) {
   if (!isControlMsg) {
     try {
       if (isGroupMessage) {
-        // Gruppe: Push an alle offline Members
-        const memberRows = await env.RENEX_DB.prepare(
-          "SELECT member_handle FROM conversation_members WHERE convo_id = ?"
-        ).bind(cid).all();
-        const members = (memberRows.results || []).map(r => r.member_handle);
+        // Gruppe/Channel: Push an alle offline Members (type-aware)
+        const members = await getConvoMemberHandles(env.RENEX_DB, cid);
         const groupName = (await env.RENEX_DB.prepare(
           "SELECT name FROM conversations WHERE id = ?"
         ).bind(cid).first())?.name || "Gruppe";
@@ -622,27 +630,27 @@ export async function handleChatSend(request, env) {
         }
 
         if (shouldPush) {
-          // Online-Check: WebSocket-Zustellung hat Vorrang über KV-Presence
-          // wsDeliveredCount > 0 = User hat aktive WS-Verbindung → kein Push nötig
-          // wsDeliveredCount === 0 = kein offener Tab → Push senden
-          const isOnline = wsDeliveredCount > 0;
-
-          if (!isOnline) {
-            await pushToUser(env, other, {
-              title: me,
-              body: msg.e2e ? "Verschlüsselte Nachricht" : (msg.message || "").slice(0, 100),
-              tag: `renex-${cid}`,
-              data: {
-                type: "message",
-                convoId: cid,
-                from: me,
-                // Svelte-PWA-Root: /?with=<peer>. Vorher: /chat?... (Vanilla-Seite,
-                // löst false-positive Gast-Recovery aus bei konvertierten Usern).
-                url: `/?with=${encodeURIComponent(me)}`,
-                e2e: !!msg.e2e,
-              },
-            });
-          }
+          // DMs: Immer Push senden — analog zu Gruppen. Der frühere wsDeliveredCount-
+          // Gate war auf iOS unzuverlässig: Safari hält die WS-Verbindung nach PWA-
+          // Hintergrund noch ~25-35s als „connected" (Heartbeat 25s + Pong-Timeout 10s),
+          // bevor der DO sie close-t. In dem Fenster wäre wsDeliveredCount > 0 obwohl
+          // der User die Message gar nicht sieht → kein Push, Message verloren bis Resume.
+          // Notification-Tag dedupliziert auf dem Gerät; bei aktivem Chat zeigt
+          // chatStore.receiveMessage die Message zusätzlich live.
+          await pushToUser(env, other, {
+            title: me,
+            body: msg.e2e ? "Verschlüsselte Nachricht" : (msg.message || "").slice(0, 100),
+            tag: `renex-${cid}`,
+            data: {
+              type: "message",
+              convoId: cid,
+              from: me,
+              // Svelte-PWA-Root: /?with=<peer>. Vorher: /chat?... (Vanilla-Seite,
+              // löst false-positive Gast-Recovery aus bei konvertierten Usern).
+              url: `/?with=${encodeURIComponent(me)}`,
+              e2e: !!msg.e2e,
+            },
+          });
         }
       }
     } catch (pushErr) {

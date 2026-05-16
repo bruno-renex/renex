@@ -445,19 +445,48 @@ export async function handleGroupRoutes(request, env, path, params) {
       const groupId = param(params, "groupId");
       if (!isValidGroupId(groupId)) return json(request, { error: "Invalid groupId" }, 400);
 
-      // Nur Mitglieder dürfen die Liste sehen
-      const membership = await env.RENEX_DB.prepare(
-        "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-      ).bind(groupId, me).first();
-      if (!membership) return json(request, { error: "Not a member" }, 403);
+      // Type-Lookup: 'group' (legacy) oder 'channel' (Phase 3A).
+      // Bei 'channel' kommen Members aus server_members (alle Server-Member sind
+      // Channel-Member in Phase 3A — private Channels mit overrides ist Phase 4c).
+      const convoInfo = await env.RENEX_DB.prepare(
+        "SELECT type, server_id FROM conversations WHERE id = ?"
+      ).bind(groupId).first();
+      if (!convoInfo) return json(request, { error: "Not found" }, 404);
 
-      const rows = await env.RENEX_DB.prepare(
-        "SELECT member_handle, role, joined_at FROM conversation_members WHERE convo_id = ? ORDER BY joined_at ASC"
-      ).bind(groupId).all();
-      const allMembers = rows.results || [];
+      let allMembers;
+      if (convoInfo.type === 'channel' && convoInfo.server_id) {
+        // Channel — Membership-Check + Member-Liste aus server_members
+        const isServerMember = await env.RENEX_DB.prepare(
+          "SELECT 1 FROM server_members WHERE server_id = ? AND user_handle = ?"
+        ).bind(convoInfo.server_id, me).first();
+        if (!isServerMember) return json(request, { error: "Not a member" }, 403);
+
+        const rows = await env.RENEX_DB.prepare(
+          // Shape an conversation_members anpassen: member_handle + role + joined_at
+          // role aus is_owner ableiten (admin wenn owner, sonst member)
+          `SELECT user_handle AS member_handle,
+                  CASE is_owner WHEN 1 THEN 'admin' ELSE 'member' END AS role,
+                  joined_at
+           FROM server_members WHERE server_id = ? ORDER BY joined_at ASC`
+        ).bind(convoInfo.server_id).all();
+        allMembers = rows.results || [];
+      } else {
+        // Group (legacy) — bestehende Logik
+        const membership = await env.RENEX_DB.prepare(
+          "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+        ).bind(groupId, me).first();
+        if (!membership) return json(request, { error: "Not a member" }, 403);
+
+        const rows = await env.RENEX_DB.prepare(
+          "SELECT member_handle, role, joined_at FROM conversation_members WHERE convo_id = ? ORDER BY joined_at ASC"
+        ).bind(groupId).all();
+        allMembers = rows.results || [];
+      }
 
       // ── Lazy Cleanup: abgelaufene Gäste automatisch entfernen ──
-      const guestMembers = allMembers.filter(m => m.member_handle.startsWith("guest_"));
+      // Skip für Channels — Gäste leben in conversation_members, nicht in server_members.
+      const guestMembers = (convoInfo.type === 'channel') ? [] :
+        allMembers.filter(m => m.member_handle.startsWith("guest_"));
       const expiredGuests = [];
       if (guestMembers.length > 0) {
         const now = Date.now();

@@ -222,11 +222,12 @@
     if (!file) return;
     const chat = chatStore.selectedChat;
     if (!chat) return;
-    // convoId herleiten: DM = "alphabetisch sortiert", Gruppe = chat.key (UUID)
-    const me = chat.type === 'group' ? null : (chatStore.selectedChat?.peer);
+    // convoId herleiten: DM = "alphabetisch sortiert", Group/Channel = chat.key (UUID)
+    const isGroupLike = chat.type === 'group' || chat.type === 'channel';
+    const me = isGroupLike ? null : (chatStore.selectedChat?.peer);
     const myUser = (typeof localStorage !== 'undefined' ? localStorage.getItem('my_user') : '')?.toLowerCase();
     let convoId;
-    if (chat.type === 'group') {
+    if (isGroupLike) {
       convoId = chat.key;
     } else {
       const peer = (chat.peer || chat.key).toLowerCase();

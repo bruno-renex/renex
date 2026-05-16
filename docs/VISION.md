@@ -156,7 +156,8 @@ Diese Entscheidungen wurden bewusst getroffen und sind **NICHT verhandelbar** oh
 |---|---|---|
 | Authentifizierung | WebAuthn/Passkey only | Markenkern |
 | E2E-Crypto | WebCrypto (Phase 1), Signal Protocol (Phase 2) | Schritt für Schritt |
-| Voice/Video | WebRTC mit Cloudflare TURN/SFU | Skaliert mit Pay-per-Use |
+| Voice 1:1 | WebRTC P2P + self-hosted coturn (Hetzner CH/DE) | Privacy-Max (TURN sieht nur encrypted SRTP), 10× günstiger als CF Realtime |
+| Voice-Channels (Gruppen) | self-hosted LiveKit SFU (Apache-2.0) mit E2E Frame-Encryption über bestehendes GSK-System | Open-Standard-konform (Apache-2.0), Hetzner-self-hostbar, keine US-Jurisdiktion (FISA/NSL/CLOUD Act), Frame-Encryption hält Server zero-knowledge |
 | Backend | Cloudflare Workers + D1 + KV + R2 + DO | Bereits vorhanden, edge-native |
 | Frontend | Vanilla JS, ES Modules, kein Framework | Performance, Kontrolle, kleine Bundle-Size |
 
@@ -387,7 +388,14 @@ Jedes Device entschlüsselt nur seinen eigenen Payload
 
 ## 10. Roadmap-Übersicht
 
-**Ziel: Beta-Launch Oktober/November 2026** *(6-7 Monate ab 27.04.2026)*
+**Ziel: Beta-Launch Mitte/Ende Juli 2026** *(~10 Wochen ab 2026-05-13)*
+
+> **Roadmap-Pivot 2026-05-13:** Beta-Launch um ~3 Monate nach vorne gezogen.
+> Wesentliche Änderungen: Phase 3 → Phase 3A (Voice deferred), Phase 4 deferred,
+> Phase 5 → Phase 5-Light, Phase 2 parallelisiert zu Phase 3A. Begründung: Phase 1
+> ist exzellente Foundation (Multi-Device-Krypto stable), Voice ist eigener Tech-Stack
+> (3-4 Wochen), Markenkern „AI-Free + Passkey-Only + Text-Discord-Killer" ist auch ohne
+> Voice valid. Voice + Signal Protocol gemeinsam in Phase 8 als v2.0-Sicherheits-Update.
 
 **Strategie-Wahl: Option B (Pragmatisch)** — Svelte jetzt, Signal Protocol nach Beta.
 
@@ -417,55 +425,69 @@ Master-Docs geschrieben (`VISION.md`).
 - Recovery-Phrase (BIP39) + iCloud-Sync optional
 - Device-Management-UI
 
-### Phase 1C — Multi-Device Groups *(Woche 7: Juli)*
+### Phase 1C — Multi-Device Groups ✅ *(2026-05-10)*
 - GSK-Multi-Device
 - Group-Member-Device-Tracking
 - Tests mit 5×5 Konfiguration
 
-### Phase 2 — Open Standard veröffentlichen *(Woche 8: Juli)*
+### Phase 1B/1C Loose-End ✅ *(2026-05-13)*
+- AddDeviceModal mit QR-Onboarding-Helper (siehe `MULTI_DEVICE.md` §12.1)
+
+### Phase 3A — Text-Server & Channels *(Wo 1-4: 2026-05-18 → 2026-06-15)*
+**Voice ausgeklammert** — siehe [`SERVERS.md`](./SERVERS.md) Decision Log 2026-05-13.
+- Server/Channel-Konzept (Datenmodell, Roles, Permissions, Audit-Log)
+- Sidebar-Refactor (Server-Stack + DMs + Standalone-Groups)
+- Server-Settings-UI (Channels, Roles, Members, Invites, Audit-Log)
+- Permission-Resolution-Algorithmus (Frontend-Hide + Backend-Enforce)
+- Multi-Device-Code-Erweiterung: `redistributeGSKsForPeerDeviceAdded` umfasst Channel-Memberships
+
+### Phase 5-Light — Anti-AI Minimum *(Wo 5: 2026-06-16 → 2026-06-22)*
+- Captcha-Verschärfung an Server-Create + Invite-Accept
+- Rate-Limits für Server/Channel/Role-Endpoints
+- ❌ Hardware-Attestation: deferred zu Phase 9 (Year 1)
+- ❌ Behavioral-Analysis: deferred zu Phase 9
+
+### Phase 2 — Open Standard veröffentlichen *(Wo 5-6: 2026-06-16 → 2026-06-29, parallel zu Phase 5-Light)*
 - GitHub-Repo öffentlich
 - Spec finalisiert (`PROTOCOL.md`)
 - AGPL Backend / MIT Frontend
 - CI eingerichtet (GitHub Actions)
 
-### Phase 3 — Discord-Killer Architecture *(Woche 9-12: Juli-August)*
-- Server/Channel-Konzept
-- Voice-Channels (drop-in)
-- Roles & Permissions
-- Push-to-Talk
-- Screen-Sharing
-
-### Phase 4 — Gamer-Features *(Woche 13-14: September)*
-- Steam Rich Presence
-- Custom Emojis (Pro-Limit)
-- Soundboard
-- Custom Status
-
-### Phase 5 — Anti-AI-Hardening *(Woche 15: September)*
-- Captcha-Verschärfung
-- Hardware-Attestation
-- Behavioral-Analysis
-- "Pure Human Verified"-Badge
-- Manifesto öffentlich
-
-### Phase 6 — Brand & Launch-Prep *(Woche 16: Oktober)*
+### Phase 6 — Brand & Launch-Prep *(Wo 7: 2026-06-30 → 2026-07-06)*
 - Landing-Page Redesign
 - Demo-Video + GIF für PWA-Install-Onboarding
 - Press-Kit
 - Founder's Pass-System (Stripe)
-- AGB rechtssicher (Anti-AI Best-Effort-Klausel)
+- AGB rechtssicher (Anti-AI Best-Effort-Klausel + Schweizer DSG-Auskunftsrecht via Audit-Log)
+- Manifesto öffentlich
 
-### Phase 7 — Public Beta-Launch *(Oktober-November 2026)*
+### Phase 7 — Public Beta-Launch 🚀 *(Mitte/Ende Juli 2026)*
 - Erste 50-1000 Beta-User
 - Reddit/HN/Twitter-Posts (realistisch: 1-2 viral)
 - 5 Streamer-Outreach mit Demo-Video
+- **Marketing-Story:** „Text-First Discord-Killer mit AI-Free-Garantie. Voice kommt in v2.0 (Q4 2026)."
 - Geduld: 6-12 Monate Network-Effects
 
-### Post-Beta: Phase 8 — Signal Protocol Migration *(Nov 2026 - Jan 2027)*
-- libsignal-rust → WASM
+### Post-Beta: Phase 8 — Voice + Signal Protocol *(Aug 2026 - Nov 2026)*
+**Doppel-Pack als v2.0. Voice-Stack split nach Topologie:**
+- **1:1-Calls**: WebRTC P2P + self-hosted **coturn** (Hetzner CH/DE) → ersetzt CF TURN. Frame-Crypto via DTLS-SRTP wie bisher. Marketing-Pitch: „Direkter P2P-Pfad, Server sieht nie Plaintext."
+- **Voice-Channels (Gruppen)**: self-hosted **LiveKit SFU** (Apache-2.0) auf Hetzner CH/DE. E2E via Insertable Streams + Frame-Encryption mit Keys aus bestehendem **GSK-System** (HKDF-Derivation pro Sender+chainIndex). Push-to-Talk + Screen-Sharing nativ über LiveKit-API.
+- **NICHT mehr**: Cloudflare Realtime SFU (siehe Decision Log 2026-05-15 — Privacy + Open-Standard-Bruch).
+- → Detail-Spec: `VOICE.md` *(TBD, Phase-8-Start)*
+- libsignal-rust → WASM (E2E-Layer für Text-Chat)
 - Double Ratchet ablöst CMK-Epochs
 - Migration-Path mit Lessons-Learned von echten Usern
-- Marketing-Spin: "v2.0 Sicherheits-Update"
+- Marketing-Spin: „v2.0 Sicherheits- + Voice-Update — Self-Hosted, Schweizer Datenschutz, Open Standard."
+
+### Post-Beta: Phase 9 — Gamer-Features + Anti-AI Stark *(Year 1 Q4 2026 - Q1 2027)*
+- Steam Rich Presence
+- Custom Emojis (Pro-Limit)
+- Soundboard
+- Custom Status
+- Hardware-Attestation
+- Behavioral-Analysis
+- „Pure Human Verified"-Badge
+- Channel-Categories (`parent_id`)
 
 ### Post-Beta: Year 2
 - B2B-Sales starten
@@ -493,11 +515,11 @@ Master-Docs geschrieben (`VISION.md`).
 - ✅ Anti-AI-Manifest-Page öffentlich
 - ✅ Demo-Video produziert
 
-### Phase 7 — Beta (September - Oktober)
+### Phase 7 — Beta (Juli - August) *(Roadmap-Pivot 2026-05-13)*
 - 🎯 **50 Beta-User** (Woche 1 nach Launch)
-- 🎯 **500 aktive User** (Monat 1)
+- 🎯 **500 aktive User** (Monat 1, Ende August)
 - 🎯 **5 Founder's Passes verkauft** (Monat 1) → $125
-- 🎯 **2'000 aktive User** bis Ende Oktober
+- 🎯 **2'000 aktive User** bis Ende September
 
 ### Year 1 (April 2026 - April 2027)
 - 🎯 **5'000 aktive User**
@@ -588,6 +610,10 @@ Wenn eine strategische Entscheidung geändert wird, hier dokumentieren:
 | 2026-04-28 | Device-State-Storage | nur KV-Index | **D1-Tabelle `devices` + KV als Hot-Cache** | Send-Path bleibt schnell (KV), Cron+Settings-UI sauber (D1). Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §2 |
 | 2026-04-28 | Add-Device-Bestätigung | unspezifiziert | **Cross-Device-Passkey IST die Bestätigung**, Toast nur als Notbremse | Passkey ist Trust-Anchor; zusätzlicher Confirm wäre UX-Friktion. Detail: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §4.1 |
 | 2026-05-10 | Group-Multi-Device-Distribution | unspezifiziert | **Frontend-Re-Distribution bei device_added (self + peer)** mit Backoff-Retry-Race-Schutz | Konsistent mit DM-Pattern (CMK-Redistribute), Backend bleibt zero-knowledge. Detail: [`GROUPS_MULTIDEVICE.md`](./GROUPS_MULTIDEVICE.md) §4 |
+| 2026-05-13 | Phase-3-Datenmodell für Server/Channel | (A) neue `servers`+`channels`-Tables / (B) `conversations`-Erweiterung mit `server_id`+`channel_kind` | **B** | Multi-Device-Krypto-Pipeline ist convo-agnostisch — Wiederverwendung spart 2-3 Wochen Duplikation. Standalone-Groups koexistieren (keine Auto-Migration). Detail: [`SERVERS.md`](./SERVERS.md) §2 + §10 |
+| 2026-05-13 | **Beta-Launch-Termin** | Okt/Nov 2026 (16 Wo) | **Mitte/Ende Juli 2026** (~10 Wo) | Phase 1 ist stable Foundation, Phase 3 → 3A (Voice deferred), Phase 4 deferred, Phase 5-Light, Phase 2 parallel. ~3 Monate früher live = früheres User-Feedback, momentum maintained. Trade-off: „Text-First Discord-Killer" Marketing-Pitch statt Voice am Tag 1. |
+| 2026-05-13 | **Voice/PTT/Screen-Sharing Phase** | Phase 3 (mit Beta) | **Phase 8 (post-Beta, gemeinsam mit Signal Protocol)** | 3-4 Wochen Solo-Arbeit für WebRTC SFU + UI. Voice + Signal Protocol als „v2.0-Update" gebündelt vermarktet. Detail: [`SERVERS.md`](./SERVERS.md) Decision Log 2026-05-13. |
+| 2026-05-15 | **Voice-Infrastruktur** | „WebRTC mit Cloudflare TURN/SFU" (CF Realtime für Channels) | **Self-hosted: coturn für 1:1, LiveKit (Apache-2.0) für Voice-Channels — beide auf Hetzner CH/DE** | (1) **Privacy-Bruch CF**: CF Realtime SFU im Plaintext-Modus wäre DTLS-Endpoint, hätte technisch Zugriff auf Audio. Im Frame-Encrypted-Modus immerhin Metadata + US-Jurisdiktion (FISA 702 / NSL / CLOUD Act) — direkter Widerspruch zur „You Are The Key"-Brand-Position. Schweizer Hetzner-Hosting unterliegt nur DE-Justiz mit Transparenz-Pflicht. (2) **Open-Standard-Bruch**: CF-Lock-in im wichtigsten Layer (Voice = Discord-Killer-USP) würde verhindern dass Dritte RENEX-kompatible Server deployen können — bricht Pillar #3. LiveKit ist Apache-2.0, self-hostbar von jedem. (3) **Kosten**: bei 30k MAU Faktor 10-100× günstiger (~80€/Mo vs ~$3'000+/Mo CF). (4) **Praxis-Bestätigung 2026-05-15**: CF Realtime TURN-Allocations zeigten in Tests beidseitige Carrier-NAT-Probleme (alle relay↔relay-Pairs blieben in-progress, kein STUN-Throughput). Self-hosted coturn löst das mit eigener PERMISSIONS-Forwarding-Config. (5) **GSK-Wiederverwendung**: existierendes Group-Sender-Key-System aus Phase 1C wird via HKDF-Derivation für Frame-Encryption nachgenutzt — keine neue Krypto-Schicht. (6) **Reliability-Tradeoff**: single-Server-Setup ist Year-1-akzeptabel (99.5% Uptime), Multi-Region-Cluster ab Year 3 wenn Pro-MRR die Infra finanziert. Phase-8-Architektur-Skizze von 2026-05-15-Session (LiveKit-Token-Flow, Frame-Crypto, Hetzner-Deploy-Script) verfügbar — VOICE.md-Detail-Spec folgt zu Phase-8-Start. |
 
 ---
 

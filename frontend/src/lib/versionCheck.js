@@ -14,7 +14,9 @@
 // ======================================================
 
 const VERSION_URL = '/version.json';
-const DEFAULT_INTERVAL_MS = 5 * 60_000;  // 5 Minuten
+const DEFAULT_INTERVAL_MS = 5 * 60_000;  // 5 Minuten zwischen Polls im Steady-State
+const INITIAL_DELAY_MS = 8_000;          // Erste Prüfung nach 8s — schnelle Erkennung
+                                          // auf PWAs die nach Deploy erstmals geöffnet werden
 
 /**
  * Liest die aktuelle Tab-Version aus dem Meta-Tag.
@@ -57,20 +59,22 @@ export function isVersionMismatch(tabVersion, serverVersion) {
 }
 
 /**
- * Startet das periodische Polling. Erste Prüfung läuft NICHT sofort
- * (sonst zeigt der Toast direkt nach Deploy für jeden geladenen Tab).
- * Erste Prüfung nach `intervalMs`.
+ * Startet das periodische Polling. Erste Prüfung schon nach `INITIAL_DELAY_MS`
+ * (~8s) damit PWAs die einen Tag nach dem Deploy zum ersten Mal geöffnet werden
+ * schnell den Update-Banner sehen — ohne die müssten User auf iOS/Android-PWA
+ * 5 Minuten warten bevor der Banner kommt, und in der Praxis wischen sie die
+ * App vorher schon wieder weg.
  *
- * Bei Mismatch wird `onMismatch(serverVersion, tabVersion)` einmalig
- * aufgerufen — der Caller kann sich dort den Toast zeigen.
+ * Bei Mismatch wird `onMismatch(serverVersion, tabVersion)` einmalig aufgerufen.
  * Polling läuft weiter, ruft aber NICHT erneut bei demselben Mismatch.
  *
  * @param {(serverVersion: string, tabVersion: string) => void} onMismatch
- * @param {{ intervalMs?: number }} [opts]
+ * @param {{ intervalMs?: number, initialDelayMs?: number }} [opts]
  * @returns {() => void} stop-function
  */
 export function startVersionPolling(onMismatch, opts = {}) {
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
+  const initialDelayMs = opts.initialDelayMs ?? INITIAL_DELAY_MS;
   const tabVersion = getCurrentVersion();
   if (!tabVersion) return () => {};  // Meta-Tag fehlt → kein Polling sinnvoll
 
@@ -92,7 +96,7 @@ export function startVersionPolling(onMismatch, opts = {}) {
     }
   }
 
-  timer = setTimeout(tick, intervalMs);
+  timer = setTimeout(tick, initialDelayMs);
 
   return () => {
     stopped = true;

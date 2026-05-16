@@ -195,6 +195,10 @@ export async function restoreCmksFromBundle(bundle) {
   }
   let imported = 0;
   let skipped = 0;
+  // Per-Reason-Counter für Diagnose von Multi-Device-Bundle-Restore-Differenzen
+  // (siehe Vorfall 2026-05-15: iPhone bekam 1/6 Maps, Mac 6/6 — Grund ohne
+  // diese Diagnose unklar).
+  const cmkSkipReasons = { already_in_idb: 0, wrong_length: 0, exception: 0 };
 
   // getCMKIfExists dynamisch laden — verhindert circular import beim Modul-Eval
   const { getCMKIfExists } = await import('./cmk.js');
@@ -202,13 +206,14 @@ export async function restoreCmksFromBundle(bundle) {
   for (const [peer, cmkB64] of Object.entries(bundle.cmks)) {
     try {
       const existing = await getCMKIfExists(peer);
-      if (existing) { skipped++; continue; }
+      if (existing) { skipped++; cmkSkipReasons.already_in_idb++; continue; }
       const cmkBytes = b64ToBytes(cmkB64);
-      if (cmkBytes.length !== 32) { skipped++; continue; }
+      if (cmkBytes.length !== 32) { skipped++; cmkSkipReasons.wrong_length++; continue; }
       await importAndStoreCMKFromPeer(peer, cmkBytes);
       imported++;
     } catch (e) {
       skipped++;
+      cmkSkipReasons.exception++;
       captureException(e, { context: 'restoreCmksFromBundle', peer });
     }
   }
@@ -219,23 +224,59 @@ export async function restoreCmksFromBundle(bundle) {
   // Bestehende Maps werden ÜBERSCHRIEBEN — der Bundle ist die Source-of-Truth
   // bei Recovery; lokale Maps wären nach komplettem IDB-Reset eh leer.
   let rotImported = 0;
-  if (bundle.rotationMaps && typeof bundle.rotationMaps === 'object') {
+  let rotSkipped = 0;
+  const rotSkipReasons = {
+    not_array_or_empty: 0,
+    all_entries_invalid: 0,
+    exception: 0,
+  };
+  const rotEntrySkips = { invalid_fields: 0, wrong_length: 0 };
+  const bundleRotCount = bundle.rotationMaps && typeof bundle.rotationMaps === 'object'
+    ? Object.keys(bundle.rotationMaps).length
+    : 0;
+  if (bundleRotCount > 0) {
     for (const [sid, entries] of Object.entries(bundle.rotationMaps)) {
       try {
-        if (!Array.isArray(entries) || entries.length === 0) continue;
+        if (!Array.isArray(entries) || entries.length === 0) {
+          rotSkipped++;
+          rotSkipReasons.not_array_or_empty++;
+          const what = Array.isArray(entries) ? 'empty-array' : `not-array(${typeof entries})`;
+          console.warn(`📥 Bundle-Restore SKIP rotation-map sid=${sid}: not_array_or_empty (${what})`);
+          continue;
+        }
         const decoded = [];
+        let entryInvalidFields = 0;
+        let entryWrongLength = 0;
         for (const e of entries) {
-          if (!e || typeof e.fromIndex !== 'number' || typeof e.cmk !== 'string') continue;
+          if (!e || typeof e.fromIndex !== 'number' || typeof e.cmk !== 'string') {
+            entryInvalidFields++;
+            continue;
+          }
           const cmkBytes = b64ToBytes(e.cmk);
-          if (cmkBytes.length !== 32) continue;
+          if (cmkBytes.length !== 32) {
+            entryWrongLength++;
+            continue;
+          }
           // appendToRotationMap-Format: cmkBytes als plain Array (JSON-friendly)
           decoded.push({ fromIndex: e.fromIndex, cmkBytes: Array.from(cmkBytes) });
         }
-        if (decoded.length > 0) {
-          await idbSet(`${ROTATION_MAP_PREFIX}${sid}`, decoded);
-          rotImported++;
+        rotEntrySkips.invalid_fields += entryInvalidFields;
+        rotEntrySkips.wrong_length += entryWrongLength;
+        if (decoded.length === 0) {
+          rotSkipped++;
+          rotSkipReasons.all_entries_invalid++;
+          console.warn(`📥 Bundle-Restore SKIP rotation-map sid=${sid}: all_entries_invalid (in=${entries.length}, invalid_fields=${entryInvalidFields}, wrong_length=${entryWrongLength})`);
+          continue;
+        }
+        await idbSet(`${ROTATION_MAP_PREFIX}${sid}`, decoded);
+        rotImported++;
+        if (entryInvalidFields > 0 || entryWrongLength > 0) {
+          console.warn(`📥 Bundle-Restore PARTIAL rotation-map sid=${sid}: kept=${decoded.length}/${entries.length} (invalid_fields=${entryInvalidFields}, wrong_length=${entryWrongLength})`);
         }
       } catch (e) {
+        rotSkipped++;
+        rotSkipReasons.exception++;
+        console.warn(`📥 Bundle-Restore SKIP rotation-map sid=${sid}: exception (${e?.name || e?.message || 'unknown'})`);
         captureException(e, { context: 'restoreRotationMaps', sid });
       }
     }
@@ -260,10 +301,36 @@ export async function restoreCmksFromBundle(bundle) {
   const rotSuffix = rotImported > 0 ? `, ${rotImported} rotation-map${rotImported === 1 ? '' : 's'} restored` : '';
   const gskSuffix = gskImported > 0 ? `, ${gskImported} GSK${gskImported === 1 ? '' : 's'} restored` : '';
   console.log(`📥 Bundle-Restore: ${imported} CMKs importiert, ${skipped} übersprungen${rotSuffix}${gskSuffix}`);
+
+  // Diagnostic-Breakdown — nur loggen wenn was Schiefging, sonst Noise.
+  if (skipped > 0) {
+    const cmkBreakdown = Object.entries(cmkSkipReasons)
+      .filter(([, n]) => n > 0)
+      .map(([k, n]) => `${k}=${n}`).join(', ');
+    if (cmkBreakdown) console.log(`📥 Bundle-Restore CMK-Skips: ${cmkBreakdown}`);
+  }
+  // Rotation-Map-Diagnose: zeige Total-im-Bundle vs restored, plus Skip-Gründe
+  // und Per-Entry-Verluste (wichtig für Multi-Device-Vergleich zwischen Geräten,
+  // die dasselbe Bundle laden).
+  if (bundleRotCount > 0 && (rotSkipped > 0 || rotEntrySkips.invalid_fields > 0 || rotEntrySkips.wrong_length > 0)) {
+    const mapBreakdown = Object.entries(rotSkipReasons)
+      .filter(([, n]) => n > 0)
+      .map(([k, n]) => `${k}=${n}`).join(', ');
+    const entryDetail = (rotEntrySkips.invalid_fields + rotEntrySkips.wrong_length) > 0
+      ? `; entries-dropped: invalid_fields=${rotEntrySkips.invalid_fields}, wrong_length=${rotEntrySkips.wrong_length}`
+      : '';
+    console.log(`📥 Bundle-Restore RotationMap-Skips: ${rotImported}/${bundleRotCount} restored${mapBreakdown ? `, maps: ${mapBreakdown}` : ''}${entryDetail}`);
+  }
+
   return {
     imported,
     skipped,
+    cmkSkipReasons,
     rotationMapsImported: rotImported,
+    rotationMapsSkipped: rotSkipped,
+    rotationMapsInBundle: bundleRotCount,
+    rotationMapSkipReasons: rotSkipReasons,
+    rotationMapEntrySkips: rotEntrySkips,
     gsksImported: gskImported,
     gsksSkipped: gskSkipped,
   };

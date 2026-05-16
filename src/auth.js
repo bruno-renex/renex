@@ -261,15 +261,27 @@ export async function unregisterSessionToken(env, handle, token) {
 }
 
 // ── Alle Sessions eines Users widerrufen ─────────────
-export async function revokeAllSessions(env, handle) {
+// options.exceptToken: dieser Token überlebt — Nutzung im device-revoke-Pfad,
+// damit das initiierende Device seine laufende CMK-Rotation + Distribution
+// nicht mit 401-Burst killt. Andere Sessions werden trotzdem revoked
+// (Security-Garantie bleibt für die zu schützenden anderen Devices).
+export async function revokeAllSessions(env, handle, options = {}) {
+  const exceptToken = options.exceptToken || null;
   const key = `sessions:index:${handle}`;
   try {
     const raw = await env.RENEX_KV.get(key);
     if (!raw) return;
     const tokens = JSON.parse(raw);
-    await Promise.all(tokens.map(t => env.RENEX_KV.delete(`session:${t}`)));
-    await env.RENEX_KV.delete(key);
-    console.log(`🔐 ${tokens.length} Session(s) widerrufen für: ${handle}`);
+    const toRevoke = exceptToken ? tokens.filter(t => t !== exceptToken) : tokens;
+    await Promise.all(toRevoke.map(t => env.RENEX_KV.delete(`session:${t}`)));
+    if (exceptToken && toRevoke.length !== tokens.length) {
+      // Index neu schreiben mit nur dem behaltenen Token (sonst löschen wir den Index)
+      await env.RENEX_KV.put(key, JSON.stringify([exceptToken]), { expirationTtl: 2592000 });
+      console.log(`🔐 ${toRevoke.length}/${tokens.length} Session(s) widerrufen für: ${handle} (initiator behalten)`);
+    } else {
+      await env.RENEX_KV.delete(key);
+      console.log(`🔐 ${toRevoke.length} Session(s) widerrufen für: ${handle}`);
+    }
   } catch (e) {
     console.warn("revokeAllSessions fehlgeschlagen:", e);
   }
@@ -304,7 +316,94 @@ export async function pushToUserDO(env, handle, event) {
 // Notwendig direkt nach `member_left`/`member_removed` (KV-delete dort ist
 // fire-and-forget) und für GSK-Distribution (sicherheitskritisch: ex-member
 // darf keine GSK-Events mehr empfangen).
-const GROUP_MEMBERS_CACHE_TTL = 60; // Sekunden
+const GROUP_MEMBERS_CACHE_TTL   = 60;  // Sekunden (klassische Groups)
+const CHANNEL_MEMBERS_CACHE_TTL = 300; // Sekunden (Channels — Members ändern selten)
+
+/**
+ * Type-aware Lookup für Convo-Member-Handles.
+ *
+ * Quelle hängt vom `conversations.type` ab:
+ *   - 'dm'      : N/A (DMs sind 1:1, brauchen keine Member-Liste)
+ *   - 'group'   : conversation_members.member_handle
+ *   - 'channel' : server_members.user_handle WHERE server_id = conversations.server_id
+ *                 (Phase 3A: alle Server-Member sind Channel-Member.
+ *                  Phase 4: VIEW_CHANNEL-Permission-Filter via channel_permission_overrides
+ *                  kommt nach Roles-Editor-UI.)
+ *
+ * @param {D1Database} db
+ * @param {string} convoId
+ * @returns {Promise<string[]>} alle Handles, leer wenn convo nicht existiert
+ */
+/**
+ * Type-aware Membership-Check.
+ * Effizienter als getConvoMemberHandles().includes(handle) — exists-only Query.
+ *
+ * @param {D1Database} db
+ * @param {string} convoId
+ * @param {string} handle
+ * @returns {Promise<boolean>}
+ */
+export async function isConvoMember(db, convoId, handle) {
+  const convo = await db.prepare(
+    "SELECT type, server_id FROM conversations WHERE id = ?"
+  ).bind(convoId).first();
+  if (!convo) return false;
+
+  if (convo.type === 'channel' && convo.server_id) {
+    const r = await db.prepare(
+      "SELECT 1 FROM server_members WHERE server_id = ? AND user_handle = ?"
+    ).bind(convo.server_id, handle).first();
+    return !!r;
+  }
+
+  // 'group' default
+  const r = await db.prepare(
+    "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+  ).bind(convoId, handle).first();
+  return !!r;
+}
+
+export async function getConvoMemberHandles(db, convoId) {
+  const r = await getConvoMembersWithType(db, convoId);
+  return r.handles;
+}
+
+/**
+ * Erweiterte Variante: liefert handles + type + serverId.
+ * Wird intern von pushToGroupMembers genutzt um die TTL für den
+ * Recipient-Set-Cache type-aware zu setzen (Spec SERVERS.md §4.3).
+ *
+ * @param {D1Database} db
+ * @param {string} convoId
+ * @returns {Promise<{type: string|null, serverId: string|null, handles: string[]}>}
+ */
+export async function getConvoMembersWithType(db, convoId) {
+  const convo = await db.prepare(
+    "SELECT type, server_id FROM conversations WHERE id = ?"
+  ).bind(convoId).first();
+  if (!convo) return { type: null, serverId: null, handles: [] };
+
+  if (convo.type === 'channel' && convo.server_id) {
+    const rows = await db.prepare(
+      "SELECT user_handle FROM server_members WHERE server_id = ?"
+    ).bind(convo.server_id).all();
+    return {
+      type:     'channel',
+      serverId: convo.server_id,
+      handles:  (rows.results || []).map(r => r.user_handle),
+    };
+  }
+
+  // 'group' (default) — auch fallback wenn type unspecified
+  const rows = await db.prepare(
+    "SELECT member_handle FROM conversation_members WHERE convo_id = ?"
+  ).bind(convoId).all();
+  return {
+    type:     convo.type || 'group',
+    serverId: null,
+    handles:  (rows.results || []).map(r => r.member_handle),
+  };
+}
 
 export async function pushToGroupMembers(env, db, groupId, senderHandle, event, opts = {}) {
   const bypassCache = opts.bypassCache === true;
@@ -315,14 +414,15 @@ export async function pushToGroupMembers(env, db, groupId, senderHandle, event, 
     if (cached) {
       members = JSON.parse(cached);
     } else {
-      const rows = await db.prepare(
-        "SELECT member_handle FROM conversation_members WHERE convo_id = ?"
-      ).bind(groupId).all();
-      members = (rows.results || []).map(r => r.member_handle);
-      // Cache nur schreiben wenn wir nicht bypass'ed haben (sonst überschreibt
-      // bypass-Pfad einen frisch invalidierten Cache mit alter Stand).
+      // Type-aware: groups → conversation_members, channels → server_members.
+      // TTL ebenfalls type-aware: Channels haben stabile Member-Listen (nur
+      // bei kick/ban/leave/join/role-changes invalidiert), daher 5min Cache;
+      // Groups historically 60s.
+      const r = await getConvoMembersWithType(db, groupId);
+      members = r.handles;
       if (!bypassCache) {
-        env.RENEX_KV.put(cacheKey, JSON.stringify(members), { expirationTtl: GROUP_MEMBERS_CACHE_TTL }).catch(() => {});
+        const ttl = r.type === 'channel' ? CHANNEL_MEMBERS_CACHE_TTL : GROUP_MEMBERS_CACHE_TTL;
+        env.RENEX_KV.put(cacheKey, JSON.stringify(members), { expirationTtl: ttl }).catch(() => {});
       }
     }
   } catch (e) {

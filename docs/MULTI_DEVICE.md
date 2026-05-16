@@ -660,7 +660,7 @@ Nach Spec-Finalisierung noch offen — werden in Folge-Specs adressiert:
 |---|---|---|
 | BIP39-Onboarding-Flow (UX, Phrase-Display, Backup-Verifikation) | 1B.6 | `RECOVERY.md` ✅ |
 | Recovery-Bundle: Schema des verschlüsselten JSON | 1B.6 | `RECOVERY.md` ✅ |
-| Cross-Device-Passkey-UX (QR-Code, Bluetooth-Fallback) | 1B.3 | bestehender Add-Device-Modal, Erweiterung |
+| Cross-Device-Passkey-UX (QR-Code, Bluetooth-Fallback) | 1B.3 | `AddDeviceModal.svelte` ✅ (2026-05-13) — QR mit App-URL als Onboarding-Helper; WebAuthn-Hybrid-Flow läuft OS-seitig |
 | Group-Member-Add: GSK an alle Peer-Devices verteilen | 1C | [`GROUPS_MULTIDEVICE.md`](./GROUPS_MULTIDEVICE.md) ✅ (2026-05-10) |
 | Tier-Feld in `users` + `requireSession` | Phase 3 | `MONETIZATION.md` (TBD) |
 | Conformance-Tests für RENEX-Protocol (Multi-Device-Subset) | Phase 2 | `PROTOCOL.md` (TBD) |

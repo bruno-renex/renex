@@ -13,14 +13,15 @@
   import ChatHeaderMenu from './ChatHeaderMenu.svelte';
   import GroupMembersModal from './GroupMembersModal.svelte';
 
-  // Group-Mitglieder-Modal — wird durch Klick auf den Info-Bereich des Headers
-  // (Gruppenname / Mitglieder-Count) geöffnet. Nur für type='group'.
+  // Group-/Channel-Mitglieder-Modal — wird durch Klick auf den Info-Bereich
+  // des Headers (Name / Mitglieder-Count) geöffnet. Bei Channels lädt das
+  // Modal jetzt server_members (Phase 4b /groups/members type-aware).
   let membersModalOpen = $state(false);
   function openMembersModal() {
-    if (chat?.type === 'group') membersModalOpen = true;
+    if (chat?.type === 'group' || chat?.type === 'channel') membersModalOpen = true;
   }
   function onInfoKey(e) {
-    if (chat?.type !== 'group') return;
+    if (chat?.type !== 'group' && chat?.type !== 'channel') return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       openMembersModal();
@@ -29,6 +30,9 @@
 
   let lang = $derived(i18nStore.lang);
   let chat = $derived(chatStore.selectedChat);
+  let isChannel = $derived(chat?.type === 'channel');
+  let isGroup = $derived(chat?.type === 'group');
+  let isGroupLike = $derived(isChannel || isGroup);
 
   // Live-Online-Status aus presenceStore — DM only (Group hat keine peer-Presence-Summe)
   let isPeerOnline = $derived(
@@ -107,8 +111,11 @@
       </button>
     {/if}
 
-    <div class="avatar" class:group={chat.type === 'group'}>
-      {#if chat.type === 'group'}
+    <div class="avatar" class:group={isGroup} class:channel={isChannel}>
+      {#if isChannel}
+        <!-- Channel: # in cyan -->
+        <span class="channel-hash" aria-hidden="true">#</span>
+      {:else if isGroup}
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
           <circle cx="9" cy="7" r="4"/>
@@ -120,7 +127,7 @@
       {/if}
     </div>
 
-    {#if chat.type === 'group'}
+    {#if isGroupLike}
       <button
         type="button"
         class="info info-clickable"
@@ -131,7 +138,12 @@
       >
         <div class="name">{headerName}</div>
         <div class="status">
-          {chat.memberCount || 0} {lang.members || "Mitglieder"}
+          {#if isChannel && chat.topic}
+            <!-- Channel mit Topic: zeige Topic statt Member-Count (Discord-Pattern) -->
+            <span class="channel-topic">{chat.topic}</span>
+          {:else}
+            {chat.memberCount || 0} {lang.members || "Mitglieder"}
+          {/if}
           <span class="info-chevron" aria-hidden="true">›</span>
         </div>
       </button>
@@ -166,14 +178,16 @@
       <!-- Gäste haben kein 3-Punkte-Menu: Settings (Mute, Auto-Delete) brauchen
            Persistenz, Admin-Aktionen sind nicht zugänglich, "Kontakt entfernen"
            passt nicht zur temporären Gast-Identität. Trade-off: Gast kann
-           Gruppe nicht aktiv verlassen — Tab schließen / 24h-Expiry. -->
-      {#if !userStore.isGuest}
+           Gruppe nicht aktiv verlassen — Tab schließen / 24h-Expiry.
+           Channel: Settings (Rename, Remove Members, etc.) gehen über den
+           Server-Stack im linken Sidebar, nicht via Chat-Header. -->
+      {#if !userStore.isGuest && !isChannel}
         <ChatHeaderMenu {chat} />
       {/if}
     </div>
   </header>
 
-  {#if chat.type === 'group'}
+  {#if isGroupLike}
     <GroupMembersModal
       bind:isOpen={membersModalOpen}
       groupId={chat.key}
@@ -228,10 +242,27 @@
     flex-shrink: 0;
   }
 
-  .avatar.group {
+  .avatar.group,
+  .avatar.channel {
     color: var(--accent-voice);
     background: var(--accent-voice-dim);
     border-color: var(--accent-voice);
+  }
+
+  .channel-hash {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--accent-voice);
+    line-height: 1;
+  }
+
+  .channel-topic {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 240px;
+    display: inline-block;
+    vertical-align: middle;
   }
 
   .info {

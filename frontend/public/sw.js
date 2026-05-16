@@ -4,6 +4,22 @@
 
 const API_BASE = "https://api.renex.id";
 
+// ── LIFECYCLE: fast-update ───────────────────────────────
+// Ohne skipWaiting()/clients.claim() würde ein neu deployter SW erst aktiv
+// wenn ALLE Tabs/PWA-Instanzen geschlossen sind. Auf iOS/Android-PWA passiert
+// das praktisch nie — User wischt nicht. Resultat: Update-Banner kommt nicht
+// an, neue SW-Logic (z.B. Push-Notification-Fixes) bleibt liegen.
+//
+// skipWaiting: neuer SW überspringt die Waiting-Phase und wird direkt aktiv
+// clients.claim: aktiver SW übernimmt sofort alle offenen Pages
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 // ── PUSH EVENT ──────────────────────────────────────────
 // Empfängt Web-Push vom Backend, zeigt Notification an.
 // Payload kann encrypted (JSON) oder leer sein (Fallback → API fetch).
@@ -55,14 +71,33 @@ async function handlePush(event) {
   // ist aggressiver (Call-Feel statt Message-Feel).
   if (data?.type === "voice_call") {
     options.tag = tag || `voice-call-${data.callId || "unknown"}`;
-    options.requireInteraction = true;   // bleibt bis User interagiert
     options.renotify = true;
     options.silent = false;
     options.vibrate = [400, 100, 400, 100, 400, 100, 400];
-    options.actions = [
-      { action: "voice_accept",  title: "📞 Annehmen" },
-      { action: "voice_decline", title: "✖ Ablehnen" },
-    ];
+    // iOS PWA WebPush: requireInteraction + actions sind nicht zuverlässig
+    // unterstützt — manche iOS-Versionen droppen die ganze Notification still
+    // wenn diese Felder gesetzt sind. Click auf Banner öffnet sowieso die PWA
+    // via /?with=<caller>&call=1 — Accept/Decline-UI passiert dann in-App.
+    // Feature-detect für andere Browser: nur wenn `actions` im Notification-
+    // Prototype ist und kein iOS-Safari, dann Action-Buttons rendern.
+    const supportsActions = (() => {
+      try {
+        if (typeof Notification === 'undefined') return false;
+        if (!('actions' in Notification.prototype)) return false;
+        // Heuristik: iOS Safari WebKit hat actions im Prototype aber droppt sie.
+        // navigator.userAgent ist im SW verfügbar.
+        const ua = (self.navigator?.userAgent || '');
+        if (/iPad|iPhone|iPod/.test(ua) && !/CriOS|FxiOS/.test(ua)) return false;
+        return true;
+      } catch { return false; }
+    })();
+    if (supportsActions) {
+      options.requireInteraction = true;
+      options.actions = [
+        { action: "voice_accept",  title: "📞 Annehmen" },
+        { action: "voice_decline", title: "✖ Ablehnen" },
+      ];
+    }
   }
 
   // App-Icon Badge

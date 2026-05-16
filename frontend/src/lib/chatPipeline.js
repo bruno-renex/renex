@@ -308,8 +308,27 @@ export async function ensureSecureDmSession(myHandle, peerHandle) {
     // Wirklich frische Konversation → OK eine neue CMK zu erstellen
     cmk = await createAndStoreCMK(peerHandle);
 
-    if (peerDevices.length === 0) {
-      return cmk;
+    // Peer-Devices wenn nötig retry-fetchen: bei frisch installiertem Peer-Device
+    // ist `uploadInboxKeyIfNeeded` evtl. noch nicht durch, Backend sieht das Device
+    // noch nicht im Index. Ohne Retry würden wir die CMK NUR lokal erstellen und
+    // peer könnte sie nie aus KV holen → bleibt 🔐.
+    let effectivePeerDevices = peerDevices;
+    if (effectivePeerDevices.length === 0) {
+      console.log(`⏳ ${peerHandle} hat noch keine Devices im Index — retry-fetch mit Backoff…`);
+      for (const delay of [1000, 3000, 5000]) {
+        await new Promise(r => setTimeout(r, delay));
+        try {
+          effectivePeerDevices = await fetchPeerDevices(peerHandle);
+        } catch {}
+        if (effectivePeerDevices.length > 0) {
+          console.log(`✅ ${peerHandle} hat jetzt ${effectivePeerDevices.length} Device(s) nach ${delay}ms`);
+          break;
+        }
+      }
+      if (effectivePeerDevices.length === 0) {
+        console.warn(`⚠️ ${peerHandle} hat nach ~9s immer noch keine Devices — CMK bleibt nur lokal, peer wird via cmk_req nachfragen müssen`);
+        return cmk;
+      }
     }
 
     // Eigene Devices fetchen (für eigene Multi-Device-Verteilung)
@@ -321,7 +340,7 @@ export async function ensureSecureDmSession(myHandle, peerHandle) {
 
     // Empfänger = alle Peer-Devices + eigene Devices, MINUS dieses aktuelle Device
     const myDeviceId = getDeviceId();
-    const recipients = [...peerDevices, ...myDevices].filter(d => d.deviceId !== myDeviceId);
+    const recipients = [...effectivePeerDevices, ...myDevices].filter(d => d.deviceId !== myDeviceId);
 
     if (recipients.length > 0) {
       const payloads = await wrapCMKForInboxDevices(recipients, cmk);
@@ -383,26 +402,36 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
     ? msg.epoch
     : Math.floor((msg.ts || Date.now()) / EPOCH_MS);
 
-  // Helper: gegebenes CMK durchprobieren über alle Epoch-Toleranzen
+  // Helper: gegebenes CMK durchprobieren über alle Epoch-Toleranzen.
+  // Strategie: Mehrere Kandidaten-CMKs sequenziell probieren — Rotation-Map-Eintrag
+  // (falls für rotation_index vorhanden) ZUERST, dann den passed-in CMK als Fallback.
+  // Begründung für Fallback: Bundle-Restore kann eine stale Rotation-Map zurückbringen
+  // (alter CMK bei index=0 obwohl peer seit Restore neuen CMK verwendet). Ohne Fallback
+  // würden NEW Messages mit rotation_index=0 IMMER mit dem stale CMK probiert und failen.
   async function tryDecryptWithCMK(cmkBytes) {
-    let cmkForDerive = cmkBytes;
-    // Rotation-Map IMMER konsultieren wenn nicht-leer — auch bei rotation_index=0.
-    // Begründung: nach einer Rotation hat die Map einen archivierten Old-CMK mit
-    // fromIndex=0; Messages aus der Vor-Rotation-Zeit haben rotation_index=0, müssen
-    // aber mit dem ARCHIVIERTEN CMK decrypted werden, nicht mit dem (neuen) Active.
+    const candidates = [];
+    const _eq = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
+
+    // 1. Rotation-Map-Eintrag bevorzugt (historische Messages aus Vor-Rotation-Zeit)
     const map = await getRotationMap(sid);
     if (map.length > 0) {
       const historicCmk = findCmkForRotationIndex(map, rotationIndex);
-      if (historicCmk) cmkForDerive = historicCmk;
+      if (historicCmk) candidates.push(historicCmk);
     }
-    const skBytes = await deriveSessionKeyBytesForRotation(cmkForDerive, sid, rotationIndex);
+    // 2. Passed-in CMK als Fallback — schützt gegen stale Rotation-Map
+    if (cmkBytes && !candidates.some(c => _eq(c, cmkBytes))) {
+      candidates.push(cmkBytes);
+    }
 
-    for (const ep of [baseEpoch, baseEpoch - 1, baseEpoch + 1]) {
-      try {
-        const mk = await deriveMessageKey(skBytes, sid, ep);
-        const decrypted = await e2eDecrypt(mk, ivB64, ctB64);
-        if (typeof decrypted === 'string') return { decrypted, ep, skBytes };
-      } catch {}
+    for (const cand of candidates) {
+      const skBytes = await deriveSessionKeyBytesForRotation(cand, sid, rotationIndex);
+      for (const ep of [baseEpoch, baseEpoch - 1, baseEpoch + 1]) {
+        try {
+          const mk = await deriveMessageKey(skBytes, sid, ep);
+          const decrypted = await e2eDecrypt(mk, ivB64, ctB64);
+          if (typeof decrypted === 'string') return { decrypted, ep, skBytes };
+        } catch {}
+      }
     }
     return null;
   }
@@ -426,6 +455,53 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
         attempt = await tryDecryptWithCMK(fetchedCmk);
       }
     }
+  }
+
+  // 3. Letzter Fallback: Decrypt persistent gescheitert → cmk_req.
+  // Use-Cases:
+  //   a) Fresh-Install (kein local CMK): peer hat noch nicht redistributed
+  //   b) CMK-Divergenz: lokales CMK ist da, aber peer hat rotiert und der neue
+  //      CMK ist weder lokal noch in KV-wrap-für-uns. Peer muss zur Antwort
+  //      auf cmk_req aktiv den aktuellen CMK redistributen.
+  //
+  // Dedup via isPendingCmkReq: bei _decryptAllE2E-Sweep (30 Messages parallel)
+  // wird cmk_req nur 1× gesendet (30s pending-Window), alle Calls warten auf
+  // gleiches KV-Resultat. Bei sequentiellen Fails greift dieselbe 30s-Sperre →
+  // kein Spam.
+  if (!attempt && !isCmkUnavailable(peerHandle)) {
+    const alreadyPending = isPendingCmkReq(peerHandle);
+    if (!alreadyPending) {
+      markPendingCmkReq(peerHandle);
+      console.warn(`📨 decryptIncomingMessage: cmk_req → ${peerHandle} (decrypt-fail, hadLocal=${!!cmk})`);
+      try { await sendCmkRequest(peerHandle); } catch {}
+    }
+    // Retry-Loop: warte auf KV-Propagation nach cmk_req. Kurze Delays —
+    // bei _decryptAllE2E-Parallelität warten alle Calls auf dieselbe KV-Hydration.
+    for (const delay of [1500, 3000, 5000]) {
+      await new Promise(r => setTimeout(r, delay));
+      if (isCmkUnavailable(peerHandle)) break;  // Peer hat „nein" gesagt
+      // storeIfFresh nur wenn wir KEIN lokales CMK hatten — sonst lassen wir das
+      // aktive lokale CMK intakt (Divergenz-Schutz). Decrypt-Versuch mit dem
+      // gefetchten Wert findet trotzdem statt.
+      const freshCmk = await tryFetchAndUnwrapCMK(peerHandle, { storeIfFresh: !cmk });
+      if (freshCmk instanceof Uint8Array && freshCmk.length === 32) {
+        // Skip wenn fetched == bereits-probiertes lokales — sonst Endlosschleife
+        const sameAsLocal = cmk && freshCmk.length === cmk.length &&
+          freshCmk.every((b, i) => b === cmk[i]);
+        if (!sameAsLocal) {
+          attempt = await tryDecryptWithCMK(freshCmk);
+          if (attempt) {
+            console.log(`✅ decryptIncomingMessage: CMK nach cmk_req + ${delay}ms erhalten`);
+            clearPendingCmkReq(peerHandle);  // Erfolg → flag freigeben
+            break;
+          }
+        }
+      }
+    }
+    // ACHTUNG: Bei Fail KEIN clearPendingCmkReq — das 30s-Timeout aus
+    // markPendingCmkReq sorgt für automatische Freigabe. Vorzeitig zu clearen
+    // würde sofortigen Re-Spam aus parallelen Decrypt-Calls erlauben (cmk_req-
+    // Storm zwischen beiden Seiten wenn Messages permanent unrecoverable sind).
   }
 
   if (!attempt) return { text: null, verified: null };

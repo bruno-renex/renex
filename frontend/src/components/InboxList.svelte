@@ -15,6 +15,7 @@
   import CreateGroupModal from './CreateGroupModal.svelte';
   import PendingRequestsModal from './PendingRequestsModal.svelte';
   import InviteLinkModal from './InviteLinkModal.svelte';
+  import ServersView from './ServersView.svelte';
   import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
 
   let lang = $derived(i18nStore.lang);
@@ -288,6 +289,13 @@
           </ul>
         {/if}
       </div>
+    </div>
+  {/if}
+
+  <!-- ── Servers (Phase 3A) ──────────────────────────── -->
+  {#if activeSection === 'servers'}
+    <div class="list-section">
+      <ServersView />
     </div>
   {/if}
 </div>

@@ -26,6 +26,8 @@
    */
   import { profileCache } from '../stores/profileCache.svelte.js';
   import AttachmentView from './AttachmentView.svelte';
+  import { formatMessage, stripFormatting } from '../lib/messageFormat.js';
+  import { openExternalLink } from '../stores/linkWarning.svelte.js';
 
   let { message, showSender = false, onReply = null, onEdit = null, onDelete = null, onReact = null, onJumpTo = null, onSenderClick = null, myHandle = null } = $props();
 
@@ -165,6 +167,22 @@
     if (canDelete) onDelete(message);
   }
 
+  // Text in Render-Segmente zerlegen (Markdown-Subset + Autolinks).
+  // Reagiert reaktiv auf message.text-Änderungen (z.B. Edit).
+  let textSegments = $derived(message.text ? formatMessage(message.text) : []);
+
+  // Reply-Preview: Markdown-strippen, damit "**Hi**" als "Hi" angezeigt wird.
+  let replyPreviewText = $derived(
+    message.replyTo?.text ? stripFormatting(message.replyTo.text) : ''
+  );
+
+  // Link-Klick-Handler: Phishing-Heuristik vor jedem Open.
+  function handleLinkClick(href, e) {
+    e.preventDefault();
+    e.stopPropagation();
+    openExternalLink(href);
+  }
+
   let timeStr = $derived.by(() => {
     const d = new Date(message.ts);
     return d.toLocaleTimeString("de-CH", {
@@ -185,6 +203,16 @@
     }
   });
 </script>
+
+{#snippet renderSegments(segs)}{#each segs as seg, i (i)}{#if seg.type === 'text'}{seg.value}{:else if seg.type === 'link'}<a
+        class="msg-link"
+        href={seg.href}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        referrerpolicy="no-referrer"
+        title={seg.href}
+        onclick={(e) => handleLinkClick(seg.href, e)}
+      >{seg.text}</a>{:else if seg.type === 'code'}<code class="msg-code">{seg.value}</code>{:else if seg.type === 'codeblock'}<pre class="msg-codeblock"><code>{seg.value}</code></pre>{:else if seg.type === 'bold'}<strong>{@render renderSegments(seg.children)}</strong>{:else if seg.type === 'italic'}<em>{@render renderSegments(seg.children)}</em>{/if}{/each}{/snippet}
 
 {#if message.type === 'system'}
   <div class="system-row">
@@ -264,12 +292,12 @@
           title="Zur Original-Nachricht springen"
         >
           <div class="reply-author">{replyAuthorName}</div>
-          <div class="reply-text">{message.replyTo.text}</div>
+          <div class="reply-text">{replyPreviewText}</div>
         </button>
       {:else}
         <div class="reply-preview">
           <div class="reply-author">{replyAuthorName}</div>
-          <div class="reply-text">{message.replyTo.text}</div>
+          <div class="reply-text">{replyPreviewText}</div>
         </div>
       {/if}
     {/if}
@@ -285,7 +313,7 @@
     {/if}
 
     {#if message.text}
-      <div class="text">{message.text}</div>
+      <div class="text">{@render renderSegments(textSegments)}</div>
     {/if}
 
     <div class="meta">
@@ -668,6 +696,70 @@
     line-height: 1.4;
     white-space: pre-wrap;
   }
+
+  /* Klickbare Links im Nachrichtentext.
+     - Fremd-Bubble: accent-cyan (gleicher Stil wie sender/reply-author)
+     - Eigene Bubble (cyan-BG): dunkler Hintergrund → unterstrichen + bold,
+       Farbe bleibt fast-schwarz für Kontrast. */
+  .msg-link {
+    color: var(--accent-voice);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    word-break: break-all;
+  }
+  .msg-link:hover {
+    text-decoration-thickness: 2px;
+  }
+  .bubble.me .msg-link {
+    color: #07070a;
+    text-decoration: underline;
+    font-weight: 600;
+  }
+
+  /* Inline-Code: monospace mit dezentem Hintergrund.
+     In eigener Bubble (cyan-BG) brauchen wir kontrastierenden Hintergrund. */
+  :global(.msg-code) {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--accent-voice);
+  }
+  .bubble.me :global(.msg-code) {
+    background: rgba(7, 7, 10, 0.18);
+    border-color: rgba(7, 7, 10, 0.25);
+    color: #07070a;
+  }
+
+  /* Code-Block: eigene Box mit horizontalem Scroll bei langen Zeilen. */
+  :global(.msg-codeblock) {
+    margin: 6px 0;
+    padding: 8px 10px;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    overflow-x: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-primary);
+  }
+  :global(.msg-codeblock code) {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+  }
+  .bubble.me :global(.msg-codeblock) {
+    background: rgba(7, 7, 10, 0.15);
+    border-color: rgba(7, 7, 10, 0.2);
+    color: #07070a;
+  }
+
+  /* Bold/Italic erben Farbe automatisch — keine Extra-Regeln nötig. */
 
   .meta {
     display: flex;

@@ -1,5 +1,5 @@
 import { json, readJson, param, dmConvoId, isUUID } from '../utils.js';
-import { requireSession, requireAnySession, rateLimit, pushToUserDO, pushToGroupMembers } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit, pushToUserDO, pushToGroupMembers, isConvoMember } from '../auth.js';
 import { handleChatSend } from '../helpers/chatSend.js';
 
 // ======================================================
@@ -88,12 +88,10 @@ export async function handleChatRoutes(request, env, path, params) {
           }
         }
 
-        // Gruppen: Mitgliedschaft prüfen (verhindert Lesen fremder Gruppen)
+        // Gruppen/Channels: Mitgliedschaft prüfen (verhindert Lesen fremder Konversationen)
         if (isGroupConvo) {
-          const isMember = await env.RENEX_DB.prepare(
-            "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-          ).bind(cid, me).first();
-          if (!isMember) return json(request, { error: "Not a member of this group" }, 403);
+          const allowed = await isConvoMember(env.RENEX_DB, cid, me);
+          if (!allowed) return json(request, { error: "Not a member of this group" }, 403);
         }
 
         let sliced = [];
@@ -480,10 +478,9 @@ export async function handleChatRoutes(request, env, path, params) {
       const isGroup = isUUID(msg.convo_id);
       let groupName = null;
       if (isGroup) {
-        const member = await env.RENEX_DB.prepare(
-          "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-        ).bind(msg.convo_id, me).first();
-        if (!member) return json(request, { error: "Forbidden" }, 403);
+        // Type-aware: works for both 'group' and 'channel'
+        const allowed = await isConvoMember(env.RENEX_DB, msg.convo_id, me);
+        if (!allowed) return json(request, { error: "Forbidden" }, 403);
         const grp = await env.RENEX_DB.prepare(
           "SELECT name FROM conversations WHERE id = ?"
         ).bind(msg.convo_id).first();

@@ -25,6 +25,7 @@ import {
 import { inboxStore } from './inbox.svelte.js';
 import { getCMKIfExists } from '../lib/cmk.js';
 import { isGuestHandle } from '../lib/guestNames.js';
+import { stripFormatting } from '../lib/messageFormat.js';
 import { unwrapAttachmentPlaintext } from '../lib/attachmentCrypto.js';
 import {
   isPendingCmkReq, markPendingCmkReq, clearPendingCmkReq,
@@ -37,6 +38,7 @@ let _isLoading = $state(false);
 let _draftText = $state("");
 let _replyingTo = $state(null);   // { id, from, text } — aktive Quote-Reply, null = kein Reply
 let _editingMsg = $state(null);   // { id, originalText } — aktive Edit-Session, null = nicht im Edit-Mode
+let _pendingJumpTo = $state(null); // msgId — wird von ChatView via $effect konsumiert (scroll+highlight)
 
 // Drafts pro Chat persistieren (im memory, später localStorage)
 const _drafts = new Map();
@@ -68,6 +70,21 @@ export const chatStore = {
   get draftText() { return _draftText; },
   get replyingTo() { return _replyingTo; },
   get editingMsg() { return _editingMsg; },
+  get pendingJumpTo() { return _pendingJumpTo; },
+
+  clearPendingJump() { _pendingJumpTo = null; },
+
+  /**
+   * Wie selectChat, aber merkt sich eine Message-ID auf die ChatView danach
+   * scrollen soll (smooth + jump-highlight). Use-Case: Click auf Reaktions-Toast
+   * → öffne Chat + springe zur reagierten Nachricht. ChatView's $effect picks
+   * pendingJumpTo + messages.length auf und sucht das Bubble-Element im DOM
+   * sobald gerendert.
+   */
+  async selectChatAndJump(chat, msgId) {
+    _pendingJumpTo = msgId || null;
+    await this.selectChat(chat);
+  },
 
   /**
    * Startet eine Edit-Session: ChatInput öffnet sich mit dem Original-Text vorbefüllt.
@@ -96,8 +113,9 @@ export const chatStore = {
     if (!m || !m.isMe) return { ok: false, error: 'not_own' };
     const myHandle = userStore.myUser;
     let result;
-    if (_selectedChat.type === 'group') {
+    if (_selectedChat.type === 'group' || _selectedChat.type === 'channel') {
       // Original-Row mitgeben für Archive-Lookup (GSK-Rotation 15min-Window).
+      // Channel nutzt dieselbe GSK-Edit-Pipeline (channel-agnostisch).
       result = await editEncryptedGroup(myHandle, _selectedChat.key, msgId, trimmed, m._raw || m);
     } else {
       const peer = _selectedChat.peer;
@@ -234,7 +252,7 @@ export const chatStore = {
       (isUuid(original.groupId) && original.groupId) ||
       (isUuid(original.convo_id) && original.convo_id) ||
       (isUuid(original.convoId) && original.convoId) ||
-      (_selectedChat?.type === 'group' ? _selectedChat.key : null);
+      ((_selectedChat?.type === 'group' || _selectedChat?.type === 'channel') ? _selectedChat.key : null);
     let newText;
     if (groupId) {
       newText = await decryptEditedGroupMessage(event, original, myHandle, groupId);
@@ -332,12 +350,17 @@ export const chatStore = {
         // GSK-Control-Messages (gsk / request_gsk) sind Signalling — nie rendern.
         // Backend speichert sie in D1 für Gast-Polling, daher kommen sie hier mit zurück.
         const visible = r.data.messages.filter(m => m.type !== 'gsk' && m.type !== 'request_gsk');
-        const initial = visible.map(m => _normalizeMessage(m, myHandle));
+        // Backend liefert reactions als separates Top-Level-Feld { msgId → { emoji: [handles] } }
+        // (chatRoutes.js /chat/list). _normalizeMessage erwartet sie aber AM Message-Objekt —
+        // ohne Merge wären Reaktionen nach jedem Chat-Wechsel weg, weil WS-Events während
+        // ein anderer Chat aktiv war in handleReactionUpdated früh-returnen.
+        const rxMap = (r.data.reactions && typeof r.data.reactions === 'object') ? r.data.reactions : {};
+        const initial = visible.map(m => _normalizeMessage({ ...m, reactions: rxMap[m.id] }, myHandle));
         _messages = initial;
 
         if (chat.type === "dm" && chat.peer) {
           void _decryptAllE2E(chat.peer, myHandle);
-        } else if (chat.type === "group") {
+        } else if (chat.type === "group" || chat.type === "channel") {
           // Member-Cache vorbefüllen für späteres Senden.
           void _loadGroupMembers(chat.key);
           void _decryptAllGroupE2E(chat.key, myHandle);
@@ -373,11 +396,22 @@ export const chatStore = {
       if (!_selectedChat || _selectedChat.key !== chat.key || _selectedChat.type !== chat.type) return;
 
       const visible = r.data.messages.filter(m => m.type !== 'gsk' && m.type !== 'request_gsk');
+      const rxMap = (r.data.reactions && typeof r.data.reactions === 'object') ? r.data.reactions : {};
       const existingIds = new Set(_messages.map(m => m.id).filter(Boolean));
       const fresh = [];
       for (const m of visible) {
         if (m.id && existingIds.has(m.id)) continue;
-        fresh.push(_normalizeMessage(m, myHandle));
+        fresh.push(_normalizeMessage({ ...m, reactions: rxMap[m.id] }, myHandle));
+      }
+      // Reaktionen für BEREITS geladene Messages aktualisieren — sonst gehen Reaktions-
+      // Events verloren die während PWA-Suspend oder fremdem Chat-Tab arrivierten
+      // (handleReactionUpdated früh-returnt wenn Message nicht im aktiven _messages).
+      if (Object.keys(rxMap).length > 0) {
+        _messages = _messages.map(m => {
+          const next = rxMap[m.id];
+          if (!next) return m;
+          return { ...m, reactions: next };
+        });
       }
       if (fresh.length === 0) {
         // Trotzdem Badge clearen: /chat/list hat serverseitig unread_counters
@@ -391,7 +425,7 @@ export const chatStore = {
 
       if (chat.type === "dm" && chat.peer) {
         void _decryptAllE2E(chat.peer, myHandle);
-      } else if (chat.type === "group") {
+      } else if (chat.type === "group" || chat.type === "channel") {
         void _decryptAllGroupE2E(chat.key, myHandle);
       }
     } catch (e) {
@@ -450,7 +484,9 @@ export const chatStore = {
     _draftText = "";
     _drafts.delete(_selectedChat.key);
 
-    const isGroup = _selectedChat.type === "group";
+    // 'channel' wird wie 'group' behandelt: Sender-Keys-Pattern + convo-id-Send.
+    // Backend leitet aus conversations.type='channel' die richtige Member-Quelle ab.
+    const isGroup = _selectedChat.type === "group" || _selectedChat.type === "channel";
     const peer = _selectedChat.peer || _selectedChat.key;
 
     try {
@@ -555,7 +591,9 @@ export const chatStore = {
     const inboxKey = isGroupMsg
       ? rawMsg.groupId
       : (msg.isMe ? msg.to : msg.from);
-    const previewText = msg.e2e ? '' : (msg.text || '');
+    // Plain-Text-Variante für Sidebar-Last-Message — Markdown-Marker
+    // (`**bold**`, `` `code` ``) wegrechnen, damit die Preview lesbar bleibt.
+    const previewText = msg.e2e ? '' : stripFormatting(msg.text || '');
 
     if (inboxKey) {
       inboxStore.bumpActivity(inboxKey, previewText, msg.ts || Date.now());
@@ -563,7 +601,7 @@ export const chatStore = {
 
     const isForCurrentChat = _selectedChat && (
       (_selectedChat.type === "dm"   && (msg.from === _selectedChat.peer || msg.to === _selectedChat.peer)) ||
-      (_selectedChat.type === "group" && rawMsg.groupId === _selectedChat.key)
+      ((_selectedChat.type === "group" || _selectedChat.type === "channel") && rawMsg.groupId === _selectedChat.key)
     );
 
     // Unread-Counter nur für eingehende Messages (nicht eigene Multi-Device-Echos)
@@ -576,10 +614,10 @@ export const chatStore = {
 
     _messages = [..._messages, msg];
 
-    // Async-Decrypt — DM via CMK-Pipeline, Group via GSK-Pipeline.
+    // Async-Decrypt — DM via CMK-Pipeline, Group/Channel via GSK-Pipeline.
     if (msg.e2e && _selectedChat.type === "dm" && _selectedChat.peer) {
       void _decryptOne(rawMsg, myHandle, _selectedChat.peer);
-    } else if (msg.e2e && _selectedChat.type === "group") {
+    } else if (msg.e2e && (_selectedChat.type === "group" || _selectedChat.type === "channel")) {
       void _decryptOneGroup(rawMsg, myHandle, _selectedChat.key);
     }
   },
@@ -621,7 +659,7 @@ export const chatStore = {
 
   appendLocalSystemMessage(convoId, text, ts) {
     if (!_selectedChat || !convoId || !text) return;
-    const myKey = _selectedChat.type === 'group'
+    const myKey = (_selectedChat.type === 'group' || _selectedChat.type === 'channel')
       ? _selectedChat.key
       : (userStore.myUser && _selectedChat.peer
           ? [userStore.myUser, _selectedChat.peer].sort().join(':')
@@ -805,9 +843,16 @@ async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
         patch.replyTo = { id: replyToId, from: replyFrom, text: replyText };
       }
       _patchMessage(rawMsg.id, patch);
-      // Ein erfolgreicher Decrypt heißt: CMK ist da → pending-Flag + ggf. fälschlich
-      // gesetztes unavailable-Flag clearen (z.B. nach Bundle-Restore mitten im Flow).
-      clearPendingCmkReq(peerHandle);
+      // unavailable-Flag clearen: erfolgreicher Decrypt zeigt dass ein CMK
+      // funktioniert → wir sind nicht permanent verloren.
+      // pendingCmkReq-Flag NICHT pauschal clearen: in Multi-Device-Race
+      // entstehen Mix-Konstellationen wo manche Messages mit unserem aktiven CMK
+      // decrypten, andere mit einem CMK den der Peer nicht mehr hat (unrecoverable).
+      // Hier zu clearen würde aus decryptIncomingMessage einen cmk_req-Storm machen
+      // (jede unrecoverable Message triggert sofort einen neuen Send weil das Flag
+      // immer wieder gecleart wurde). 30s-Timeout aus markPendingCmkReq macht
+      // die natürliche Freigabe; expliziter Clear passiert nur im Success-Pfad
+      // von decryptIncomingMessage (= "ich habe DEN CMK bekommen den ich brauchte").
       clearCmkUnavailable(peerHandle);
       return;
     }

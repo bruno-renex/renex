@@ -15,7 +15,7 @@ import { get, set } from '../lib/storage.js';
 import { apiFetch } from '../lib/api.js';
 import { profileCache } from './profileCache.svelte.js';
 
-const SECTIONS = ["chats", "groups", "voice"];
+const SECTIONS = ["chats", "groups", "voice", "servers"];
 
 // Sortiert eine Liste {lastSeen?:number, ...} stabil nach lastSeen DESC.
 // Items ohne lastSeen (Kontakte ohne Chat-Historie) landen unten.

@@ -7,6 +7,7 @@ import { handleAuthRoutes } from './src/routes/authRoutes.js';
 import { handleContactRoutes } from './src/routes/contactRoutes.js';
 import { handleAutoDeleteRoutes } from './src/routes/autoDeleteRoutes.js';
 import { handleGroupRoutes } from './src/routes/groupRoutes.js';
+import { handleServerRoutes } from './src/routes/serverRoutes.js';
 import { handleNotificationRoutes } from './src/routes/notificationRoutes.js';
 import { handlePresenceRoutes } from './src/routes/presenceRoutes.js';
 import { handleUploadRoutes } from './src/routes/uploadRoutes.js';
@@ -95,6 +96,9 @@ async function fetch(request, env, ctx) {
     }
     if (path.startsWith('/groups')) {
       return await handleGroupRoutes(request, env, path, params);
+    }
+    if (path.startsWith('/servers/')) {
+      return await handleServerRoutes(request, env, path, params);
     }
     if (path.startsWith('/notifications')) {
       return await handleNotificationRoutes(request, env, path);

@@ -1,5 +1,6 @@
 import { json, readJson, corsHeaders, checkCsrf, bumpContactsVersion } from '../utils.js';
 import { requireSession, rateLimit, pushToUserDO } from '../auth.js';
+import { pushToUser } from '../helpers/pushSend.js';
 
 // ======================================================
 // CONTACT ROUTES: /contacts, /contacts/list,
@@ -222,6 +223,21 @@ export async function handleContactRoutes(request, env, path, params) {
           type: "contact_request",
           from: me,
           ts:   now,
+        }).catch(() => {});
+
+        // Web-Push: immer senden — analog zu DMs und Gruppen. iOS Safari hält die
+        // WS-Verbindung nach PWA-Hintergrund noch ~25-35s als „connected", in dem
+        // Fenster wäre ein wsDelivered-Gate trügerisch → Anfrage erst beim PWA-Restart
+        // sichtbar. In-App-Toast deckt den Foreground-Fall ab, OS-Banner den Rest.
+        await pushToUser(env, targetHandle, {
+          title: `@${me}`,
+          body: "📩 Neue Kontaktanfrage",
+          tag: `renex-contact-request-${me}`,
+          data: {
+            type: "contact_request",
+            from: me,
+            url: "/",
+          },
         }).catch(() => {});
 
         await bumpContactsVersion(env, me, targetHandle);

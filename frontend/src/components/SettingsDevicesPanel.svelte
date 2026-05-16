@@ -18,8 +18,13 @@
   import { ws } from '../lib/ws.js';
   import { listDevices, revokeDevice, formatRelativeTime, deviceIcon } from '../lib/multidevice.js';
   import { captureException } from '../lib/sentry.js';
+  import AddDeviceModal from './AddDeviceModal.svelte';
 
   let { isOpen = $bindable(false) } = $props();
+
+  // Add-Device-Modal: getrennt vom devices-Panel-State, da das Add-Modal
+  // über dem Panel liegt und beide gleichzeitig sichtbar sein können.
+  let addDeviceOpen = $state(false);
 
   let lang = $derived(i18nStore.lang);
   let currentDeviceId = $derived(userStore.deviceId);
@@ -191,11 +196,22 @@
         {/if}
       </div>
 
+      <button
+        class="dev-add-btn"
+        disabled={limitReached}
+        onclick={() => { if (!limitReached) addDeviceOpen = true; }}
+        title={limitReached ? (lang.addDeviceLimitTooltip || 'Limit erreicht. Entferne ein Gerät oder upgrade auf Pro.') : ''}
+      >
+        {lang.addDeviceBtn || '+ Neues Gerät hinzufügen'}
+      </button>
+
       <p class="dev-footer-hint">
         {lang.deviceAutoRevokeHint || 'Geräte werden nach 30 Tagen Inaktivität automatisch entfernt.'}
       </p>
     </div>
   </div>
+
+  <AddDeviceModal bind:isOpen={addDeviceOpen} />
 {/if}
 
 <style>
@@ -382,6 +398,30 @@
   .dev-revoke:disabled {
     opacity: 0.5;
     cursor: wait;
+  }
+
+  .dev-add-btn {
+    display: block;
+    width: 100%;
+    padding: 11px 14px;
+    margin-bottom: 14px;
+    background: transparent;
+    border: 1px dashed var(--accent-voice);
+    border-radius: 10px;
+    color: var(--accent-voice);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .dev-add-btn:hover:not(:disabled) {
+    background: var(--accent-voice-dim);
+  }
+  .dev-add-btn:disabled {
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 0.6;
   }
 
   .dev-footer-hint {

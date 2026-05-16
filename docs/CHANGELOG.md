@@ -4,6 +4,298 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-05-13 — Phase 4b: Channel-Send/Receive live
+
+Channels sind ab jetzt funktional. End-to-End in Production verifiziert:
+Server → `#general` → Nachricht senden → erscheint + persistiert + E2E-verschlüsselt.
+
+### ✨ Added
+
+**Backend Type-Aware Helpers** (`src/auth.js`):
+- `getConvoMemberHandles(db, convoId)` — gibt Member-Handles zurück, schaltet je
+  nach `conversations.type` zwischen `conversation_members` (group) und
+  `server_members` (channel) um.
+- `isConvoMember(db, convoId, handle)` — Boolean-Check, type-aware. Exists-only
+  Query (effizienter als getConvoMemberHandles().includes()).
+
+**Frontend Helper** (`frontend/src/lib/convoType.js`):
+- `isGroupLike(chat)` — boolean für `type === 'group' || type === 'channel'`.
+  Aktuell wenig genutzt; vorbereitet für späteren Refactor der 20+ `=== 'group'`-Checks.
+
+### 🔄 Changed
+
+**Backend `/chat/send`** (`src/helpers/chatSend.js`):
+- Sender-Membership-Check + Recipient-Membership-Check nutzen `isConvoMember`.
+  GSK-Sender-Check ebenfalls type-aware.
+- Unread-Counter INSERT-FROM-SELECT: zwei separate Statements je nach Type
+  (UNION-Variante mit ON CONFLICT war SQLite-Syntax-inkompatibel — Lesson
+  Learned, lokal mit sqlite3 reproduziert vor Deploy).
+- Web-Push-Member-Lookup nutzt `getConvoMemberHandles`.
+- `pushToGroupMembers` (`src/auth.js`) ist transparent type-aware via
+  `getConvoMemberHandles` — alle Caller (chatRoutes, e2e, voice, etc.)
+  bekommen Channel-Support free.
+
+**Backend `/chat/list` + `/chat/react`** (`src/routes/chatRoutes.js`):
+- Membership-Checks via `isConvoMember` statt direkter
+  `conversation_members`-Query.
+
+**Backend `/groups/members?groupId=<channelId>`** (`src/routes/groupRoutes.js`):
+- Type-aware: bei `type='channel'` SELECT aus `server_members`
+  (alle Server-Member, `is_owner=1` → `role='admin'`).
+- Guest-Cleanup skipt für Channels (Gäste leben nicht in `server_members`).
+
+**Frontend ChatStore** (`frontend/src/stores/chat.svelte.js`):
+- 5 Stellen `type === 'group'` erweitert um `|| type === 'channel'`:
+  loadChatHistory, refreshSelected, sendMessage (isGroup-Flag),
+  receiveMessage (isForCurrentChat + decrypt-Routing),
+  appendLocalSystemMessage.
+
+**Frontend ChatInput**: `convoId`-Herleitung für Attachments type-aware.
+**Frontend notificationsStore**: `chatToConvoId` type-aware.
+**Frontend ServersView**: Channel-Klick → `chatStore.selectChat({type:'channel', ...})`
+statt Info-Toast.
+
+### 🧪 Tests
+
+- `tests/chatSendControlTypes.test.js` Mock erweitert um `isConvoMember` +
+  `getConvoMemberHandles`.
+- Bestehende 390 Tests bleiben grün.
+- Neue serverPermissions-Suite (27) bleibt grün.
+- **Total 417/417** Tests grün vor Deploy.
+
+### 🚧 Bekannte „rough edges" (Phase 4c-Polish, nicht blockierend für MVP)
+
+- ChatHeader rendert Channels noch wie DM-Optik (Avatar-Initialen statt `#`,
+  Voice-Call-Buttons werden korrekt unterdrückt via `type === 'dm'`-Check)
+- Channel-Members-Modal: lädt jetzt `server_members` korrekt, aber UI-Polish
+  (#-Prefix im Titel, Server-Context-Anzeige) fehlt
+- Multi-Device-GSK-Distribution: bei Peer-Device-Add wird GSK noch nicht
+  für Channel-Members re-distributed (App.svelte device_added Hook)
+- Edit-Message für Channels: 2 Stellen in chat.svelte.js (Z.99, 237)
+  brauchen group-like-Logik
+- Recipient-Set-KV-Cache (`server_recipients:<channelId>`, Spec §4.3):
+  bisher fällt jeder Channel-Send auf direkte DB-Query zurück (60s
+  KV-Cache aus `pushToGroupMembers` greift teilweise)
+
+### Geänderte Dateien
+
+- `src/auth.js` — `getConvoMemberHandles`, `isConvoMember`, `pushToGroupMembers` umgestellt
+- `src/helpers/chatSend.js` — 4 Stellen type-aware
+- `src/routes/chatRoutes.js` — 2 Stellen type-aware
+- `src/routes/groupRoutes.js` — `/groups/members`-Endpoint type-aware
+- `frontend/src/stores/chat.svelte.js` — 5 Stellen group→group/channel
+- `frontend/src/stores/notifications.svelte.js` — chatToConvoId
+- `frontend/src/components/ChatInput.svelte` — attachment convoId
+- `frontend/src/components/ServersView.svelte` — Channel-Klick → selectChat
+- `frontend/src/lib/convoType.js` — neu (Helper für späteren Refactor)
+- `tests/chatSendControlTypes.test.js` — Mock erweitert
+- `docs/CHANGELOG.md` — dieser Eintrag
+
+---
+
+## 2026-05-13 — Phase 3A Sidebar + Routes (Backend + UI live)
+
+Server/Channels sind als Foundation in Production verifügbar.
+Backend produktionsverifiziert: 4 End-to-End-Calls (create, list, detail,
+channel-add) liefen grün im Browser-DevTools-Test.
+
+### ✨ Added
+
+**Datenbank** (D1 production):
+- 6 neue Tables: `servers`, `server_members`, `server_roles`,
+  `role_assignments`, `channel_permission_overrides`, `server_audit_log`
+- 5 neue Spalten auf `conversations`: `server_id`, `channel_kind`, `position`,
+  `topic`, `parent_id` (via ALTER TABLE, einmalig)
+- Index `idx_conv_server` für Sidebar-Liste
+
+**Backend**:
+- `src/lib/permissions.js` — Pure-Function Permission-Bitfield +
+  `resolvePermissions()` mit Discord-Override-Order (role-deny < role-allow
+  < member-deny < member-allow). 13 Permission-Bits, ALL_PERMISSIONS-Helper,
+  DEFAULT_EVERYONE/MODERATOR-Konstanten, sanitizeBits-Forward-Compat.
+- `src/routes/serverRoutes.js` — neuer Router mit 6 implementierten Endpoints
+  + 14 Stubs. Path-Routing via RegEx-Liste. Audit-Log-Helper, Recipient-Cache-
+  Invalidation, type-aware Member-Lookup.
+- Backend dispatched `/servers/*` → `handleServerRoutes` in `backend.js`.
+
+**Frontend**:
+- `frontend/src/lib/permissions.js` — byte-identical zu Backend, Test prüft
+  Sync.
+- `frontend/src/stores/serverStore.svelte.js` — Reactive Store mit
+  loadServers, selectServer, createServer, leaveServer, reset.
+- `frontend/src/components/ServersView.svelte` — Liste/Detail-Modi mit
+  Channels + Members.
+- `frontend/src/components/CreateServerModal.svelte` — Server-Erstellung.
+- `frontend/src/components/IconStrip.svelte` — +4. Server-Icon.
+- `frontend/src/components/InboxList.svelte` — `activeSection === 'servers'`
+  Branch.
+- `frontend/src/stores/inbox.svelte.js` — `'servers'` in SECTIONS-Whitelist.
+- i18n: 28 neue Keys × 3 Sprachen (de/en/es).
+
+### 🧪 Tests
+
+- `tests/serverPermissions.test.js` — 27 neue Tests:
+  - Spec §5.4 Test-Vorschriften #1-5 (Position-Check + Override-Order)
+  - Bitfield-Konsistenz, Owner-Bypass, ADMINISTRATOR-Bit
+  - Private-Channel-Szenarien
+  - Byte-Identität Backend ↔ Frontend (readFileSync)
+  - Forward-Compat-Sanitization
+
+### 🔒 Security / Architecture
+
+- **Atomic D1 batch** für 5-Step-Server-Create
+- **Anti-Privilege-Escalation enforced**: canManageRoleAtPosition gibt nur
+  strictly-niedrigere Position frei; Owner bypassed.
+- **Permission-Resolution channel-agnostisch**: dieselbe Pure-Function für
+  Server-Ebene und Channel-spezifische Overrides.
+- **Owner-Pre-Check bei Leave**: 409 `owner_transfer_required` wenn andere
+  Members existieren; sonst Server-CASCADE-Delete.
+
+### Geänderte Dateien
+
+- `schema-servers.sql` — neu (155 LOC)
+- `src/lib/permissions.js` — neu
+- `src/routes/serverRoutes.js` — neu (~520 LOC, 6 impl + 14 stubs)
+- `backend.js` — Route-Dispatch
+- `frontend/src/lib/permissions.js` — neu (identical zu Backend)
+- `frontend/src/stores/serverStore.svelte.js` — neu
+- `frontend/src/components/ServersView.svelte` — neu
+- `frontend/src/components/CreateServerModal.svelte` — neu
+- `frontend/src/components/IconStrip.svelte` — Server-Icon
+- `frontend/src/components/InboxList.svelte` — Section-Branch
+- `frontend/src/stores/inbox.svelte.js` — SECTIONS-Whitelist
+- `frontend/src/stores/lang/{de,en,es}.js` — 28 Keys × 3 Sprachen
+- `tests/serverPermissions.test.js` — neu (27 Tests)
+
+---
+
+## 2026-05-13 — Phase 3A Spec + Roadmap-Pivot (Beta 3 Monate früher)
+
+Strategischer Pivot nach Phase-1B/1C-Abschluss: Beta-Launch von Okt/Nov 2026
+auf **Mitte/Ende Juli 2026** vorgezogen. Begründung: Phase 1 ist exzellente
+Foundation, Voice ist eigener Tech-Stack (3-4 Wo Solo-Arbeit), Markenkern
+funktioniert auch ohne Voice in Tag 1.
+
+### ✨ Added
+
+**`docs/SERVERS.md`** — Phase-3A-Spec (Servers + Text-Channels + Roles), Draft v0.1
+- 11 Sections (Glossar, Datenmodell, Lifecycle, Channels, Roles, API, Multi-Device,
+  Limits, Migration, Decision Log, Open Items)
+- 13 Decisions im Decision Log dokumentiert (alle 2026-05-13)
+- Datenmodell wiederverwendet `conversations`-Tabelle via `server_id` + `channel_kind`
+  (statt neuer Tables) — spart 2-3 Wochen Multi-Device-Code-Duplikation
+- GSK pro Channel (Phase-1C-Pattern) für Defense-in-Depth + Forward Secrecy
+- Owner via `is_owner`-Flag (Industry-Standard: Discord/Slack/Telegram)
+- Audit-Log als Phase-3 must-have (Schweizer DSG)
+- Recipient-Set-KV-Cache für Send-Latency bei grossen Servern
+- Server-scoped API-Pfad-Konvention: `/servers/<sid>/channels/...`
+- Limits: Free=1000 Members, Pro=10'000 (Sweet-Spot zwischen Anti-AI und Gamer-Clans)
+
+### 🔄 Changed
+
+**Roadmap-Pivot in `docs/VISION.md`:**
+- Beta-Launch-Ziel: Okt/Nov 2026 → **Mitte/Ende Juli 2026**
+- Phase 3 → Phase 3A (Voice/PTT/Screen-Sharing deferred zu Phase 8)
+- Phase 4 (Gamer-Features) → Phase 9 (Year 1 Q4)
+- Phase 5 → Phase 5-Light (nur Captcha + Rate-Limits, Hardware-Attestation deferred)
+- Phase 2 (Open Standard) parallelisiert zu Phase 3A
+- Phase 8 (post-Beta) bündelt Voice + Signal Protocol als v2.0-Update
+- 2 neue Decision-Log-Einträge in VISION.md Anhang B
+
+**Marketing-Pitch angepasst:** „Text-First Discord-Killer mit AI-Free-Garantie.
+Voice kommt in v2.0 (Q4 2026)."
+
+### Geänderte Dateien
+
+- `docs/SERVERS.md` — neu, Phase 3A Spec (~600 Zeilen)
+- `docs/VISION.md` — §10 Roadmap-Übersicht komplett restrukturiert, §11 Metriken-Daten
+  verschoben, Anhang B um 3 Decision-Log-Einträge erweitert
+- `docs/CHANGELOG.md` — dieser Eintrag
+
+---
+
+## 2026-05-13 — Add-Device-Modal (Phase 1B/1C Loose-End)
+
+Letztes offenes UX-Stück aus der Multi-Device-Spec geschlossen. Bisher fehlte
+der in [`MULTI_DEVICE.md` §12.1](./MULTI_DEVICE.md) versprochene
+`+ Neues Gerät hinzufügen`-Button. Cross-Device-Passkey funktionierte
+trotzdem (WebAuthn-Hybrid-Transport ist OS-Standard), aber der User hatte
+keinen Onboarding-Helper „Wo geh ich auf dem neuen Gerät hin?".
+
+### ✨ Added
+
+**`AddDeviceModal.svelte`** (`frontend/src/components/AddDeviceModal.svelte`)
+- Neue Komponente mit QR-Code (`https://app.renex.id`) + 3-Schritt-Anleitung.
+- QR ist NICHT der WebAuthn-Hybrid-QR (den erzeugt das OS auf dem neuen
+  Gerät), sondern ein Onboarding-Sprung „App auf neuem Gerät öffnen".
+- Cyan-on-Dark-Farbschema (`#38bdf8` auf `#0f0f12`) passt zum App-Theme.
+- Fallback bei QR-Render-Fehler: Plain-URL-Anzeige + Sentry-Capture.
+
+**Button in `SettingsDevicesPanel.svelte`**
+- `+ Neues Gerät hinzufügen` am Ende der Liste, dashed Border in Akzentfarbe.
+- Disabled-State wenn `limitReached` (5 Free / 10 Pro), Tooltip mit
+  Upgrade-Hinweis.
+
+**i18n-Keys** in `de.js`, `en.js`, `es.js` (11 Keys: `addDeviceBtn`,
+`addDeviceLimitTooltip`, `addDeviceTitle`, `addDeviceIntro`,
+`addDeviceStep1-3`, `addDeviceHint`, `addDeviceQrError`, `addDeviceCloseBtn`).
+
+### 📦 Dependencies
+
+- `qrcode@^1.5.4` (npm). Pure-JS, returns SVG-String, ~13KB gzipped Bundle-
+  Footprint. Wiederverwendbar für Group-Invite-Link-QRs (Phase 3).
+
+### 🔒 Security / Architecture
+
+- **Kein Backend-Call.** Modal ist reine UX. Geräte-Registrierung passiert
+  weiterhin auf dem neuen Gerät via WebAuthn → `POST /e2e/inbox/upload`
+  (siehe [`MULTI_DEVICE.md` §4.1](./MULTI_DEVICE.md#41-add-device-flow)).
+- **Bestätigung implizit via Cross-Device-Passkey** — Decision Log
+  2026-04-28: Passkey IST die Bestätigung, kein zusätzlicher Confirm.
+
+### Geänderte Dateien
+
+- `frontend/src/components/AddDeviceModal.svelte` — neu
+- `frontend/src/components/SettingsDevicesPanel.svelte` — Add-Button + Modal-Wiring
+- `frontend/src/stores/lang/{de,en,es}.js` — 11 neue Keys
+- `package.json` + `package-lock.json` — `qrcode` dependency
+- `docs/MULTI_DEVICE.md` §13 — Open Item geschlossen
+- `docs/CHANGELOG.md` — dieser Eintrag
+
+### 🔄 Nachtrag (gleicher Tag) — Layout-Refactor: Reverse-Flow primär
+
+Nach echtem End-to-End-Test mit Mac (Monterey 12.7.6) + iPhone Safari kam
+heraus, dass der ursprünglich primär kommunizierte Apple-Auto-Banner-Flow
+(„neues Gerät zeigt QR + BLE-Companion → altes Gerät zeigt Notification")
+auf älteren macOS-Versionen **nicht zuverlässig funktioniert**, weil
+iCloud-Keychain-Passkey-Sync erst ab Ventura 13 / iOS 16 verfügbar ist und
+auf Monterey Passkeys nur lokal gespeichert werden.
+
+**Universeller Standard-Flow** (auf jedem OS / Browser):
+1. Auf dem **neuen** Gerät app.renex.id öffnen (Convenience-QR bleibt als
+   Helper).
+2. Handle eingeben + einloggen → Browser dort zeigt den
+   WebAuthn-Hybrid-QR.
+3. QR mit Kamera-App des **alten** (eingeloggten) Geräts scannen.
+4. Auf dem alten Gerät: Touch-ID / Face-ID bestätigen — fertig.
+
+Live verifiziert auf Monterey + iPhone Safari: 2 Devices in der Liste,
+keine Apple-Notification nötig.
+
+**Modal-Layout** umgebaut:
+- **Steps primär oben** (4 nummerierte Punkte, Reverse-Flow).
+- **Convenience-QR sekundär** in eigener Box (130px statt 220px) mit
+  Tipp-Text links + QR rechts.
+- **Hint-Box** (Passkey-Sicherheit) separat.
+- **Apple-Auto-Notice** als optional-italic-Box mit dashed Border — für
+  User mit Ventura+/iOS 17 die den Banner-Flow nutzen können.
+
+**i18n** auf 13 Keys gewachsen (+`addDeviceStep4`, `addDeviceConvenienceTip`,
+`addDeviceAppleNotice`). Alle 3 Sprachen synchron, per Runtime-Import in
+Browser-Preview validiert.
+
+---
+
 ## 2026-05-10 — Phase 1C: Group-Multi-Device Re-Distribution
 
 GSK-Layer nachgezogen für vollwertiges Multi-Device. DM-Multi-Device war

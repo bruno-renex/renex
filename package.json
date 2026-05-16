@@ -13,6 +13,7 @@
   "dependencies": {
     "@block65/webcrypto-web-push": "^1.0.2",
     "@scure/bip39": "^2.2.0",
+    "qrcode": "^1.5.4",
     "toucan-js": "^4.1.1"
   },
   "devDependencies": {

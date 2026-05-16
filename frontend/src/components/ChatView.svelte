@@ -90,19 +90,39 @@
   let chat = $derived(chatStore.selectedChat);
   let messages = $derived(chatStore.messages);
   let isLoading = $derived(chatStore.isLoading);
+  let pendingJumpTo = $derived(chatStore.pendingJumpTo);
 
   let messagesEl = $state(null);
 
-  // Auto-scroll to bottom on new message
+  // Auto-scroll to bottom on new message — aussetzen wenn ein Jump aktiv ist,
+  // sonst kämpft scrollTop = scrollHeight gegen das scrollIntoView vom Jump-Effect.
   $effect(() => {
-    // Track length to retrigger
     const _ = messages.length;
+    if (pendingJumpTo) return;
     if (messagesEl) {
-      // Wait for DOM update
       setTimeout(() => {
         messagesEl.scrollTop = messagesEl.scrollHeight;
       }, 50);
     }
+  });
+
+  // Jump-to-Message via toast.action (z.B. Reaktions-Toast): pendingJumpTo wird
+  // im chatStore gesetzt, ChatView wartet bis das Bubble-Element im DOM ist.
+  // Triggert auf jede messages-Mutation — falls /chat/list noch lädt und das Target
+  // im ersten Tick nicht da ist, fired der Effect beim nächsten Update erneut.
+  $effect(() => {
+    const target = pendingJumpTo;
+    const _len = messages.length;
+    if (!target || !messagesEl) return;
+    const id = setTimeout(() => {
+      const el = messagesEl?.querySelector(`[data-msg-id="${CSS.escape(target)}"]`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('jump-highlight');
+      setTimeout(() => el.classList.remove('jump-highlight'), 1500);
+      chatStore.clearPendingJump();
+    }, 80);
+    return () => clearTimeout(id);
   });
 
   // Group messages by date for divider

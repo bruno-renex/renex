@@ -30,6 +30,10 @@ vi.mock('../src/auth.js', () => ({
   isAcceptedContact: vi.fn(() => Promise.resolve(true)),
   pushToUserDO:      vi.fn(() => Promise.resolve(0)),
   pushToGroupMembers: vi.fn(() => Promise.resolve()),
+  // Phase 4b: type-aware helpers für Channels. Mock defaults zu "ist Member"
+  // für bestehende Group-Tests; einzelne Tests können vi.mocked(...) overriden.
+  getConvoMemberHandles: vi.fn(() => Promise.resolve([])),
+  isConvoMember:         vi.fn(() => Promise.resolve(true)),
   GUEST_HANDLE_RE:   /^guest_[a-z0-9]+$/,
 }));
 

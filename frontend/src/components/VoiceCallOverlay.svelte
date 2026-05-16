@@ -153,16 +153,28 @@
   // RTCPeerConnection.ontrack feuert. autoPlay + playsInline für iOS Safari.
   let remoteAudioEl = $state(null);
   let _unsubRemote = null;
+  let _lastAssignedStream = null;
 
   $effect(() => {
     if (!remoteAudioEl) return;
     _unsubRemote = voiceStore.onRemoteStream((stream) => {
-      // srcObject ist nicht reactive über Svelte — manuell setzen
-      remoteAudioEl.srcObject = stream || null;
-      if (stream) {
-        // Best effort: bei iOS muss play() nach User-Gesture aufgerufen werden.
-        // Da Accept/Start eine User-Action sind, ist der AudioContext schon
-        // unlocked — play() sollte ohne NotAllowedError gehen.
+      // srcObject NUR neu zuweisen wenn sich die Stream-Referenz geändert hat.
+      // Bei Re-Emit (track.onunmute) ist's dieselbe Referenz — Null-Bounce
+      // würde eine pending play()-Promise mit AbortError abbrechen, ohne
+      // dass iOS dadurch etwas Sinnvolles refreshed.
+      const isNewStream = stream && stream !== _lastAssignedStream;
+      if (isNewStream) {
+        remoteAudioEl.srcObject = stream;
+        _lastAssignedStream = stream;
+      } else if (!stream) {
+        remoteAudioEl.srcObject = null;
+        _lastAssignedStream = null;
+      }
+      if (stream && remoteAudioEl.paused) {
+        // play() nur wenn paused — sonst rennt eine bereits laufende play()
+        // gegen einen neuen Aufruf und aborted. Bei iOS PWA muss play() im
+        // User-Gesture-Stack oder kurz danach passieren; track.onunmute ist
+        // ein Browser-Event, läuft aber in Microtask-Nähe — geht meist durch.
         const p = remoteAudioEl.play();
         if (p && typeof p.catch === 'function') {
           p.catch((e) => console.warn('remote audio play() failed:', e?.message));
@@ -171,6 +183,7 @@
     });
     return () => {
       if (_unsubRemote) { _unsubRemote(); _unsubRemote = null; }
+      _lastAssignedStream = null;
     };
   });
 </script>

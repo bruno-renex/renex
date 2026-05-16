@@ -395,25 +395,24 @@ export async function handleVoiceRoutes(request, env, path, params) {
         startedAt,
       }));
 
-      // Fallback: wenn Peer offline (keine WS-Verbindung) → WebPush
-      // Der Service Worker öffnet /chat/?with=<caller>&call=1
-      // und triggert dort einen (erneuten) Call. SDP wird dabei neu
-      // verhandelt, weil der erste Offer dann wahrscheinlich abgelaufen ist.
-      if (delivered === 0) {
-        // fire-and-forget (nie blockierend)
-        pushToUser(env, to, {
-          title: "📞 Eingehender Anruf",
-          body:  `${me} ruft dich an`,
-          tag:   `voice-call-${callId}`,
-          icon:  "/icons/icon-192.png",
-          data: {
-            type:    "voice_call",
-            from:    me,
-            callId,
-            url:     `/chat/?with=${encodeURIComponent(me)}&call=1`,
-          },
-        }).catch(() => {});
-      }
+      // WebPush: immer senden — analog zu DMs/Kontaktanfragen. Der `delivered === 0`
+      // Gate war auf iOS unzuverlässig, weil Safari die WS noch ~25-35s als „connected"
+      // hält nach PWA-Hintergrund. Bei Calls besonders kritisch: das Ring-Fenster ist
+      // nur ~30s. Service Worker zeigt persistente Notification mit Accept/Decline-
+      // Buttons; bei Klick öffnet /chat/?with=<caller>&call=1 und re-verhandelt SDP.
+      // Trade-off: bei offener PWA zeigen sich In-App-Ringer + OS-Banner parallel.
+      pushToUser(env, to, {
+        title: "📞 Eingehender Anruf",
+        body:  `${me} ruft dich an`,
+        tag:   `voice-call-${callId}`,
+        icon:  "/icons/icon-192.png",
+        data: {
+          type:    "voice_call",
+          from:    me,
+          callId,
+          url:     `/chat/?with=${encodeURIComponent(me)}&call=1`,
+        },
+      }).catch(() => {});
 
       return json(request, { ok: true, callId, delivered });
     }
@@ -556,6 +555,15 @@ export async function handleVoiceRoutes(request, env, path, params) {
       if (!isCallId(callId)) return json(request, { error: "Invalid 'callId'" }, 400);
 
       const call = await getCallForUser(env, callId, me);
+      // Idempotenz: Decline auf bereits beendetem Call rejecten — kein zweiter
+      // push an den Caller. Use-Case: stale SW-Notification (requireInteraction)
+      // bleibt auf dem Sperrbildschirm nach Hangup, Callee tippt versehentlich
+      // „Ablehnen" → ohne Guard würde Caller eine verspätete decline-Notification
+      // für einen längst beendeten Call sehen.
+      if (call && ['ended', 'declined', 'missed', 'cancelled'].includes(String(call.status))) {
+        return json(request, { ok: true, alreadyEnded: true, status: call.status });
+      }
+
       const peer = call?.peer;
       const endedAt = Date.now();
 
@@ -641,14 +649,21 @@ export async function handleVoiceRoutes(request, env, path, params) {
       if (!isCallId(callId)) return json(request, { error: "Invalid 'callId'" }, 400);
       if (!isHandle(to))     return json(request, { error: "Invalid 'to'" }, 400);
 
+      // Idempotenz: Hangup auf bereits beendetem Call rejecten — kein zweiter
+      // hangup-push an den Peer. Verhindert stale-Notification-Klick-Replays
+      // und Doppel-Hangups bei flackernden Netzverbindungen.
+      const callRow = await env.RENEX_DB.prepare(
+        `SELECT answered_at, started_at, status FROM call_log WHERE id = ?`
+      ).bind(callId).first();
+      if (callRow && ['ended', 'declined', 'missed', 'cancelled'].includes(String(callRow.status))) {
+        return json(request, { ok: true, alreadyEnded: true, status: callRow.status });
+      }
+
       const endedAt = Date.now();
 
       // Dauer aus answered_at berechnen (falls vorhanden)
       try {
-        const row = await env.RENEX_DB.prepare(
-          `SELECT answered_at, started_at FROM call_log WHERE id = ?`
-        ).bind(callId).first();
-        const base = row?.answered_at || row?.started_at || endedAt;
+        const base = callRow?.answered_at || callRow?.started_at || endedAt;
         const duration_s = Math.max(0, Math.round((endedAt - base) / 1000));
         await env.RENEX_DB.prepare(
           `UPDATE call_log
@@ -698,62 +713,57 @@ export async function handleVoiceRoutes(request, env, path, params) {
 
     // ──────────────────────────────────────────────────
     // GET /voice/turn-credentials
-    // Versucht zuerst Cloudflare Realtime TURN (wenn CF_TURN_KEY_ID +
-    // CF_TURN_API_TOKEN als Secrets gesetzt sind). Bei Fehler oder
-    // ohne Konfiguration → STUN-Only Fallback.
-    //
-    // Cloudflare Realtime TURN API:
-    //   POST https://rtc.live.cloudflare.com/v1/turn/keys/<KEY_ID>/credentials/generate
-    //   Authorization: Bearer <API_TOKEN>
-    //   Body: { ttl: 3600 }
-    //   Response: { iceServers: { urls: [...], username, credential } }
+    // Self-hosted coturn auf turn.renex.id (Hetzner). Ephemere REST-API-
+    // Credentials nach coturn use-auth-secret-Pattern:
+    //   username   = "<unix-expiry>:<handle>"
+    //   credential = base64(HMAC-SHA1(COTURN_SECRET, username))
+    // coturn akzeptiert die Credentials nur bis zum expiry-Timestamp.
     // ──────────────────────────────────────────────────
     case "/voice/turn-credentials": {
       if (request.method !== "GET") return json(request, { error: "Method not allowed" }, 405);
 
-      const TTL_SEC = 3600; // 1h — WebRTC hält danach keepalive selbst
-      const keyId = env.CF_TURN_KEY_ID;
-      const token = env.CF_TURN_API_TOKEN;
+      const TTL_SEC = 3600;
+      const secret = env.COTURN_SECRET;
 
       const stunOnly = {
-        iceServers: [
-          { urls: "stun:stun.cloudflare.com:3478" },
-        ],
+        iceServers: [{ urls: "stun:turn.renex.id:3478" }],
         ttl: TTL_SEC,
       };
 
-      if (!keyId || !token) {
+      if (!secret) {
+        console.warn("COTURN_SECRET not configured — STUN-only fallback");
         return json(request, stunOnly);
       }
 
       try {
-        const res = await fetch(
-          `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(keyId)}/credentials/generate`,
-          {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${token}`,
-              "Content-Type":  "application/json",
-            },
-            body: JSON.stringify({ ttl: TTL_SEC }),
-          }
+        const expiry = Math.floor(Date.now() / 1000) + TTL_SEC;
+        const username = `${expiry}:${me}`;
+
+        const key = await crypto.subtle.importKey(
+          "raw",
+          new TextEncoder().encode(secret),
+          { name: "HMAC", hash: "SHA-1" },
+          false,
+          ["sign"]
         );
-        if (!res.ok) {
-          console.warn("CF TURN: HTTP", res.status);
-          return json(request, stunOnly);
-        }
-        const data = await res.json();
-        // CF gibt { iceServers: { urls, username, credential } } zurück — eine Zeile.
-        // Wir prepend-en STUN, damit auch ohne TURN eine Verbindung probiert wird.
-        const cfIce = data?.iceServers || data;
-        const cfList = Array.isArray(cfIce) ? cfIce : [cfIce];
-        const iceServers = [
-          { urls: "stun:stun.cloudflare.com:3478" },
-          ...cfList,
-        ];
-        return json(request, { iceServers, ttl: TTL_SEC });
+        const sigBuf = await crypto.subtle.sign(
+          "HMAC",
+          key,
+          new TextEncoder().encode(username)
+        );
+        const credential = btoa(String.fromCharCode(...new Uint8Array(sigBuf)));
+
+        return json(request, {
+          iceServers: [
+            { urls: "stun:turn.renex.id:3478" },
+            { urls: "turn:turn.renex.id:3478?transport=udp", username, credential },
+            { urls: "turn:turn.renex.id:3478?transport=tcp", username, credential },
+            { urls: "turns:turn.renex.id:443?transport=tcp", username, credential },
+          ],
+          ttl: TTL_SEC,
+        });
       } catch (e) {
-        console.warn("CF TURN generate failed:", e?.message);
+        console.warn("coturn credential generation failed:", e?.message);
         return json(request, stunOnly);
       }
     }

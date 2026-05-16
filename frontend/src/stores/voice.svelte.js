@@ -276,6 +276,14 @@ let _localLevel = $state(0);
 let _remoteLevel = $state(0);
 // Pending ICE-Candidates die vor setRemoteDescription ankamen
 let _pendingRemoteIce = [];
+// Pending RAW voice:ice WS-Payloads die ankommen BEVOR _pc existiert.
+// Callee-Race: bei cross-network Calls treffen Caller's trickle ICE-Events
+// (voice:ice) am Callee oft ein, bevor acceptCall() den _pc + den decrypt-
+// fähigen _callCmk aufgebaut hat. Ohne Queue → silent drop → keine remote
+// candidates → Mac's PC bleibt für immer in ICE-checking → relay-pairs nie
+// nominated → Call hängt bei "Verbindet…". Bei Same-Machine-Tests greift's
+// nicht, weil WS-Latenz < PC-Setup-Zeit.
+let _pendingRawIcePayloads = [];
 // Pending ICE-Candidates die wir senden wollen, aber Backend kennt den Call
 // noch nicht (call_log noch nicht inserted vor /voice/ring response).
 // Wird auf null gesetzt sobald Call angemeldet ist und directly geflusht +
@@ -293,6 +301,7 @@ function _emitRemoteStream() {
 async function _hardReset() {
   _clearNoAnswerTimer();
   _clearRestartIceTimer();
+  _stopIceStatsLogger();
   _isConnectionDegraded = false;
   if (_localMeterDispose) { try { _localMeterDispose(); } catch {} _localMeterDispose = null; }
   if (_remoteMeterDispose) { try { _remoteMeterDispose(); } catch {} _remoteMeterDispose = null; }
@@ -303,6 +312,7 @@ async function _hardReset() {
   _localStream = null;
   _remoteStream = null;
   _pendingRemoteIce = [];
+  _pendingRawIcePayloads = [];
   _localIceQueue = null;
   _callCmk = null;
   _emitRemoteStream();
@@ -382,6 +392,70 @@ async function _sendIceCandidate(cand, callId, peerHandle) {
   }
 }
 
+// ── ICE Stats-Logger ──────────────────────────────────────
+// Logged während `checking`-Phase periodisch alle Candidate-Pairs.
+// Use-Case: ICE-fail-Diagnose (welcher Pair wird probiert, welcher state,
+// wieviele bytes sent/recv, RTT). Stoppt automatisch bei connected/failed/closed.
+let _statsLoggerInterval = null;
+
+async function _logIceStatsOnce(pc, tick) {
+  if (!pc || pc.connectionState === 'closed') return false;
+  try {
+    const stats = await pc.getStats();
+    const pairs = [];
+    const localCands = new Map();
+    const remoteCands = new Map();
+    stats.forEach(r => {
+      if (r.type === 'candidate-pair') pairs.push(r);
+      else if (r.type === 'local-candidate') localCands.set(r.id, r);
+      else if (r.type === 'remote-candidate') remoteCands.set(r.id, r);
+    });
+    if (pairs.length === 0) {
+      console.log(`📞 ICE stats[${tick}]: no candidate pairs yet`);
+      return true;
+    }
+    for (const p of pairs) {
+      const lc = localCands.get(p.localCandidateId);
+      const rc = remoteCands.get(p.remoteCandidateId);
+      const lcType = lc?.candidateType || '?';
+      const rcType = rc?.candidateType || '?';
+      const lcProto = lc?.protocol || '?';
+      const rcProto = rc?.protocol || '?';
+      // lc.url zeigt welcher TURN/STUN-Server diesen relay/srflx-Candidate
+      // allocated hat — entscheidend wenn mehrere TURNs konfiguriert sind.
+      const lcVia = lc?.url ? ` via=${lc.url}` : '';
+      console.log(
+        `📞 ICE pair[${tick}]: ${lcType}/${lcProto}${lcVia} ↔ ${rcType}/${rcProto} ` +
+        `state=${p.state} nominated=${p.nominated} ` +
+        `sent=${p.bytesSent || 0} recv=${p.bytesReceived || 0} ` +
+        `rtt=${p.currentRoundTripTime ?? '?'}`
+      );
+    }
+  } catch (e) {
+    console.warn(`📞 stats logger tick=${tick} error:`, e?.message);
+  }
+  return true;
+}
+
+function _startIceStatsLogger(pc) {
+  if (_statsLoggerInterval) return;
+  let tick = 0;
+  // Sofortiger erster Tick (statt 2s zu warten) — zeigt Initialzustand.
+  void _logIceStatsOnce(pc, ++tick);
+  _statsLoggerInterval = setInterval(async () => {
+    tick++;
+    const alive = await _logIceStatsOnce(pc, tick);
+    if (!alive || tick > 15) _stopIceStatsLogger();
+  }, 2000);
+}
+
+function _stopIceStatsLogger() {
+  if (_statsLoggerInterval) {
+    clearInterval(_statsLoggerInterval);
+    _statsLoggerInterval = null;
+  }
+}
+
 async function _flushLocalIceQueue(callId, peerHandle) {
   if (!_localIceQueue) return;
   const queue = _localIceQueue;
@@ -391,7 +465,12 @@ async function _flushLocalIceQueue(callId, peerHandle) {
   }
 }
 
-async function _setupPeerConnection(callId, peerHandle) {
+// preAcquiredStream: optionaler MediaStream der schon im User-Gesture-Frame
+// vom Caller geholt wurde. Android Chrome PWA verliert den Gesture-Token wenn
+// zu viele awaits zwischen User-Klick und getUserMedia liegen → NotAllowedError
+// obwohl Permission granted ist. startCall/acceptCall holen den Stream daher
+// VOR allen anderen awaits und reichen ihn hierher durch.
+async function _setupPeerConnection(callId, peerHandle, preAcquiredStream = null) {
   const config = await fetchIceServers();
   // Bis _localIceQueue auf null gesetzt wird (post /voice/ring|/answer success),
   // werden Candidates lokal gepuffert. Sonst feuern sie BEVOR call_log existiert
@@ -406,6 +485,32 @@ async function _setupPeerConnection(callId, peerHandle) {
       void _sendIceCandidate(cand, callId, peerHandle);
     },
     onTrack: (stream) => {
+      // Diagnose: zeigt ob/wann Remote-Track ankommt, wieviele Tracks, ob muted.
+      // Bei iOS-Safari-PWA-Audio-Bug hilft das, die Ursache einzugrenzen
+      // (kein ontrack vs. ontrack-fired-aber-muted vs. nicht-abspielbar).
+      const tracks = stream.getAudioTracks();
+      try {
+        console.log('📞 ontrack fired:', {
+          audioTracks: tracks.length,
+          muted: tracks.map(t => t.muted),
+          enabled: tracks.map(t => t.enabled),
+          readyState: tracks.map(t => t.readyState),
+        });
+      } catch {}
+      // iOS-Safari-PWA-Bug: ontrack feuert mit `muted: true` (DTLS+SRTP noch
+      // nicht fertig), und das spätere `unmute`-Event triggert die <audio>-
+      // Playback NICHT zuverlässig. Workaround: explizit onunmute hängen und
+      // den remote-stream re-emittieren → VoiceCallOverlay setzt srcObject
+      // neu und ruft play() erneut auf, was iOS aus dem Stale-State holt.
+      for (const t of tracks) {
+        const reemit = () => {
+          console.log('📞 remote track unmuted — re-emit stream to trigger playback');
+          _emitRemoteStream();
+        };
+        // onunmute statt addEventListener: idempotent bei mehrfachem onTrack-
+        // Aufruf (Renegotiation), letzte Zuweisung gewinnt.
+        try { t.onunmute = reemit; } catch {}
+      }
       _remoteStream = stream;
       _emitRemoteStream();
       // Audio-Level-Meter für remote stream starten
@@ -415,6 +520,18 @@ async function _setupPeerConnection(callId, peerHandle) {
       });
     },
     onIceConnectionStateChange: (ics) => {
+      // ICE stats logger: in 'checking' phase periodisch Candidate-Pair-Status
+      // loggen — zeigt welche Pairs probiert werden + warum sie scheitern.
+      // Stoppt automatisch beim Wechsel auf terminal state.
+      if (ics === 'checking' && _pc) {
+        _startIceStatsLogger(_pc);
+      } else if (ics === 'connected' || ics === 'completed' ||
+                 ics === 'failed' || ics === 'closed') {
+        // Final-Tick loggen bevor wir stoppen — damit der letzte Stand sichtbar ist
+        if (_pc && _statsLoggerInterval) void _logIceStatsOnce(_pc, 'final');
+        _stopIceStatsLogger();
+      }
+
       // Mid-Call-Reconnect: bei `disconnected` (transient) wartet der Browser
       // ~5s auf seine eigenen Reconnect-Versuche. Wenn das nicht reicht,
       // trigger wir manuell pc.restartIce() — frische ICE-Gathering-Runde
@@ -490,8 +607,22 @@ async function _setupPeerConnection(callId, peerHandle) {
     },
   });
 
-  // Mikrofon
-  const stream = await getLocalMedia({ audio: true, video: false });
+  // Mikrofon: pre-acquired Stream bevorzugen (= im User-Gesture-Frame geholt).
+  // Fallback auf getLocalMedia falls keiner mitgegeben wurde (z.B. Mid-Call
+  // Renegotiation, die nicht direkt von User-Aktion getriggert ist).
+  const stream = preAcquiredStream || await getLocalMedia({ audio: true, video: false });
+  // Diagnose: zeigt ob PWA tatsächlich Mic-Track liefert oder silent stream.
+  try {
+    const tracks = stream.getAudioTracks();
+    console.log('📞 getUserMedia got:', {
+      audioTracks: tracks.length,
+      label: tracks.map(t => t.label),
+      muted: tracks.map(t => t.muted),
+      enabled: tracks.map(t => t.enabled),
+      readyState: tracks.map(t => t.readyState),
+      preAcquired: !!preAcquiredStream,
+    });
+  } catch {}
   addLocalTracks(pc, stream);
 
   _pc = pc;
@@ -514,6 +645,20 @@ async function _flushPendingIce() {
   _pendingRemoteIce = [];
   for (const cand of queue) {
     try { await _pc.addIceCandidate(cand); } catch {}
+  }
+}
+
+// Re-feedet ICE-Payloads die vor PC-Setup ankamen erneut durch _handleIce.
+// Aufzurufen nach _setupPeerConnection + setRemoteDescription — dann fliesst
+// jeder Payload normal durch (decrypt → addIceCandidate).
+async function _flushPendingRawIce() {
+  if (!_pc) return;
+  const queue = _pendingRawIcePayloads;
+  _pendingRawIcePayloads = [];
+  if (queue.length === 0) return;
+  console.log(`📞 Flushing ${queue.length} buffered ICE payloads (post-PC-setup)`);
+  for (const payload of queue) {
+    try { await voiceStore._handleIce(payload); } catch {}
   }
 }
 
@@ -577,13 +722,29 @@ export const voiceStore = {
     _isMuted = false;
     _errorMsg = null;
 
+    // MIC-FIRST: getUserMedia muss im User-Gesture-Frame laufen. Auf Android
+    // Chrome PWA verliert sonst der Permission-Token (NotAllowedError obwohl
+    // Permission granted ist). Trade-off: Mic-Indicator flasht kurz auch wenn
+    // wir später wegen no_cmk abbrechen — akzeptabel.
+    let preStream = null;
     try {
-      // CMK sicherstellen BEVOR getUserMedia (sonst hängt User mit aktivem
-      // Mic während Backend-Roundtrips). ensureSecureDmSession kann cmk_req
-      // triggern und ein paar Sekunden warten.
+      preStream = await getLocalMedia({ audio: true, video: false });
+    } catch (e) {
+      _errorMsg = e?.name || 'mic_failed';
+      _state = STATES.ENDED;
+      _scheduleReset();
+      return { ok: false, error: _errorMsg };
+    }
+
+    try {
+      // CMK sicherstellen. ensureSecureDmSession kann cmk_req triggern und
+      // ein paar Sekunden warten — Mic bleibt solange aktiv (recording-Indicator),
+      // ist aber der einzige Weg getUserMedia im Gesture-Frame zu halten.
       const me = userStore.myUser;
       const cmk = await ensureSecureDmSession(me, peer.handle);
       if (!cmk) {
+        // Pre-acquired stream wieder freigeben
+        for (const t of preStream.getTracks()) { try { t.stop(); } catch {} }
         _errorMsg = 'no_cmk';
         await _hardReset();
         _writeHistoryEntry(true);
@@ -593,7 +754,7 @@ export const voiceStore = {
       }
 
       _callCmk = cmk;
-      const pc = await _setupPeerConnection(_callId, peer.handle);
+      const pc = await _setupPeerConnection(_callId, peer.handle, preStream);
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
 
@@ -708,31 +869,31 @@ export const voiceStore = {
     console.log(`📞 Voice decrypt offer: me=${me} from=${fromHandle}/${callerDeviceId.slice(0,8)} callId=${String(payload.callId).slice(0,8)} cmkFp=${_cmkFp(cmk)}`);
     let plainSdp;
     try {
-      plainSdp = await _decryptVoiceWithRotation(
-        (k) => decryptSdp(k, ec, 'offer', fromHandle, me, payload.callId),
-        cmk, me, fromHandle
-      );
+      plainSdp = await decryptSdp(cmk, ec, 'offer', fromHandle, me, payload.callId);
     } catch (firstErr) {
-      // First decrypt fail — wahrscheinlich Multi-Device-CMK-Divergenz auf Peer-Seite
-      // (z.B. Peer hat 2 Devices mit unterschiedlichen CMKs für unsere DM).
-      // Send cmk_req → das gerade rufende Peer-Device redistributiert seinen
-      // CMK an unser Device, dann KV-fetch + retry.
-      console.warn(`📞 Voice decrypt failed first try, sending cmk_req + retrying`);
-      try {
-        await sendCmkRequest(fromHandle);
-      } catch {}
-      // Kurz warten damit Peer den cmk_req sehen + redistributen + KV propagieren kann
-      await new Promise(r => setTimeout(r, 2500));
-      // Retry mit forciertem KV-fetch (storeIfFresh: true diesmal, damit der neue
-      // wirklich lokal landet — peer hat ja gerade frisch redistributiert)
+      // Multi-Device-CMK-Divergenz: Peer-Device hat einen anderen CMK gewrappt
+      // als das was wir lokal haben (typisch nach Peer-Reinstall + Mirror-Rotation
+      // bei uns: anna's neuer CMK wurde nicht zu bertha's frischem Device gewrappt).
+      // Strategie: cmk_req → peer redistributiert → KV-Fetch → retry. 1.5s Timer
+      // ist Kompromiss zwischen KV-Propagation-Latenz und User-Wartezeit.
+      // Scope: NUR offer-decrypt. answer-decrypt + ICE-decrypt bleiben ohne Fallback
+      // (wären bereits durch erfolgreichen offer-decrypt synchronisiert).
+      console.warn(`📞 Voice offer-decrypt failed first try (${firstErr?.message}) — sending cmk_req + retry`);
+      try { await sendCmkRequest(fromHandle); } catch {}
+      await new Promise(r => setTimeout(r, 1500));
       try {
         const fresh = await tryFetchAndUnwrapCMK(fromHandle, { storeIfFresh: true });
-        if (fresh instanceof Uint8Array && fresh.length === 32 && _cmkFp(fresh) !== _cmkFp(cmk)) {
-          console.log(`📞 Voice retry: KV liefert NEUEN CMK ${_cmkFp(fresh)} (war ${_cmkFp(cmk)}) — versuche decrypt`);
-          plainSdp = await decryptSdp(fresh, ec, 'offer', fromHandle, me, payload.callId);
-        } else {
-          throw firstErr;
+        if (!(fresh instanceof Uint8Array) || fresh.length !== 32) {
+          await autoDecline(`decrypt_failed:no_fresh_cmk`);
+          return;
         }
+        plainSdp = await decryptSdp(fresh, ec, 'offer', fromHandle, me, payload.callId);
+        // KRITISCH: cmk auf fresh updaten — sonst encrypted acceptCall den Answer
+        // mit dem alten lokalen CMK und Caller kann nicht decrypten. Der Caller
+        // benutzt seinen eigenen CMK, der dem entspricht den wir gerade frisch
+        // gefetched haben (anna's redistribute → unser KV-Wrap).
+        cmk = fresh;
+        console.log(`📞 Voice offer-decrypt retry erfolgreich nach cmk_req — _callCmk aktualisiert`);
       } catch (e) {
         await autoDecline(`decrypt_failed:${e?.message || 'unknown'}`);
         return;
@@ -792,15 +953,38 @@ export const voiceStore = {
     }
     let plainSdp;
     try {
-      plainSdp = await _decryptVoiceWithRotation(
-        (k) => decryptSdp(k, ec, 'answer', peerHandle, me, _callId),
-        _callCmk, me, peerHandle
-      );
-    } catch (e) {
-      console.error(`🚨 Voice answer-decrypt failed: ${e?.message}`);
-      _errorMsg = 'decrypt_failed';
-      void voiceStore.endCall();
-      return;
+      plainSdp = await decryptSdp(_callCmk, ec, 'answer', peerHandle, me, _callId);
+    } catch (firstErr) {
+      // Multi-Device-CMK-Divergenz: Callee hat den Answer mit einem anderen CMK
+      // encrypted als unser _callCmk. Typisch wenn Callee's fresh-Install und
+      // sein Bundle-State ihn auf einen anderen CMK zwingt. Strategie: KV-Fetch
+      // (Callee könnte gerade einen frischen CMK gewrappt haben) + retry.
+      // cmk_req kann hier WEGFALLEN weil Callee schon auf unsere SDP geantwortet
+      // hat → er weiss bereits dass wir ihn rufen und hat seinen CMK in KV.
+      console.warn(`📞 Voice answer-decrypt failed first try (${firstErr?.message}) — KV-fetch retry`);
+      try {
+        const fresh = await tryFetchAndUnwrapCMK(peerHandle, { storeIfFresh: false });
+        if (fresh instanceof Uint8Array && fresh.length === 32) {
+          const sameAsCallCmk = _callCmk && fresh.length === _callCmk.length &&
+            fresh.every((b, i) => b === _callCmk[i]);
+          if (!sameAsCallCmk) {
+            plainSdp = await decryptSdp(fresh, ec, 'answer', peerHandle, me, _callId);
+            // KRITISCH: _callCmk auf fresh updaten — sonst ICE-Decrypt mit altem CMK
+            // failt für alle folgenden Candidates des Calls.
+            _callCmk = fresh;
+            console.log(`📞 Voice answer-decrypt retry erfolgreich nach KV-fetch — _callCmk aktualisiert`);
+          } else {
+            throw firstErr;
+          }
+        } else {
+          throw firstErr;
+        }
+      } catch (e) {
+        console.error(`🚨 Voice answer-decrypt failed: ${e?.message}`);
+        _errorMsg = 'decrypt_failed';
+        void voiceStore.endCall();
+        return;
+      }
     }
     // Auth-Verify: signed DTLS-fingerprint vom Callee. Wenn Backend die SDP
     // modifiziert hat (MITM-Versuch), ist der fp im SDP ≠ fp in auth, oder
@@ -833,7 +1017,16 @@ export const voiceStore = {
    */
   async _handleIce(payload) {
     if (!payload?.candidate || payload.callId !== _callId) return;
-    if (!_pc) return;
+    if (!_pc) {
+      // PC noch nicht aufgebaut (Callee race: voice:ice trifft vor acceptCall
+      // → setRemoteDescription ein). Payload buffern, in acceptCall() via
+      // _flushPendingRawIce() re-processed. Ohne Buffer würden cross-network
+      // Calls für immer in "Verbindet…" hängen, weil Mac's PC nie Remote-
+      // Candidates kriegt → keine ICE-Pairs → kein nominated path.
+      _pendingRawIcePayloads.push(payload);
+      console.log(`📞 ICE remote candidate buffered (${_pendingRawIcePayloads.length} pending, no _pc yet)`);
+      return;
+    }
     // Candidate ist CMK-encrypted — erst decrypten, dann an PC weitergeben.
     const ec = payload.candidate?.ec;
     if (!ec || !isVoiceEnvelope(ec)) {
@@ -848,10 +1041,8 @@ export const voiceStore = {
     const fromHandle = payload.from;
     let candidateObj;
     try {
-      candidateObj = await _decryptVoiceWithRotation(
-        (k) => decryptIce(k, ec, fromHandle, me, _callId),
-        _callCmk, me, fromHandle
-      );
+      // TEMP REVERT (fbf18f5): siehe oben.
+      candidateObj = await decryptIce(_callCmk, ec, fromHandle, me, _callId);
     } catch (e) {
       console.warn(`📞 ICE-decrypt failed von ${fromHandle}: ${e?.message}`);
       return;
@@ -885,6 +1076,22 @@ export const voiceStore = {
 
     // User hat akzeptiert → kein no-answer mehr möglich
     _clearNoAnswerTimer();
+
+    // MIC-FIRST: getUserMedia direkt im User-Gesture-Frame des Accept-Klicks.
+    // Auf Android Chrome PWA verliert sonst der Permission-Token wenn wir
+    // erst await CMK-Lookup / Setup machen → NotAllowedError obwohl granted.
+    let preStream = null;
+    try {
+      preStream = await getLocalMedia({ audio: true, video: false });
+    } catch (e) {
+      _errorMsg = e?.name || 'mic_failed';
+      await _hardReset();
+      _writeHistoryEntry(true);
+      _state = STATES.ENDED;
+      _scheduleReset();
+      return;
+    }
+
     _state = STATES.CONNECTING;
     try {
       const me = userStore.myUser;
@@ -893,10 +1100,14 @@ export const voiceStore = {
         _callCmk = await getCMKIfExists(_peer.handle);
         if (!_callCmk) _callCmk = await ensureSecureDmSession(me, _peer.handle);
       }
-      if (!_callCmk) throw new Error('no_cmk');
+      if (!_callCmk) {
+        for (const t of preStream.getTracks()) { try { t.stop(); } catch {} }
+        throw new Error('no_cmk');
+      }
 
-      const pc = await _setupPeerConnection(_callId, _peer.handle);
+      const pc = await _setupPeerConnection(_callId, _peer.handle, preStream);
       await pc.setRemoteDescription(offer);
+      await _flushPendingRawIce();  // ICE-Payloads die vor PC-Setup ankamen
       await _flushPendingIce();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);

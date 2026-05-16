@@ -20,6 +20,12 @@ import { captureException } from './sentry.js';
  * @returns {Promise<RTCConfiguration>}
  */
 export async function fetchIceServers() {
+  // Default ICE-Policy: 'all' (host + srflx + relay). relay-only war ein
+  // Reliability-Experiment, hat aber das Gegenteil bewirkt: Cloudflare
+  // Realtime TURN scheint relay-zu-relay nicht zuverlässig zu routen
+  // (bestätigt in Logs: 9 relay↔relay Pairs blieben alle in-progress,
+  // never succeeded). Direkt-Pairs (host↔prflx) funktionieren wenigstens
+  // wenn beide Peers im selben/kompatiblem NAT sind.
   try {
     const r = await apiFetch('/voice/turn-credentials');
     if (r.ok && r.data?.iceServers) {
@@ -28,7 +34,7 @@ export async function fetchIceServers() {
   } catch (e) {
     captureException(e, { context: 'fetchIceServers' });
   }
-  // Fallback: Cloudflare-STUN (kommt im Backend auch im fail-Path)
+  // Fallback: Cloudflare-STUN (Backend liefert das auch im fail-Path)
   return {
     iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }],
   };
@@ -66,21 +72,28 @@ export async function getLocalMedia({ audio = true, video = false } = {}) {
 export function createPeerConnection(config, handlers) {
   const pc = new RTCPeerConnection(config);
 
-  // Diagnose: welche ICE-Server hat der Browser bekommen?
-  const numTurn = (config.iceServers || []).filter(s =>
-    (Array.isArray(s.urls) ? s.urls : [s.urls]).some(u => String(u).startsWith('turn:') || String(u).startsWith('turns:'))
-  ).length;
-  const numStun = (config.iceServers || []).filter(s =>
-    (Array.isArray(s.urls) ? s.urls : [s.urls]).some(u => String(u).startsWith('stun:'))
-  ).length;
-  console.log(`📞 RTC config: ${numTurn} TURN-Server, ${numStun} STUN-Server`);
+  // Diagnose: welche ICE-Server-URLs hat der Browser bekommen?
+  // Wenn TURN-Relay nicht klappt, zeigt diese Liste ob das Backend überhaupt
+  // ein TURN über UDP / TCP / TLS geliefert hat — manche Networks blocken
+  // UDP komplett und brauchen turns:443 als Fallback.
+  const allUrls = (config.iceServers || []).flatMap(s =>
+    Array.isArray(s.urls) ? s.urls : [s.urls]
+  ).filter(Boolean);
+  const turnUrls = allUrls.filter(u => String(u).startsWith('turn:') || String(u).startsWith('turns:'));
+  const stunUrls = allUrls.filter(u => String(u).startsWith('stun:'));
+  console.log(`📞 RTC config: ${turnUrls.length} TURN, ${stunUrls.length} STUN`);
+  for (const u of turnUrls) console.log(`📞   TURN-URL: ${u}`);
+  for (const u of stunUrls) console.log(`📞   STUN-URL: ${u}`);
 
   pc.onicecandidate = (e) => {
     if (e.candidate && handlers.onIceCandidate) {
-      // Diagnose: Candidate-Typ (host/srflx/relay) hilft bei NAT-Diagnose
+      // Diagnose: Candidate-Typ (host/srflx/relay) + Server-URL (welcher TURN
+      // wurde benutzt um relay-Candidate zu allocaten). Bei mehreren TURNs
+      // sehen wir so welcher tatsächlich funktioniert.
       const c = e.candidate.candidate || '';
       const m = c.match(/typ (host|srflx|prflx|relay)/);
-      console.log(`📞 ICE local candidate: ${m?.[1] || 'unknown'} ${e.candidate.protocol || ''}`);
+      const url = e.candidate.url || e.candidate.relatedAddress || '';
+      console.log(`📞 ICE local candidate: ${m?.[1] || 'unknown'} ${e.candidate.protocol || ''}${url ? ` via=${url}` : ''}`);
       handlers.onIceCandidate(e.candidate);
     } else if (!e.candidate) {
       console.log(`📞 ICE gathering complete`);
@@ -218,6 +231,40 @@ export function createAudioLevelMeter(stream, onLevel) {
     try { analyser.disconnect(); } catch {}
     try { ctx.close(); } catch {}
   };
+}
+
+/**
+ * iOS-PWA-Audio-Unlock. Auf iOS Safari (auch in standalone-PWA) startet jeder
+ * AudioContext in `suspended` state. Resume() darf nur aus einem synchronen
+ * User-Gesture-Stack-Frame heraus aufgerufen werden — sonst wird's silent
+ * ignoriert. Wir rufen das beim "Anruf starten"- und "Annehmen"-Klick auf:
+ * - Erzeugt einen kurzlebigen AudioContext im User-Gesture-Frame
+ * - Spielt einen 1-Sample-Silent-Buffer ab (klassischer iOS-Unlock-Trick)
+ * - Schliesst den Context wieder, damit kein Resource-Leak entsteht
+ *
+ * Idempotent — mehrfach aufrufen ist harmlos.
+ */
+let _audioUnlocked = false;
+export function unlockAudio() {
+  if (_audioUnlocked) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+      ctx.resume().catch(() => {});
+    }
+    setTimeout(() => { try { ctx.close(); } catch {} }, 200);
+    _audioUnlocked = true;
+    console.log('📞 audio unlock invoked (user-gesture)');
+  } catch (e) {
+    console.warn('📞 audio unlock failed:', e?.message);
+  }
 }
 
 /**

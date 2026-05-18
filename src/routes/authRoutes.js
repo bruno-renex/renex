@@ -742,6 +742,91 @@ export async function handleAuthRoutes(request, env, path, params) {
            WHERE convo_id LIKE ? OR convo_id LIKE ? OR proposed_by = ?`
         ).bind(`${handle}:%`, `%:${handle}`, handle).run();
 
+        // 7i. Server-Memberships aufräumen mit Owner-Nachfolge (analog zu 7b
+        // für Gruppen). Wenn User Owner eines Servers war: ältester verbleibender
+        // Member wird neuer Owner (is_owner=1); kein Member mehr → Server löschen
+        // (CASCADE räumt server_roles, role_assignments, audit_log per FK auf).
+        const serverMemberRows = await env.RENEX_DB.prepare(
+          "SELECT server_id, is_owner FROM server_members WHERE user_handle = ?"
+        ).bind(handle).all();
+        for (const row of (serverMemberRows.results || [])) {
+          const serverId = row.server_id;
+          await env.RENEX_DB.prepare(
+            "DELETE FROM server_members WHERE server_id = ? AND user_handle = ?"
+          ).bind(serverId, handle).run();
+          await env.RENEX_DB.prepare(
+            "DELETE FROM role_assignments WHERE server_id = ? AND user_handle = ?"
+          ).bind(serverId, handle).run();
+
+          if (row.is_owner === 1) {
+            const successor = await env.RENEX_DB.prepare(
+              "SELECT user_handle FROM server_members WHERE server_id = ? ORDER BY joined_at ASC LIMIT 1"
+            ).bind(serverId).first();
+            if (successor) {
+              await env.RENEX_DB.prepare(
+                "UPDATE server_members SET is_owner = 1 WHERE server_id = ? AND user_handle = ?"
+              ).bind(serverId, successor.user_handle).run();
+              await env.RENEX_DB.prepare(
+                `INSERT INTO server_audit_log (id, server_id, actor, action, target, ts)
+                 VALUES (?, ?, ?, 'owner_transfer', ?, ?)`
+              ).bind(crypto.randomUUID(), serverId, handle, successor.user_handle, Date.now()).run();
+            }
+          }
+
+          // Wenn keine Members mehr → Server löschen (FK-CASCADE räumt Rest)
+          const remaining = await env.RENEX_DB.prepare(
+            "SELECT COUNT(*) as c FROM server_members WHERE server_id = ?"
+          ).bind(serverId).first();
+          if ((remaining?.c ?? 0) === 0) {
+            await env.RENEX_DB.prepare("DELETE FROM servers WHERE id = ?").bind(serverId).run();
+          }
+        }
+
+        // 7j. Channel-Permission-Overrides die User-spezifisch waren entfernen.
+        await env.RENEX_DB.prepare(
+          "DELETE FROM channel_permission_overrides WHERE target_kind = 'member' AND target_id = ?"
+        ).bind(handle).run();
+
+        // 7k. Server-Audit-Log: handle-Referenzen anonymisieren (statt löschen).
+        // Audit-Integrität für andere Server-Members bewahren, aber den deleted
+        // User nicht mehr namentlich nennen. Kompromiss zwischen DSGVO Art. 17
+        // und legitimem Interesse anderer Server-Members an History.
+        await env.RENEX_DB.prepare(
+          "UPDATE server_audit_log SET actor = 'deleted_user' WHERE actor = ?"
+        ).bind(handle).run();
+        await env.RENEX_DB.prepare(
+          "UPDATE server_audit_log SET target = 'deleted_user' WHERE target = ?"
+        ).bind(handle).run();
+
+        // 7l. Guest-Sessions die User erstellt hat — sofort invalidieren statt
+        // bis TTL warten (sonst könnten andere noch über alte Links joinen).
+        const guestRows = await env.RENEX_DB.prepare(
+          "SELECT token FROM guest_sessions WHERE created_by = ?"
+        ).bind(handle).all();
+        for (const grow of (guestRows.results || [])) {
+          await env.RENEX_KV.delete(`guest_session:${grow.token}`).catch(() => {});
+        }
+        await env.RENEX_DB.prepare(
+          "DELETE FROM guest_sessions WHERE created_by = ?"
+        ).bind(handle).run();
+
+        // 7m. Message-Reactions des Users — Emojis die er auf anderer Leute
+        // Messages gesetzt hat. Bleiben sonst mit user_handle = deletedHandle
+        // sichtbar in den Reaktions-Aggregaten anderer Members.
+        await env.RENEX_DB.prepare(
+          "DELETE FROM message_reactions WHERE user_handle = ?"
+        ).bind(handle).run();
+
+        // 7n. Orphan DM-Konversations-Zeilen löschen (convo_id "alice:bob").
+        // Nach 7c sind die Messages weg, die conversations-Zeile bleibt sonst
+        // als Müll-Eintrag — Peer sieht den ex-User über contact-Eintrag mit
+        // status='account_deleted' (siehe Step 8).
+        await env.RENEX_DB.prepare(
+          `DELETE FROM conversations
+           WHERE type = 'dm'
+             AND (id LIKE ? OR id LIKE ?)`
+        ).bind(`${handle}:%`, `%:${handle}`).run();
+
         // 8. Eigene Kontaktzeilen löschen, Gegenseite auf account_deleted setzen
         await env.RENEX_DB.prepare(
           "DELETE FROM contacts WHERE user_handle = ?"

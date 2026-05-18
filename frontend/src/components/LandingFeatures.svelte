@@ -10,9 +10,9 @@
   let features = $derived([
     { title: lang.featurePasskeyTitle    || '🌍 Passkey-Only',         desc: lang.featurePasskeyDesc    || '', highlight: true },
     { title: lang.featureE2eTitle        || '🔒 End-to-End Encryption',desc: lang.featureE2eDesc        || '' },
-    { title: lang.featureVoiceTitle      || '🎤 Voice Channels',       desc: lang.featureVoiceDesc      || '' },
+    { title: lang.featureBotResistantTitle || '🤖 Bot-resistant',       desc: lang.featureBotResistantDesc || '', highlight: true },
     { title: lang.featureGuestTitle      || '🔗 Guest Access',         desc: lang.featureGuestDesc      || '' },
-    { title: lang.featureAutoDeleteTitle || '⏳ Auto-Delete',          desc: lang.featureAutoDeleteDesc || '' },
+    { title: lang.featureCallsTitle      || '🎙️ Anrufe ohne US-Cloud', desc: lang.featureCallsDesc      || '' },
     { title: lang.featureZeroTrackTitle  || '🛡️ Zero Tracking',       desc: lang.featureZeroTrackDesc  || '' },
   ]);
 </script>

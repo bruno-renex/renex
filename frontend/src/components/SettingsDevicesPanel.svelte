@@ -133,9 +133,6 @@
 
       <p class="dev-hint">
         {activeCount} / {maxDevices} {lang.devicesActive || 'Geräte aktiv'}
-        {#if tier === 'free' && limitReached}
-          · <span class="upgrade">{lang.devicesUpgradeHint || 'Upgrade auf Pro für 10 Geräte'}</span>
-        {/if}
       </p>
 
       {#if errorMsg}

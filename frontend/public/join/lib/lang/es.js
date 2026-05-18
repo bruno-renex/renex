@@ -292,6 +292,8 @@ export default {
   joiningText:             "Uniéndose…",
   captchaRequired:         "Por favor, completa la verificación de seguridad primero.",
   captchaFailed:           "Verificación de seguridad fallida. Por favor, inténtalo de nuevo.",
+  captchaBlockedTitle:     "Protección anti-bot bloqueada",
+  captchaBlockedBody:      "Tu navegador (p.ej. Brave con Shields activos) bloquea la verificación de seguridad de Cloudflare. Por favor ajusta Brave Shields para app.renex.id a «Estándar», o utiliza Safari/Chrome.",
   joinErrorDefault:        "Error al unirse.",
   successRedirecting:      "¡Éxito! Redirigiendo…",
   connectionError:         "Error de conexión",

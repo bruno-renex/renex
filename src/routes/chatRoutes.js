@@ -88,21 +88,39 @@ export async function handleChatRoutes(request, env, path, params) {
           }
         }
 
-        // Gruppen/Channels: Mitgliedschaft prüfen (verhindert Lesen fremder Konversationen)
+        // Gruppen/Channels: Mitgliedschaft prüfen (verhindert Lesen fremder Konversationen).
+        // PLUS joined_at-Filter holen — neue Member (insb. Gäste via Invite-Link)
+        // sollen nur Messages AB ihrem Beitritt sehen, sonst kriegen sie 🔐-Bubbles
+        // für alte E2E-Messages die sie GSK-mässig nicht decrypten können.
+        // Mit-Effekt: rejoiner sehen nicht ihre frühere History (Forward Secrecy).
+        let joinedAt = 0;
         if (isGroupConvo) {
-          const allowed = await isConvoMember(env.RENEX_DB, cid, me);
-          if (!allowed) return json(request, { error: "Not a member of this group" }, 403);
+          const memberRow = await env.RENEX_DB.prepare(
+            "SELECT joined_at FROM conversation_members WHERE convo_id = ? AND member_handle = ? LIMIT 1"
+          ).bind(cid, me).first();
+          if (!memberRow) return json(request, { error: "Not a member of this group" }, 403);
+          joinedAt = Number(memberRow.joined_at) || 0;
         }
 
         let sliced = [];
 
+        // Group: zusätzlich ts >= joinedAt filtern. DM: kein Filter (DMs haben
+        // implizite Mitgliedschaft über convo_id und beide Seiten sehen alles).
         const rows = cursor !== null
-          ? await env.RENEX_DB.prepare(
-              `SELECT * FROM messages WHERE convo_id = ? AND ts < ? ORDER BY ts DESC LIMIT ?`
-            ).bind(cid, cursor, limit).all()
-          : await env.RENEX_DB.prepare(
-              `SELECT * FROM messages WHERE convo_id = ? ORDER BY ts DESC LIMIT ?`
-            ).bind(cid, limit).all();
+          ? (isGroupConvo
+              ? await env.RENEX_DB.prepare(
+                  `SELECT * FROM messages WHERE convo_id = ? AND ts < ? AND ts >= ? ORDER BY ts DESC LIMIT ?`
+                ).bind(cid, cursor, joinedAt, limit).all()
+              : await env.RENEX_DB.prepare(
+                  `SELECT * FROM messages WHERE convo_id = ? AND ts < ? ORDER BY ts DESC LIMIT ?`
+                ).bind(cid, cursor, limit).all())
+          : (isGroupConvo
+              ? await env.RENEX_DB.prepare(
+                  `SELECT * FROM messages WHERE convo_id = ? AND ts >= ? ORDER BY ts DESC LIMIT ?`
+                ).bind(cid, joinedAt, limit).all()
+              : await env.RENEX_DB.prepare(
+                  `SELECT * FROM messages WHERE convo_id = ? ORDER BY ts DESC LIMIT ?`
+                ).bind(cid, limit).all());
 
         sliced = (rows.results || []).reverse().map(r => {
           const m = {

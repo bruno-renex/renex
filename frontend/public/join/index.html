@@ -26,6 +26,9 @@
 
     window.onTurnstileSolved = function(t) {
       window.__cfToken = t;
+      // Captcha hat doch noch geladen (z.B. langsames Netz) → Banner verstecken
+      var b = document.getElementById("captchaBlockedBanner");
+      if (b) b.style.display = "none";
       window.__updateJoinBtn();
     };
     window.onTurnstileExpired = function() {
@@ -36,6 +39,18 @@
       window.__cfToken = null;
       window.__updateJoinBtn();
     };
+
+    // CAPTCHA-BLOCKED-DETECTION (Brave + strenge Privacy-Browser):
+    // Cloudflare Turnstile wird über Trusted-Types-CSP geblockt. Nach 5s
+    // ohne Token zeigen wir einen erklärenden Banner statt nur einen
+    // disabled "Beitreten"-Button. Banner versteckt sich wieder wenn der
+    // Token doch noch ankommt (langsames Netz).
+    setTimeout(function() {
+      if (!window.__cfToken) {
+        var banner = document.getElementById("captchaBlockedBanner");
+        if (banner) banner.style.display = "block";
+      }
+    }, 5000);
   </script>
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <style>
@@ -250,6 +265,14 @@
        style="display:flex; justify-content:center; margin-bottom:12px; position:relative; z-index:1;">
   </div>
 
+  <!-- Captcha-blocked banner (Brave/Privacy-Browsers blocken Turnstile via
+       Trusted-Types-CSP). Default hidden; wird via setTimeout(5000) angezeigt
+       wenn __cfToken weiterhin null. Inhalt via i18n in init() gesetzt. -->
+  <div id="captchaBlockedBanner" style="display:none; padding:12px; margin-bottom:12px; border:1px solid #cc6600; background:rgba(204,102,0,0.1); border-radius:8px; font-size:14px; line-height:1.4;">
+    <strong id="captchaBlockedTitle">Bot-Schutz blockiert</strong><br />
+    <span id="captchaBlockedBody">Dein Browser blockt die Cloudflare-Sicherheitsprüfung.</span>
+  </div>
+
   <label class="join-consent" for="join-consent">
     <input type="checkbox" id="join-consent" />
     <span>
@@ -298,6 +321,12 @@
   document.getElementById("joinBtn").textContent     = lang.joinAsGuestBtn;
   document.getElementById("loginJoinBtn").textContent = lang.loginAndJoinBtn;
   document.getElementById("goHomeBtn").textContent   = lang.goHomeBtn;
+  // Captcha-blocked Banner: nur Title+Body setzen, Banner bleibt hidden bis
+  // 5s-Timer im inline-Script ihn aktiviert (siehe <head>).
+  var cbT = document.getElementById("captchaBlockedTitle");
+  var cbB = document.getElementById("captchaBlockedBody");
+  if (cbT && lang.captchaBlockedTitle) cbT.textContent = lang.captchaBlockedTitle;
+  if (cbB && lang.captchaBlockedBody)  cbB.textContent = lang.captchaBlockedBody;
   document.getElementById("info-access").innerHTML   = lang.accessFor24h;
   document.getElementById("info-messages").innerHTML = lang.maxMessages;
   document.getElementById("info-e2e").textContent    = lang.e2eEncrypted;
@@ -334,18 +363,25 @@
 
     // Helper: Redirect zum Chat mit der existierenden Guest-Session
     const redirectToExistingChat = (existing) => {
-      let target;
+      // URL-Pattern unterscheidet sich für Group vs DM:
+      //  - Group: /?group=<uuid>&guest=1  (App.svelte handleDeepLink matcht UUID-Regex)
+      //  - DM:    /?with=<handle>&guest=1 (App.svelte handleDeepLink matcht Handle-Regex)
+      // Früher beides via /chat/?with=...&guest=1 + _redirects-Rewrite, was für
+      // Group-UUIDs in der neuen Svelte-App nie sauber navigierte (UUID hat Dashes,
+      // matchte Handle-Regex nicht). Direktes URL-Pattern statt Detour über _redirects.
+      let url;
       if (existing.convoType === "group") {
-        target = existing.convoId;
+        if (!existing.convoId) return false;
+        url = `/?group=${encodeURIComponent(existing.convoId)}&guest=1`;
       } else {
-        // DM: convoId ist "alice:guest_xyz" → inviter ist der andere Teil
-        target = existing.inviterHandle
+        const target = existing.inviterHandle
               || (existing.convoId && existing.convoId.split(":").find(h => h !== existing.guestHandle))
               || existing.convoId;
+        if (!target) return false;
+        url = `/?with=${encodeURIComponent(target)}&guest=1`;
       }
-      if (!target) return false;
-      console.log("[join] existing session gefunden → redirect zu chat:", target);
-      window.location.replace(`/chat/?with=${encodeURIComponent(target)}&guest=1`);
+      console.log("[join] existing session gefunden → redirect:", url);
+      window.location.replace(url);
       return true;
     };
 
@@ -398,10 +434,10 @@
             inviteToken:   token,
           });
         } catch (e) { console.warn("setGuestSession (resumed) failed", e); }
-        const target = data.convoType === "group"
-          ? data.convoId
-          : (data.inviterHandle || data.convoId);
-        window.location.replace(`/chat/?with=${encodeURIComponent(target)}&guest=1`);
+        const resumedUrl = data.convoType === "group"
+          ? `/?group=${encodeURIComponent(data.convoId)}&guest=1`
+          : `/?with=${encodeURIComponent(data.inviterHandle || data.convoId)}&guest=1`;
+        window.location.replace(resumedUrl);
         return;
       }
 
@@ -553,10 +589,11 @@
         const groupName = document.getElementById("chatName")?.textContent || "";
         const nameParam = groupName ? `&name=${encodeURIComponent(groupName)}` : "";
         if (data.convoType === "group") {
-          window.location.href = `/chat/?with=${encodeURIComponent(data.convoId)}&guest=1${nameParam}`;
+          // Group: ?group=<uuid>&name=<name>&guest=1 (App.svelte erwartet UUID unter `group`)
+          window.location.href = `/?group=${encodeURIComponent(data.convoId)}&guest=1${nameParam}`;
         } else {
           const inviter = data.inviterHandle || data.convoId.split(":").find(h => h !== data.guestHandle);
-          window.location.href = `/chat/?with=${encodeURIComponent(inviter)}&guest=1${nameParam}`;
+          window.location.href = `/?with=${encodeURIComponent(inviter)}&guest=1${nameParam}`;
         }
       }, 800);
 
@@ -588,8 +625,13 @@
       setStatus("✓ " + lang.successRedirecting);
 
       setTimeout(() => {
-        const target = data.convoType === "group" ? data.convoId : (data.inviterHandle || data.convoId);
-        window.location.href = `/chat/?with=${encodeURIComponent(target)}`;
+        // Group: ?group=<uuid> | DM: ?with=<handle>. Kein guest=1 weil eingeloggt.
+        // Group-Name kommt nicht im /invite/join-auth-Response → App.svelte
+        // benutzt 'Group'-Fallback bis inboxStore.loadGroups() den richtigen Namen liefert.
+        const targetUrl = data.convoType === "group"
+          ? `/?group=${encodeURIComponent(data.convoId)}`
+          : `/?with=${encodeURIComponent(data.inviterHandle || data.convoId)}`;
+        window.location.href = targetUrl;
       }, 600);
 
     } catch (e) {

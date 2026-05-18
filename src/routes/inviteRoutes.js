@@ -10,8 +10,8 @@ import { requireSession, requireGuestSession, getGuestToken, rateLimit, GUEST_TO
 //   POST /invite/ping     → msg_count aktualisieren + verbleibende Zeit prüfen
 // ======================================================
 
-const GUEST_EXPIRY_MS         = 48 * 60 * 60 * 1000;       // DM-Invite: 48h
-const GROUP_INVITE_EXPIRY_MS  = 7 * 24 * 60 * 60 * 1000;   // Gruppen-Invite: 7 Tage (Onboarding läuft länger)
+const GUEST_EXPIRY_MS         = 24 * 60 * 60 * 1000;       // DM-Invite: 24h
+const GROUP_INVITE_EXPIRY_MS  = 24 * 60 * 60 * 1000;       // Gruppen-Invite: 24h (vorher 7d, vereinheitlicht)
 const GUEST_SESSION_MS        = 24 * 60 * 60 * 1000;
 const GUEST_MSG_LIMIT         = 20;
 

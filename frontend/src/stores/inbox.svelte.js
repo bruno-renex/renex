@@ -14,6 +14,7 @@
 import { get, set } from '../lib/storage.js';
 import { apiFetch } from '../lib/api.js';
 import { profileCache } from './profileCache.svelte.js';
+import { voiceStore } from './voice.svelte.js';
 
 const SECTIONS = ["chats", "groups", "voice", "servers"];
 
@@ -39,6 +40,13 @@ function _dedupBy(arr, key) {
 
 // Persistierter aktiver Tab (Reload-safe)
 let _activeSection = $state(get("inbox_tab") || "chats");
+
+// Verpasste-Anrufe-Badge auf Voice-Icon: wir tracken den letzten Voice-Tab-
+// Besuch in localStorage. Badge zeigt count(history.missed && ts > seenTs).
+// Auf ersten App-Start ohne Wert: jetzt-Zeit setzen, sonst würden alle alten
+// Missed-Calls als „neu" zählen. Update via setSection('voice').
+let _voiceSeenTs = $state(Number(get("voice_seen_ts")) || Date.now());
+if (!get("voice_seen_ts")) set("voice_seen_ts", String(_voiceSeenTs));
 
 let _contacts = $state([]);
 let _pendingIn = $state([]);   // Eingehende Anfragen (jemand will mich adden)
@@ -67,6 +75,11 @@ export const inboxStore = {
     if (!SECTIONS.includes(name)) return;
     _activeSection = name;
     set("inbox_tab", name);
+    // Voice-Tab geöffnet → Missed-Call-Badge clearen
+    if (name === 'voice') {
+      _voiceSeenTs = Date.now();
+      set("voice_seen_ts", String(_voiceSeenTs));
+    }
   },
 
   setSearchChats(q) { _searchChats = q || ""; },
@@ -107,6 +120,17 @@ export const inboxStore = {
 
   get totalUnreadGroups() {
     return _groups.reduce((sum, g) => sum + (this.unreadFor(g.id) || 0), 0);
+  },
+
+  // Anzahl verpasster Anrufe seit letztem Voice-Tab-Besuch (Badge auf IconStrip).
+  // Quelle: voiceStore.history (frontend-only, kein Backend-Sync nötig).
+  get missedUnseenVoice() {
+    const hist = voiceStore.history || [];
+    let count = 0;
+    for (const c of hist) {
+      if (c.missed && (Number(c.ts) || 0) > _voiceSeenTs) count++;
+    }
+    return count;
   },
 
   // ── DATA-LOADERS ────────────────────────────────

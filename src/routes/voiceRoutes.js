@@ -50,9 +50,11 @@ async function isGroupMember(env, groupId, handle) {
   } catch { return false; }
 }
 
-// Call-State wird 60s gehalten — jeder Signaling-Call refreshed die TTL.
-// Verhindert Zombie-State wenn Client abschmiert.
-const CALL_STATE_TTL = 60;
+// Call-State wird 90s gehalten — jeder Signaling-Call refreshed die TTL.
+// Verhindert Zombie-State wenn Client abschmiert. War vorher 60s, hochgesetzt
+// damit der KV-Slot länger lebt als der Caller-No-Answer-Timer (60s) — sonst
+// Race wo /voice/active nach Banner-Tap ins Leere greift kurz vor Cancel.
+const CALL_STATE_TTL = 90;
 
 // Handle-Format (gleich wie im restlichen RENEX-Code)
 const HANDLE_RE = /^[a-z0-9_]{1,30}$/;
@@ -100,7 +102,10 @@ async function setVoiceState(env, handle, state) {
 }
 
 async function clearVoiceState(env, handle) {
-  await env.RENEX_KV.delete(`voice_state:${handle}`).catch(() => {});
+  await Promise.allSettled([
+    env.RENEX_KV.delete(`voice_state:${handle}`),
+    env.RENEX_KV.delete(`voice_ring:${handle}`),
+  ]);
 }
 
 // Hilfsfunktion: WS-Event mit eindeutiger ID und Timestamp versehen
@@ -145,7 +150,7 @@ async function getCallForUser(env, callId, me, { retry = true } = {}) {
 }
 
 // ======================================================
-export async function handleVoiceRoutes(request, env, path, params) {
+export async function handleVoiceRoutes(request, env, path, params, ctx) {
   // CSRF-Schutz für state-mutierende Requests
   const csrfFail = checkCsrf(request);
   if (csrfFail) return csrfFail;
@@ -385,15 +390,28 @@ export async function handleVoiceRoutes(request, env, path, params) {
         console.warn("call_log insert skipped:", e?.message);
       }
 
-      // Peer benachrichtigen (WS via Durable Object)
-      const delivered = await pushToUserDO(env, to, makeEvent({
+      // Ring-Event bauen (einmal, dann für DO-Push + KV-Replay verwenden)
+      const ringEvent = makeEvent({
         type: "voice:ring",
         from: me,
         callId,
         sdp,
         ...(auth ? { auth } : {}),
         startedAt,
-      }));
+      });
+
+      // KV-Replay-Slot: wenn Callee's PWA zu war, kam das DO-Push-Event nie an.
+      // Nach Banner-Tap (?call=1) holt das Frontend das Event hier ab und
+      // triggert receiveCall manuell. TTL = CALL_STATE_TTL (60s) reicht für
+      // das Ring-Fenster.
+      await env.RENEX_KV.put(
+        `voice_ring:${to}`,
+        JSON.stringify(ringEvent),
+        { expirationTtl: CALL_STATE_TTL }
+      ).catch(() => {});
+
+      // Peer benachrichtigen (WS via Durable Object)
+      const delivered = await pushToUserDO(env, to, ringEvent);
 
       // WebPush: immer senden — analog zu DMs/Kontaktanfragen. Der `delivered === 0`
       // Gate war auf iOS unzuverlässig, weil Safari die WS noch ~25-35s als „connected"
@@ -401,18 +419,26 @@ export async function handleVoiceRoutes(request, env, path, params) {
       // nur ~30s. Service Worker zeigt persistente Notification mit Accept/Decline-
       // Buttons; bei Klick öffnet /chat/?with=<caller>&call=1 und re-verhandelt SDP.
       // Trade-off: bei offener PWA zeigen sich In-App-Ringer + OS-Banner parallel.
-      pushToUser(env, to, {
-        title: "📞 Eingehender Anruf",
-        body:  `${me} ruft dich an`,
+      // KRITISCH: ctx.waitUntil verwenden — sonst killt der Worker den Push
+      // sobald die Response gesendet wurde, BEVOR pushToUser über das erste
+      // await (D1-Query) hinausgekommen ist. Symptom: WebPush kam für Voice
+      // nie an, obwohl /voice/ring 200 returnt hat. Bei Messages funktioniert
+      // es, weil chatSend.js `await pushToUser` macht (blockiert die Response).
+      const pushPromise = pushToUser(env, to, {
+        title: `📞 ${me}`,
+        body:  "ruft dich an",
         tag:   `voice-call-${callId}`,
-        icon:  "/icons/icon-192.png",
         data: {
           type:    "voice_call",
           from:    me,
           callId,
-          url:     `/chat/?with=${encodeURIComponent(me)}&call=1`,
+          // Svelte-PWA-Root: /?with=...&call=1 (analog zu Message-Push,
+          // das alte /chat/?... war Vanilla-Legacy und triggerte u.U.
+          // false-positive Gast-Recovery bei konvertierten Usern).
+          url:     `/?with=${encodeURIComponent(me)}&call=1`,
         },
-      }).catch(() => {});
+      }).catch(e => console.warn(`🔔 voice push error: ${e?.message}`));
+      if (ctx?.waitUntil) ctx.waitUntil(pushPromise);
 
       return json(request, { ok: true, callId, delivered });
     }
@@ -709,6 +735,28 @@ export async function handleVoiceRoutes(request, env, path, params) {
       ).bind(me, me, limit).all();
 
       return json(request, { calls: rows.results || [] });
+    }
+
+    // ──────────────────────────────────────────────────
+    // GET /voice/active — laufenden Incoming-Call für mich abrufen
+    // Frontend-Use-Case: nach Banner-Tap (PWA war zu) ist das voice:ring
+    // WS-Event verloren. Frontend pollt diesen Endpoint mit ?call=1, kriegt
+    // das gespeicherte Ring-Event zurück und triggert receiveCall manuell.
+    // ──────────────────────────────────────────────────
+    case "/voice/active": {
+      if (request.method !== "GET") return json(request, { error: "Method not allowed" }, 405);
+      const myState = await getVoiceState(env, me);
+      if (!myState || myState.state !== "ringing") {
+        return json(request, { active: false });
+      }
+      const raw = await env.RENEX_KV.get(`voice_ring:${me}`);
+      if (!raw) return json(request, { active: false });
+      try {
+        const ringEvent = JSON.parse(raw);
+        return json(request, { active: true, ringEvent });
+      } catch {
+        return json(request, { active: false });
+      }
     }
 
     // ──────────────────────────────────────────────────

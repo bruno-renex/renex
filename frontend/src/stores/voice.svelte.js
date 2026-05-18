@@ -219,10 +219,13 @@ let _pttPressed = $state(false);
 let _iceRetryUsed = false;
 let _isReconnecting = $state(false);
 
-// No-Answer-Timeout: 30s — wenn der Call nach 30s noch in RINGING ist, automatisch
+// No-Answer-Timeout: 60s — wenn der Call nach 60s noch in RINGING ist, automatisch
 // cancel (caller) / decline (callee). Beides erzeugt missed-call-Eintrag bei Peer.
 // Timer-Verwaltung via voiceTimers.js (testbare Helper-Schicht).
-export const RING_TIMEOUT_MS = 30_000;
+// War vorher 30s — zu knapp für PWA-Cold-Boot: bei "PWA komplett zu" dauert
+// APNs-Delivery + Banner-Display + User-Tap + Cold-Boot + /voice/active-Call
+// schnell 15-25s. Mit 30s flogen iPhone-Notifications regelmäßig zu früh raus.
+export const RING_TIMEOUT_MS = 60_000;
 
 // Mid-Call-Reconnect: iceConnectionState='disconnected' bedeutet nicht failed —
 // Browser versucht selbst zu re-connecten. Wenn das nach 5s nicht klappt,
@@ -838,6 +841,7 @@ export const voiceStore = {
     if (_state !== STATES.IDLE) {
       // Bereits in einem Call — Backend hätte busy returnen sollen, aber
       // defensiv: wir lehnen den 2. Anruf ab.
+      console.warn(`📞 receiveCall: silent-decline (state=${_state}, incomingCallId=${payload.callId?.slice(0,8)}, activeCallId=${_callId?.slice(0,8)})`);
       try {
         await apiFetch('/voice/decline', {
           method: 'POST',

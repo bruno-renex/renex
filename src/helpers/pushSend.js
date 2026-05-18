@@ -46,9 +46,14 @@ export async function sendWebPush(env, subscription, payloadObj) {
       await env.RENEX_DB.prepare(
         "DELETE FROM push_subscriptions WHERE endpoint = ?"
       ).bind(endpoint).run();
+      console.log(`🔔 Push EXPIRED handle=${handle} type=${payloadObj?.data?.type || "?"} status=${res.status} endpoint=${endpoint.slice(0, 60)}...`);
       return { success: false, expired: true };
     }
 
+    // Diagnose-Log: zeigt im wrangler tail ob APNs/FCM den Push akzeptiert
+    // hat (2xx) oder verworfen hat (4xx/5xx). Besonders nützlich für Voice-
+    // Push-Debug — pushToUser ist fire-and-forget, sonst sieht man nichts.
+    console.log(`🔔 Push sent handle=${handle} type=${payloadObj?.data?.type || "?"} status=${res.status} endpoint=${endpoint.slice(0, 60)}...`);
     return { success: res.status >= 200 && res.status < 300, status: res.status };
   } catch (err) {
     console.error(`🔔 Push encryption failed, trying empty push: ${err.message}`);
@@ -91,6 +96,7 @@ export async function pushToUser(env, handle, payload) {
   ).bind(handle).all();
 
   const subs = rows.results || [];
+  console.log(`🔔 pushToUser handle=${handle} type=${payload?.data?.type || "?"} subs=${subs.length}`);
   if (subs.length === 0) return;
 
   await Promise.allSettled(

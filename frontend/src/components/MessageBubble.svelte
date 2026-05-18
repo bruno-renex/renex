@@ -25,9 +25,11 @@
    * }}
    */
   import { profileCache } from '../stores/profileCache.svelte.js';
+  import { i18nStore } from '../stores/i18n.svelte.js';
   import AttachmentView from './AttachmentView.svelte';
   import { formatMessage, stripFormatting } from '../lib/messageFormat.js';
   import { openExternalLink } from '../stores/linkWarning.svelte.js';
+  import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
 
   let { message, showSender = false, onReply = null, onEdit = null, onDelete = null, onReact = null, onJumpTo = null, onSenderClick = null, myHandle = null } = $props();
 
@@ -104,17 +106,58 @@
       }));
   });
 
-  // Sender-Name reaktiv: Display-Name wenn bekannt, sonst @handle.
+  // Sender-Name reaktiv: Display-Name wenn bekannt, sonst Tiername bei Gästen
+  // (analog zu ChatHeader/InboxList/GroupMembersModal), sonst @handle. In Gruppen
+  // war früher ein roher "@guest_xxxx" sichtbar, was die Tiername-Konvention
+  // brach (in DMs verdeckt, weil DMs den Sender ausblenden).
   let senderName = $derived(
-    message.from ? (profileCache.get(message.from) || message.from) : ''
-  );
-
-  // Reply-Author reaktiv (für Quote-Reply-Box im Bubble).
-  let replyAuthorName = $derived(
-    message.replyTo?.from
-      ? (profileCache.get(message.replyTo.from) || message.replyTo.from)
+    message.from
+      ? (profileCache.get(message.from)
+          || (isGuestHandle(message.from) ? guestDisplayName(message.from) : message.from))
       : ''
   );
+
+  // Reply-Author reaktiv (für Quote-Reply-Box im Bubble). Gleiche Tiername-Logik.
+  let replyAuthorName = $derived(
+    message.replyTo?.from
+      ? (profileCache.get(message.replyTo.from)
+          || (isGuestHandle(message.replyTo.from) ? guestDisplayName(message.replyTo.from) : message.replyTo.from))
+      : ''
+  );
+
+  // System-Message-Renderer: backend schreibt englischen Klartext wie
+  // "guest_xxxx is now realHandle" oder "__guest_convert_notice__" oder
+  // "X is now Admin". Wir formatieren das hier lokalisiert + mit Tiernamen.
+  let systemText = $derived.by(() => {
+    const raw = String(message.message || '');
+    if (!raw) return '';
+    const lng = i18nStore.lang;
+    // Sentinel: alte verschlüsselte Nachrichten sind nach Gast-Convert nicht
+    // mehr lesbar (CMK/GSK-Wechsel) — der Backend-Hinweis informiert die anderen.
+    if (raw === '__guest_convert_notice__') {
+      return lng.sysGuestConvertNotice
+        || 'Ein Gast hat sich registriert. Frühere Nachrichten bleiben verschlüsselt.';
+    }
+    // Pattern: "<guest_xxxx> is now <realHandle>" (DM + Gruppe nach Convert)
+    const conv = raw.match(/^(guest_[a-z0-9]+) is now ([a-z0-9_]+)$/i);
+    if (conv) {
+      const oldH = conv[1].toLowerCase();
+      const newH = conv[2].toLowerCase();
+      const oldDisplay = isGuestHandle(oldH) ? guestDisplayName(oldH) : `@${oldH}`;
+      const tmpl = lng.sysGuestNowReal || '{old} ist jetzt @{new}';
+      return tmpl.replace('{old}', oldDisplay).replace('{new}', newH);
+    }
+    // Pattern: "<handle> is now Admin" (Group-Admin-Promotion)
+    const admin = raw.match(/^([a-z0-9_]+) is now Admin$/i);
+    if (admin) {
+      const h = admin[1].toLowerCase();
+      const display = isGuestHandle(h) ? guestDisplayName(h) : `@${h}`;
+      const tmpl = lng.sysNowAdmin || '{user} ist jetzt Admin';
+      return tmpl.replace('{user}', display);
+    }
+    // Fallback: roher Text (für unbekannte System-Messages)
+    return raw;
+  });
 
   // Reply-Action nur erlauben wenn die Bubble eine "fertige" Message ist:
   // - kein System-/Control-Type
@@ -216,7 +259,7 @@
 
 {#if message.type === 'system'}
   <div class="system-row">
-    <div class="system-bubble">{message.message || ''}</div>
+    <div class="system-bubble">{systemText}</div>
   </div>
 {:else}
 <div class="bubble-row" class:me={message.isMe}>

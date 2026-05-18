@@ -16,13 +16,11 @@
   const MAX_LINES = 200;
 
   onMount(() => {
-    const url = new URL(window.location.href);
-    const param = url.searchParams.get('voice-debug');
-    if (param === '1') {
-      localStorage.setItem('voice-debug', '1');
-    } else if (param === '0') {
-      localStorage.removeItem('voice-debug');
-    }
+    // URL-Param ?voice-debug=1 wird absichtlich NICHT mehr ausgewertet —
+    // war ursprünglich für ad-hoc iOS-PWA-Aktivierung gedacht, aber iOS PWA
+    // hat separaten localStorage von Safari (Param wirkt nur in Safari).
+    // Toggle läuft jetzt sauber über DebugOverlay (Profil → 🛠️ Debug →
+    // 📞 Voice-Debug AN/AUS), das localStorage direkt setzt + Reload triggert.
     enabled = localStorage.getItem('voice-debug') === '1';
     if (!enabled) return;
 
@@ -100,7 +98,10 @@
 <style>
   .vlo {
     position: fixed;
-    left: 8px; right: 8px; bottom: 8px;
+    left: 8px; right: 8px;
+    /* Hochgesetzt damit Profil-Icon / Bottom-Bar nicht verdeckt wird.
+       env(safe-area-inset-bottom) berücksichtigt iPhone-Home-Indicator. */
+    bottom: calc(80px + env(safe-area-inset-bottom, 0px));
     z-index: 999999;
     background: rgba(10, 14, 20, 0.95);
     color: #d8ffd8;

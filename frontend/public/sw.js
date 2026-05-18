@@ -71,33 +71,18 @@ async function handlePush(event) {
   // ist aggressiver (Call-Feel statt Message-Feel).
   if (data?.type === "voice_call") {
     options.tag = tag || `voice-call-${data.callId || "unknown"}`;
-    options.renotify = true;
-    options.silent = false;
-    options.vibrate = [400, 100, 400, 100, 400, 100, 400];
-    // iOS PWA WebPush: requireInteraction + actions sind nicht zuverlässig
-    // unterstützt — manche iOS-Versionen droppen die ganze Notification still
-    // wenn diese Felder gesetzt sind. Click auf Banner öffnet sowieso die PWA
-    // via /?with=<caller>&call=1 — Accept/Decline-UI passiert dann in-App.
-    // Feature-detect für andere Browser: nur wenn `actions` im Notification-
-    // Prototype ist und kein iOS-Safari, dann Action-Buttons rendern.
-    const supportsActions = (() => {
-      try {
-        if (typeof Notification === 'undefined') return false;
-        if (!('actions' in Notification.prototype)) return false;
-        // Heuristik: iOS Safari WebKit hat actions im Prototype aber droppt sie.
-        // navigator.userAgent ist im SW verfügbar.
-        const ua = (self.navigator?.userAgent || '');
-        if (/iPad|iPhone|iPod/.test(ua) && !/CriOS|FxiOS/.test(ua)) return false;
-        return true;
-      } catch { return false; }
-    })();
-    if (supportsActions) {
-      options.requireInteraction = true;
-      options.actions = [
-        { action: "voice_accept",  title: "📞 Annehmen" },
-        { action: "voice_decline", title: "✖ Ablehnen" },
-      ];
-    }
+    // iOS PWA WebPush: KEINE iOS-problematischen Felder setzen.
+    // History-Bug: silent:false + langer vibrate + requireInteraction lassen
+    // iOS Safari die ganze Notification silent droppen — selbst bei
+    // user-granted-Permission. Wir bleiben so nah wie möglich am Message-
+    // Notification-Schema (das funktioniert), nur Tag + data.type
+    // unterscheiden sich, damit der notificationclick-Handler den Voice-
+    // Pfad nehmen kann.
+    // Action-Buttons (Annehmen/Ablehnen) sind auf iOS unzuverlässig — Click
+    // auf Banner öffnet die PWA via /?with=<caller>&call=1, Accept/Decline-
+    // UI passiert dann in-App. Für andere Browser könnten wir Actions
+    // optional ergänzen, aber für unseren primären iOS-Use-Case lassen wir's
+    // bewusst minimal.
   }
 
   // App-Icon Badge

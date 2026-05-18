@@ -38,6 +38,7 @@
     getMyGSK, getPeerGSK, storeMyGSKForOwnDevices, sendMyGSKToMember,
     rotateMyGSK, deleteAllGSKsForGroup, deletePeerGSK,
     fetchMyGSKFromKV, redistributeGSKsForPeerDeviceAdded,
+    distributeMyGSKToMembers,
   } from './lib/groupCrypto.js';
   import { captureException } from './lib/sentry.js';
   import { apiFetch } from './lib/api.js';
@@ -172,6 +173,27 @@
               inboxStore.loadContacts(),
               inboxStore.loadGroups(),
             ]);
+            // Group-Convert: GSK an alle Members unter dem neuen Handle redistribuieren.
+            // Ohne das haben andere Members die GSK noch unter peerGSK:guest_xxx:groupId
+            // gespeichert — Messages vom konvertierten User (sender=realHandle) finden
+            // keinen peerGSK-Lookup und bleiben verschlüsselt.
+            if (conv.convoType === 'group' && conv.convoId) {
+              try {
+                const myGsk = await getMyGSK(conv.convoId);
+                if (myGsk) {
+                  const r = await apiFetch(`/groups/members?groupId=${encodeURIComponent(conv.convoId)}`);
+                  if (r.ok && Array.isArray(r.data?.members)) {
+                    const memberHandles = r.data.members
+                      .map(m => String(m.member_handle || '').toLowerCase())
+                      .filter(Boolean);
+                    const distrib = await distributeMyGSKToMembers(conv.convoId, myGsk, memberHandles);
+                    console.log(`🔁 Post-Convert GSK redistribute: ${distrib.delivered}/${distrib.recipients} Members in Gruppe ${conv.convoId.slice(0,8)}`);
+                  }
+                }
+              } catch (e) {
+                captureException(e, { context: 'postRegisterConvert.gskRedistribute' });
+              }
+            }
             // Den frisch-migrierten Chat öffnen
             if (conv.convoType === 'group' && conv.convoId) {
               chatStore.selectChat({ type: 'group', key: conv.convoId, name: 'Group' });
@@ -257,6 +279,24 @@
             }
           }
           convertedInviter = conv.inviterHandle || null;
+          // Group-Convert: GSK-Redistribution analog zum post-register Flow.
+          if (conv.convoType === 'group' && conv.convoId) {
+            try {
+              const myGsk = await getMyGSK(conv.convoId);
+              if (myGsk) {
+                const r = await apiFetch(`/groups/members?groupId=${encodeURIComponent(conv.convoId)}`);
+                if (r.ok && Array.isArray(r.data?.members)) {
+                  const memberHandles = r.data.members
+                    .map(m => String(m.member_handle || '').toLowerCase())
+                    .filter(Boolean);
+                  const distrib = await distributeMyGSKToMembers(conv.convoId, myGsk, memberHandles);
+                  console.log(`🔁 Bootstrap-Convert GSK redistribute: ${distrib.delivered}/${distrib.recipients} Members`);
+                }
+              }
+            } catch (e) {
+              captureException(e, { context: 'bootstrapConvert.gskRedistribute' });
+            }
+          }
           toastStore.push(
             i18nStore.lang.convertSuccess || 'Gast-Konto übernommen ✓',
             { kind: 'success' }
@@ -380,6 +420,38 @@
         const dmPeer = p.get('with');
         const groupId = p.get('group');
         const groupName = p.get('name');
+        console.log(`📞 handleDeepLink: url-arg=${url || '(cold-boot)'} location.search=${location.search} with=${dmPeer} call=${p.get('call')}`);
+
+        // Voice-Call von Notification-Tap (?call=1): PWA war zu, voice:ring
+        // WS-Event ging verloren. Backend hat das Ring-Event in KV gespeichert
+        // (voice_ring:<me>) — wir holen's via /voice/active und triggern
+        // receiveCall manuell, damit der Annehmen/Ablehnen-Dialog erscheint.
+        if (p.get('call') === '1') {
+          console.log(`📞 deep-link call=1 detected, fetching /voice/active...`);
+          apiFetch('/voice/active').then(res => {
+            console.log(`📞 /voice/active response:`, { active: res?.active, hasRingEvent: !!res?.ringEvent, callId: res?.ringEvent?.callId?.slice(0,8) });
+            if (res?.active && res?.ringEvent) {
+              console.log(`📞 calling voiceStore.receiveCall with ringEvent`);
+              void voiceStore.receiveCall(res.ringEvent);
+            } else {
+              console.warn(`📞 /voice/active returned no active call — banner-tap too late or voice_state expired`);
+              const lng = i18nStore.lang;
+              const callerName = dmPeer ? `@${dmPeer.toLowerCase()}` : (lng.someone || 'Jemand');
+              toastStore.push(
+                (lng.voiceCallEnded || 'Anruf von {peer} wurde bereits beendet').replace('{peer}', callerName),
+                { kind: 'info', duration: 5000 }
+              );
+            }
+          }).catch(e => {
+            console.warn(`📞 /voice/active fetch failed:`, e?.message);
+          });
+          // call-Param aus URL strippen, sonst re-triggered bei jedem Reload
+          if (!url) {
+            const cleaned = new URL(location.href);
+            cleaned.searchParams.delete('call');
+            history.replaceState(null, '', cleaned.toString());
+          }
+        }
         if (dmPeer && /^[a-z0-9_]+$/i.test(dmPeer)) {
           chatStore.selectChat({
             type: 'dm',
@@ -1133,7 +1205,6 @@
       void voiceStore._handleAnswer(msg);
     }));
     _wsUnsubs.push(ws.on("voice:ice", (msg) => {
-      console.log("📞 voice:ice WS-event arrived", { callId: msg?.callId, from: msg?.from });
       void voiceStore._handleIce(msg);
     }));
     _wsUnsubs.push(ws.on("voice:hangup", (msg) => {

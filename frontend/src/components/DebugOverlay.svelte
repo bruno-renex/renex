@@ -31,6 +31,20 @@
   // Loading flags
   let isResubbing = $state(false);
   let isTesting = $state(false);
+  let voiceDebugOn = $state(localStorage.getItem('voice-debug') === '1');
+
+  function toggleVoiceDebug() {
+    if (voiceDebugOn) {
+      localStorage.removeItem('voice-debug');
+      voiceDebugOn = false;
+    } else {
+      localStorage.setItem('voice-debug', '1');
+      voiceDebugOn = true;
+    }
+    // VoiceLogOverlay liest localStorage nur onMount — reload nötig damit
+    // sich der Overlay aktiviert/deaktiviert.
+    setTimeout(() => location.reload(), 300);
+  }
   let copyState = $state("idle"); // "idle" | "copied"
 
   $effect(() => {
@@ -323,6 +337,9 @@
         </button>
         <button class="btn" onclick={copySnapshot}>
           {copyState === "copied" ? "✅ Kopiert!" : "📋 Alles kopieren"}
+        </button>
+        <button class="btn" onclick={toggleVoiceDebug}>
+          {voiceDebugOn ? "📞 Voice-Debug AUS" : "📞 Voice-Debug AN"}
         </button>
       </div>
 

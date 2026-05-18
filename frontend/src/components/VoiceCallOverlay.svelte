@@ -52,7 +52,6 @@
   function onDecline() { voiceStore.declineCall(); }
   function onHangup() { voiceStore.endCall(); }
   function onToggleMute() { voiceStore.toggleMute(); }
-  function onToggleVideo() { voiceStore.toggleVideo(); }
   function onTogglePtt() { voiceStore.togglePttMode(); }
 
   // Error-Messages aus dem Store (z.B. 'no_cmk', 'NotAllowedError') sind
@@ -273,17 +272,12 @@
             {/if}
           </button>
 
-          <button
-            class="btn-control btn-secondary"
-            class:on={voiceStore.isVideoOn}
-            onclick={onToggleVideo}
-            aria-label="Video"
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="23 7 16 12 23 17 23 7"/>
-              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-            </svg>
-          </button>
+          <!-- Video-Toggle entfernt (analog zum Speaker-Toggle weiter unten):
+               Video-Calls sind noch nicht implementiert. Lieber kein Button
+               als ein nicht-funktionaler — sonst klickt der User darauf und
+               erwartet was. Re-introduce wenn Video-Pipeline (Track-Add +
+               UI für Remote-Video) gebaut ist. Voice-Store-Stubs `isVideoOn`
+               und `toggleVideo` bleiben für später bestehen. -->
 
           <!-- Speaker-Toggle entfernt (B18 / Phase 1B):
                iOS Safari/PWA hat KEINE Browser-API für Earpiece/Loudspeaker-Switch.

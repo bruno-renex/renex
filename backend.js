@@ -113,7 +113,7 @@ async function fetch(request, env, ctx) {
       return await handleFeedbackRoutes(request, env, path, params);
     }
     if (path.startsWith('/voice/')) {
-      return await handleVoiceRoutes(request, env, path, params);
+      return await handleVoiceRoutes(request, env, path, params, ctx);
     }
     // Sentry-Config (publik — DSN ist Public-Token, kein Secret)
     if (path === '/sentry-config') {

@@ -24,7 +24,7 @@ import {
 import {
   fetchIceServers, getLocalMedia, createPeerConnection,
   addLocalTracks, cleanupPeerConnection, setLocalAudioMuted,
-  extractDtlsFingerprint, createAudioLevelMeter,
+  extractDtlsFingerprint, createAudioLevelMeter, unlockAudio,
 } from '../lib/voiceRTC.js';
 import { signMessage, verifyMessageSig } from '../lib/messageSig.js';
 import { getDeviceId } from '../lib/e2eKeys.js';
@@ -269,6 +269,36 @@ let _localStream = null;         // MediaStream (mic)
 let _remoteStream = null;        // MediaStream from peer (set by ontrack)
 let _localMeterDispose = null;   // () => void — stoppt local audio meter
 let _remoteMeterDispose = null;  // () => void — stoppt remote audio meter
+// iOS-Safari Audio-Track-Keepalive: AudioContext-Source-Node der den preStream
+// "verwendet" während CMK-Vorbereitung läuft. Ohne keepalive killt iOS den
+// Track binnen 1-2s wenn er nicht in einer aktiven Audio-Pipeline ist →
+// readyState=ended → keine Audio-Übertragung trotz connected RTC. Wird in
+// _setupPeerConnection released sobald addLocalTracks den Track an PC übergibt.
+let _keepAliveCtx = null;
+function _attachStreamKeepAlive(stream) {
+  if (!stream) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    _keepAliveCtx = new Ctx();
+    const source = _keepAliveCtx.createMediaStreamSource(stream);
+    const gain = _keepAliveCtx.createGain();
+    gain.gain.value = 0;  // muted — wir wollen das Mic nicht hörbar wiedergeben
+    source.connect(gain);
+    gain.connect(_keepAliveCtx.destination);
+    console.log('📞 stream keep-alive AudioContext attached');
+  } catch (e) {
+    console.warn('📞 stream keep-alive attach failed:', e?.message);
+    _keepAliveCtx = null;
+  }
+}
+function _releaseStreamKeepAlive() {
+  if (_keepAliveCtx) {
+    try { _keepAliveCtx.close(); } catch {}
+    _keepAliveCtx = null;
+    console.log('📞 stream keep-alive released');
+  }
+}
 // CMK (32-Byte Uint8Array) für die laufende Call-Session — encryptet alle
 // SDP- und ICE-Bodies. Bei _hardReset cleared (Forward Secrecy: ein gestolzener
 // Memory-Dump würde nur den aktuellen Call leaken, nicht historische CMK-Sicht).
@@ -310,6 +340,7 @@ async function _hardReset() {
   if (_remoteMeterDispose) { try { _remoteMeterDispose(); } catch {} _remoteMeterDispose = null; }
   _localLevel = 0;
   _remoteLevel = 0;
+  _releaseStreamKeepAlive();
   cleanupPeerConnection(_pc, _localStream);
   _pc = null;
   _localStream = null;
@@ -473,8 +504,12 @@ async function _flushLocalIceQueue(callId, peerHandle) {
 // zu viele awaits zwischen User-Klick und getUserMedia liegen → NotAllowedError
 // obwohl Permission granted ist. startCall/acceptCall holen den Stream daher
 // VOR allen anderen awaits und reichen ihn hierher durch.
-async function _setupPeerConnection(callId, peerHandle, preAcquiredStream = null) {
-  const config = await fetchIceServers();
+// preAcquiredConfig: optionale iceServers-Config. Wenn vom Caller mitgegeben,
+// überspringt _setupPeerConnection das fetchIceServers — wichtig für iOS-Safari
+// damit zwischen getLocalMedia und addLocalTracks KEIN await liegt (sonst killt
+// iOS den Audio-Track während des Fetchs → readyState=ended → kein Audio).
+async function _setupPeerConnection(callId, peerHandle, preAcquiredStream = null, preAcquiredConfig = null) {
+  const config = preAcquiredConfig || await fetchIceServers();
   // Bis _localIceQueue auf null gesetzt wird (post /voice/ring|/answer success),
   // werden Candidates lokal gepuffert. Sonst feuern sie BEVOR call_log existiert
   // → Backend returnt 404 für /voice/ice.
@@ -613,6 +648,10 @@ async function _setupPeerConnection(callId, peerHandle, preAcquiredStream = null
   // Mikrofon: pre-acquired Stream bevorzugen (= im User-Gesture-Frame geholt).
   // Fallback auf getLocalMedia falls keiner mitgegeben wurde (z.B. Mid-Call
   // Renegotiation, die nicht direkt von User-Aktion getriggert ist).
+  // WICHTIG für iOS-Safari: addLocalTracks(pc, stream) MUSS möglichst schnell
+  // nach getLocalMedia kommen, sonst killt iOS den Track (readyState=ended)
+  // und sendet keine Audio-Pakete. Caller orchestriert dass _setupPeerConnection
+  // VOR dem CMK-decrypt-Pfad (3-7s) läuft — siehe startCall/acceptCall.
   const stream = preAcquiredStream || await getLocalMedia({ audio: true, video: false });
   // Diagnose: zeigt ob PWA tatsächlich Mic-Track liefert oder silent stream.
   try {
@@ -627,6 +666,9 @@ async function _setupPeerConnection(callId, peerHandle, preAcquiredStream = null
     });
   } catch {}
   addLocalTracks(pc, stream);
+  // KeepAlive nach addLocalTracks releasen — PC's RTPSender hält den Track jetzt
+  // aktiv. Wenn wir den AudioContext länger laufen lassen, doppelt Mic-Capture.
+  _releaseStreamKeepAlive();
 
   _pc = pc;
   _localStream = stream;
@@ -729,9 +771,39 @@ export const voiceStore = {
     // Chrome PWA verliert sonst der Permission-Token (NotAllowedError obwohl
     // Permission granted ist). Trade-off: Mic-Indicator flasht kurz auch wenn
     // wir später wegen no_cmk abbrechen — akzeptabel.
+    // iOS-Safari: unlockAudio() SYNCHRON vor getUserMedia — sonst returnt iOS
+    // einen ended Mic-Track (kein Audio-Output trotz connected RTC). Muss
+    // im User-Gesture-Stack-Frame laufen, vor dem ersten await.
+    unlockAudio();
+    // iOS-Safari Track-Killing-Fix: fetchIceServers PARALLEL zu getLocalMedia
+    // starten. Sonst läuft der HTTP-fetch zwischen getLocalMedia und
+    // addLocalTracks (~200ms) → iOS killt den Track in dem Fenster →
+    // readyState=ended → kein Audio. Beide Promises starten im User-Gesture-
+    // Frame, beide laufen parallel.
+    const iceConfigPromise = fetchIceServers();
     let preStream = null;
     try {
       preStream = await getLocalMedia({ audio: true, video: false });
+      console.log('📞 preStream initial readyState=' + preStream.getAudioTracks().map(t => t.readyState).join(','));
+      // iOS-Safari PWA Bug: erstes getUserMedia returnt manchmal einen ended
+      // Track (Symptom: ICE/RTC connect OK, aber keine Audio-Pakete weil
+      // Track tot ist). Workaround: bis zu 2x retry mit 500ms delay + frischem
+      // unlockAudio(). Wenn nach 3 Versuchen immer noch ended → hard fail.
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        if (!preStream.getAudioTracks().some(t => t.readyState === 'ended')) break;
+        console.warn(`📞 preStream ended (attempt ${attempt}) — retry getUserMedia after 500ms`);
+        for (const t of preStream.getTracks()) { try { t.stop(); } catch {} }
+        await new Promise(r => setTimeout(r, 500));
+        unlockAudio();
+        preStream = await getLocalMedia({ audio: true, video: false });
+        console.log(`📞 preStream retry ${attempt} readyState=` + preStream.getAudioTracks().map(t => t.readyState).join(','));
+      }
+      if (preStream.getAudioTracks().every(t => t.readyState === 'ended')) {
+        throw new Error('mic_track_dead_ios');
+      }
+      // iOS-Safari Track-Keepalive: AudioContext sink hält den Track aktiv
+      // während ensureSecureDmSession ~3-7s läuft.
+      _attachStreamKeepAlive(preStream);
     } catch (e) {
       _errorMsg = e?.name || 'mic_failed';
       _state = STATES.ENDED;
@@ -740,14 +812,20 @@ export const voiceStore = {
     }
 
     try {
-      // CMK sicherstellen. ensureSecureDmSession kann cmk_req triggern und
-      // ein paar Sekunden warten — Mic bleibt solange aktiv (recording-Indicator),
-      // ist aber der einzige Weg getUserMedia im Gesture-Frame zu halten.
+      // iOS-Safari-Track-Anchor: _setupPeerConnection läuft VOR der CMK-Vorbereitung,
+      // damit addLocalTracks den preStream sofort an die WebRTC-Pipeline koppelt.
+      // Sonst killt iOS-Safari den Audio-Track nach ~2-3s ohne Pipeline → sb=0
+      // im TURN-Stats, keine Audio-Übertragung, obwohl RTC connected ist.
+      // iceConfig wurde parallel zu getLocalMedia gefetched → KEIN await mehr
+      // zwischen getLocalMedia und addLocalTracks (sonst iOS-Track-Kill).
       const me = userStore.myUser;
+      const iceConfig = await iceConfigPromise;
+      const pc = await _setupPeerConnection(_callId, peer.handle, preStream, iceConfig);
+
+      // CMK sicherstellen. ensureSecureDmSession kann cmk_req triggern und
+      // ein paar Sekunden warten — Track ist jetzt im PC, iOS lässt ihn leben.
       const cmk = await ensureSecureDmSession(me, peer.handle);
       if (!cmk) {
-        // Pre-acquired stream wieder freigeben
-        for (const t of preStream.getTracks()) { try { t.stop(); } catch {} }
         _errorMsg = 'no_cmk';
         await _hardReset();
         _writeHistoryEntry(true);
@@ -755,9 +833,8 @@ export const voiceStore = {
         _scheduleReset();
         return { ok: false, error: 'no_cmk' };
       }
-
       _callCmk = cmk;
-      const pc = await _setupPeerConnection(_callId, peer.handle, preStream);
+
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
 
@@ -766,7 +843,19 @@ export const voiceStore = {
       // ungültig wäre. Backend hat keinen Zugriff auf unseren privaten
       // signing-key. SDP-Body selbst ist CMK-encrypted — Backend sieht den
       // SDP-Inhalt (insb. ICE-Candidates mit IPs) nicht.
+      // REQUIRED seit H1: Backend lehnt /voice/ring ohne auth ab (400) und
+      // Receiver-Side decliened ohne auth. Fail hier hart wenn fp-Extraktion
+      // oder Signing failed.
       const auth = await _buildAuth(offer.sdp, _callId, 'offer');
+      if (!auth) {
+        for (const t of preStream.getTracks()) { try { t.stop(); } catch {} }
+        _errorMsg = 'auth_build_failed';
+        await _hardReset();
+        _writeHistoryEntry(true);
+        _state = STATES.ENDED;
+        _scheduleReset();
+        return { ok: false, error: 'auth_build_failed' };
+      }
       const ec = await encryptSdp(cmk, offer.sdp, 'offer', me, peer.handle, _callId);
       // Diagnose: log AAD-Komponenten zur Vergleichbarkeit mit Receiver-Side
       console.log(`📞 Voice encrypt offer: me=${me} to=${peer.handle} callId=${String(_callId).slice(0,8)} ivLen=${ec.iv?.length} ctLen=${ec.ct?.length} cmkFp=${_cmkFp(cmk)}`);
@@ -776,7 +865,7 @@ export const voiceStore = {
           to: peer.handle,
           callId: _callId,
           sdp: { type: offer.type, ec },
-          ...(auth ? { auth } : {}),
+          auth,
         },
       });
       if (!r.ok) {
@@ -903,15 +992,14 @@ export const voiceStore = {
         return;
       }
     }
-    // Auth-Verify VOR Annahme: wenn der Caller einen signierten fp mitschickt,
-    // muss der zur SDP passen + signature mit Caller-sigPub verifyen. Failure
-    // → call sofort declinen, NICHT mal das ringing-UI zeigen.
-    if (payload.auth) {
-      const v = await _verifyAuth(plainSdp, payload.auth, payload.callId, 'offer', fromHandle);
-      if (!v.ok) {
-        await autoDecline(`mitm_${v.reason}`);
-        return;
-      }
+    // Auth-Verify VOR Annahme (REQUIRED): jeder Caller MUSS signierten DTLS-fp
+    // schicken. Fehlend = entweder Backend hat das Feld gestripped (MITM-Indiz)
+    // oder Old-Client (Backend lehnt seit H1 ab → fließt nicht durch). In beiden
+    // Fällen sofort declinen, NICHT mal das ringing-UI zeigen.
+    const v = await _verifyAuth(plainSdp, payload.auth, payload.callId, 'offer', fromHandle);
+    if (!v.ok) {
+      await autoDecline(`mitm_${v.reason}`);
+      return;
     }
     _direction = 'incoming';
     _peer = { handle: fromHandle, displayName: null };
@@ -990,17 +1078,14 @@ export const voiceStore = {
         return;
       }
     }
-    // Auth-Verify: signed DTLS-fingerprint vom Callee. Wenn Backend die SDP
-    // modifiziert hat (MITM-Versuch), ist der fp im SDP ≠ fp in auth, oder
-    // die signature failed → reject call sofort.
-    if (peerHandle) {
-      const v = await _verifyAuth(plainSdp, payload.auth, _callId, 'answer', peerHandle);
-      if (!v.ok) {
-        console.error(`🚨 Voice MITM-Verdacht (answer): ${v.reason}`);
-        _errorMsg = `mitm_${v.reason}`;
-        void voiceStore.endCall();
-        return;
-      }
+    // Auth-Verify (REQUIRED): signed DTLS-fingerprint vom Callee. Fehlend oder
+    // ungültig = MITM-Verdacht ODER Backend hat Feld gestripped → reject call.
+    const v = await _verifyAuth(plainSdp, payload.auth, _callId, 'answer', peerHandle);
+    if (!v.ok) {
+      console.error(`🚨 Voice MITM-Verdacht (answer): ${v.reason}`);
+      _errorMsg = `mitm_${v.reason}`;
+      void voiceStore.endCall();
+      return;
     }
     try {
       // Callee hat geantwortet → No-Answer-Timer canceln
@@ -1020,7 +1105,21 @@ export const voiceStore = {
    * Vor setRemoteDescription queueen.
    */
   async _handleIce(payload) {
-    if (!payload?.candidate || payload.callId !== _callId) return;
+    if (!payload?.candidate) return;
+    // CMK-decrypt-retry-Race (Callee): receiveCall braucht ~7s wenn ein erster
+    // decrypt-Versuch failt und ein cmk_req-Retry läuft. In diesem Fenster ist
+    // _callId noch null, aber Caller hat schon trickle-ICE losgelassen. Vorher
+    // hat `payload.callId !== _callId` diese ICE-Events gedropped → Callee's
+    // PC kriegte NIE Remote-Candidates → ICE bleibt forever in-progress, 0 sent
+    // (coturn-Log: rp=76 sb=0 für Callee's relay-allocation).
+    // Fix: buffern wenn _callId noch nicht gesetzt — _flushPendingRawIce in
+    // acceptCall ignoriert dann automatisch payloads mit falschem callId.
+    if (!_callId) {
+      _pendingRawIcePayloads.push(payload);
+      console.log(`📞 ICE buffered (no _callId yet, total=${_pendingRawIcePayloads.length}, payloadCallId=${payload.callId?.slice(0,8)})`);
+      return;
+    }
+    if (payload.callId !== _callId) return;
     if (!_pc) {
       // PC noch nicht aufgebaut (Callee race: voice:ice trifft vor acceptCall
       // → setRemoteDescription ein). Payload buffern, in acceptCall() via
@@ -1084,11 +1183,32 @@ export const voiceStore = {
     // MIC-FIRST: getUserMedia direkt im User-Gesture-Frame des Accept-Klicks.
     // Auf Android Chrome PWA verliert sonst der Permission-Token wenn wir
     // erst await CMK-Lookup / Setup machen → NotAllowedError obwohl granted.
+    // iOS-Safari: unlockAudio() SYNCHRON vor getUserMedia (siehe startCall).
+    unlockAudio();
+    // iOS-Safari Track-Killing-Fix: fetchIceServers PARALLEL zu getLocalMedia
+    // (siehe startCall). KEIN await zwischen getLocalMedia und addLocalTracks
+    // — sonst killt iOS den Track im Fenster.
+    const iceConfigPromise = fetchIceServers();
     let preStream = null;
     try {
       preStream = await getLocalMedia({ audio: true, video: false });
+      console.log('📞 preStream initial readyState=' + preStream.getAudioTracks().map(t => t.readyState).join(','));
+      // iOS-Safari Retry (siehe startCall): bei ended-Track bis zu 2x retry
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        if (!preStream.getAudioTracks().some(t => t.readyState === 'ended')) break;
+        console.warn(`📞 preStream ended (attempt ${attempt}) — retry getUserMedia after 500ms`);
+        for (const t of preStream.getTracks()) { try { t.stop(); } catch {} }
+        await new Promise(r => setTimeout(r, 500));
+        unlockAudio();
+        preStream = await getLocalMedia({ audio: true, video: false });
+        console.log(`📞 preStream retry ${attempt} readyState=` + preStream.getAudioTracks().map(t => t.readyState).join(','));
+      }
+      if (preStream.getAudioTracks().every(t => t.readyState === 'ended')) {
+        throw new Error('mic_track_dead_ios');
+      }
+      _attachStreamKeepAlive(preStream);
     } catch (e) {
-      _errorMsg = e?.name || 'mic_failed';
+      _errorMsg = e?.name || e?.message || 'mic_failed';
       await _hardReset();
       _writeHistoryEntry(true);
       _state = STATES.ENDED;
@@ -1099,17 +1219,23 @@ export const voiceStore = {
     _state = STATES.CONNECTING;
     try {
       const me = userStore.myUser;
+      // iOS-Safari-Track-Anchor: PC-Setup VOR CMK-Lookup damit addLocalTracks
+      // den preStream sofort koppelt. Sonst kann iOS bei langer CMK-Wartezeit
+      // den Track killen → kein Audio trotz connected RTC.
+      // iceConfig parallel gefetched (s. oben) → KEIN await zwischen
+      // getLocalMedia und addLocalTracks.
+      const iceConfig = await iceConfigPromise;
+      const pc = await _setupPeerConnection(_callId, _peer.handle, preStream, iceConfig);
+
       // _callCmk wurde in receiveCall schon gesetzt — defensiv nochmal prüfen
       if (!_callCmk) {
         _callCmk = await getCMKIfExists(_peer.handle);
         if (!_callCmk) _callCmk = await ensureSecureDmSession(me, _peer.handle);
       }
       if (!_callCmk) {
-        for (const t of preStream.getTracks()) { try { t.stop(); } catch {} }
         throw new Error('no_cmk');
       }
 
-      const pc = await _setupPeerConnection(_callId, _peer.handle, preStream);
       await pc.setRemoteDescription(offer);
       await _flushPendingRawIce();  // ICE-Payloads die vor PC-Setup ankamen
       await _flushPendingIce();
@@ -1118,14 +1244,24 @@ export const voiceStore = {
 
       // Sign own DTLS-fingerprint für Caller (gegen Backend-MITM, gleich wie
       // beim ring/offer-Pfad). SDP-Body wird mit CMK encrypted.
+      // REQUIRED seit H1: Backend lehnt /voice/answer ohne auth ab (400) und
+      // Caller-side endCall'ed bei verify-fail.
       const auth = await _buildAuth(answer.sdp, _callId, 'answer');
+      if (!auth) {
+        _errorMsg = 'auth_build_failed';
+        await _hardReset();
+        _writeHistoryEntry(true);
+        _state = STATES.ENDED;
+        _scheduleReset();
+        return;
+      }
       const ec = await encryptSdp(_callCmk, answer.sdp, 'answer', me, _peer.handle, _callId);
       const r = await apiFetch('/voice/answer', {
         method: 'POST',
         body: {
           callId: _callId,
           sdp: { type: answer.type, ec },
-          ...(auth ? { auth } : {}),
+          auth,
         },
       });
       if (!r.ok) {

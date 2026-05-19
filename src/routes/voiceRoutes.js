@@ -160,9 +160,19 @@ export async function handleVoiceRoutes(request, env, path, params, ctx) {
   const me = String(session.handle).toLowerCase();
 
   // ────────────────────────────────────────────────────
-  // VOICE ROOMS (Phase 5) — dynamische Pfade vor dem Switch
+  // VOICE ROOMS (Phase 5 / Mesh) — DEAKTIVIERT
   // ────────────────────────────────────────────────────
+  // Kein Frontend-Consumer (kein voice:room:* Handler). Der signal-Pfad
+  // würde Klartext-SDP relayn und damit E2E-Encryption bypassen. Bei
+  // Re-Aktivierung MUSS auf CMK-encrypted Envelopes umgestellt werden
+  // (analog zum 1:1-Pfad mit voiceCrypto.encryptSdp/encryptIce).
   if (path.startsWith("/voice/room/")) {
+    return json(request, { error: "Voice rooms not enabled" }, 410);
+  }
+
+  // Voice-Rooms Phase-5 Code-Pfad (deaktiviert oben). Originaler Code-Block
+  // belassen wir nicht — bei Re-Aktivierung neu schreiben mit CMK-Pfad.
+  if (false && path.startsWith("/voice/room/")) {
     const ROOM_RE = /^\/voice\/room\/([0-9a-f-]{36})\/(join|leave|heartbeat|members|signal)$/i;
     const m = path.match(ROOM_RE);
     if (!m) return json(request, { error: "Not found" }, 404);
@@ -341,15 +351,14 @@ export async function handleVoiceRoutes(request, env, path, params, ctx) {
       if (!isVoiceEnvelope(sdp.ec, MAX_SDP_EC_BYTES)) {
         return json(request, { error: "Invalid or oversized 'sdp.ec'" }, 400);
       }
-      // auth-Field optional aber wenn gesetzt: Schema validieren (Größe-Limit als
-      // Anti-DoS, Inhalt nur passthrough — Backend prüft NICHT die Signatur).
-      if (auth !== undefined) {
-        if (!auth || typeof auth !== "object" ||
-            typeof auth.fp !== "string" || auth.fp.length > 256 ||
-            typeof auth.sig !== "string" || auth.sig.length > 200 ||
-            typeof auth.fromDeviceId !== "string" || auth.fromDeviceId.length > 64) {
-          return json(request, { error: "Invalid 'auth'" }, 400);
-        }
+      // auth-Field REQUIRED (Defense-in-Depth gegen Backend-MITM auf SDP).
+      // Backend prüft NICHT die Signatur (kein Sigkey), nur Schema + Pflicht-Felder
+      // — Verify passiert peer-side in _verifyAuth.
+      if (!auth || typeof auth !== "object" ||
+          typeof auth.fp !== "string" || auth.fp.length === 0 || auth.fp.length > 256 ||
+          typeof auth.sig !== "string" || auth.sig.length === 0 || auth.sig.length > 200 ||
+          typeof auth.fromDeviceId !== "string" || auth.fromDeviceId.length === 0 || auth.fromDeviceId.length > 64) {
+        return json(request, { error: "Missing or invalid 'auth'" }, 400);
       }
 
       // Kontakt-Check (nur gegenseitige Kontakte dürfen sich anrufen)
@@ -469,13 +478,12 @@ export async function handleVoiceRoutes(request, env, path, params, ctx) {
       if (!isVoiceEnvelope(sdp.ec, MAX_SDP_EC_BYTES)) {
         return json(request, { error: "Invalid or oversized 'sdp.ec'" }, 400);
       }
-      if (auth !== undefined) {
-        if (!auth || typeof auth !== "object" ||
-            typeof auth.fp !== "string" || auth.fp.length > 256 ||
-            typeof auth.sig !== "string" || auth.sig.length > 200 ||
-            typeof auth.fromDeviceId !== "string" || auth.fromDeviceId.length > 64) {
-          return json(request, { error: "Invalid 'auth'" }, 400);
-        }
+      // auth REQUIRED (analog /voice/ring): Defense-in-Depth gegen Backend-MITM.
+      if (!auth || typeof auth !== "object" ||
+          typeof auth.fp !== "string" || auth.fp.length === 0 || auth.fp.length > 256 ||
+          typeof auth.sig !== "string" || auth.sig.length === 0 || auth.sig.length > 200 ||
+          typeof auth.fromDeviceId !== "string" || auth.fromDeviceId.length === 0 || auth.fromDeviceId.length > 64) {
+        return json(request, { error: "Missing or invalid 'auth'" }, 400);
       }
 
       // Source of truth: call_log (D1, stark konsistent)
@@ -626,12 +634,29 @@ export async function handleVoiceRoutes(request, env, path, params, ctx) {
     case "/voice/cancel": {
       if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
 
+      if (!(await rateLimit(env, `voice_cancel:${me}`, 60_000, 30, { failOpen: false }))) {
+        return json(request, { error: "Too many requests" }, 429);
+      }
+
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
       const callId = String(body.callId || "");
       const to     = String(body.to || "").toLowerCase();
       if (!isCallId(callId)) return json(request, { error: "Invalid 'callId'" }, 400);
       if (!isHandle(to))     return json(request, { error: "Invalid 'to'" }, 400);
+
+      // Participant-Check: nur der Caller darf seinen eigenen ringing-Call cancellen.
+      // Ohne diesen Check könnte jeder mit Kenntnis der callId (Leak via Logs)
+      // fremde voice_state-KV-Slots löschen und Fake-cancel-Events triggern.
+      const call = await getCallForUser(env, callId, me);
+      if (!call || call.role !== "caller" || call.peer !== to) {
+        return json(request, { error: "No matching outgoing call" }, 404);
+      }
+      // Idempotenz: bereits beendete Calls einfach 200 zurückgeben — verhindert
+      // double-side-effects bei Retry/stale-Notifications.
+      if (['ended', 'declined', 'missed', 'cancelled'].includes(String(call.status))) {
+        return json(request, { ok: true, alreadyEnded: true, status: call.status });
+      }
 
       const endedAt = Date.now();
 
@@ -668,6 +693,10 @@ export async function handleVoiceRoutes(request, env, path, params, ctx) {
     case "/voice/hangup": {
       if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
 
+      if (!(await rateLimit(env, `voice_hangup:${me}`, 60_000, 30, { failOpen: false }))) {
+        return json(request, { error: "Too many requests" }, 429);
+      }
+
       const body = await readJson(request);
       if (!body) return json(request, { error: "Invalid JSON" }, 400);
       const callId = String(body.callId || "");
@@ -675,21 +704,26 @@ export async function handleVoiceRoutes(request, env, path, params, ctx) {
       if (!isCallId(callId)) return json(request, { error: "Invalid 'callId'" }, 400);
       if (!isHandle(to))     return json(request, { error: "Invalid 'to'" }, 400);
 
+      // Participant-Check: nur caller/callee dieses Calls darf hangup machen,
+      // und der `to` muss tatsächlich der peer sein. getCallForUser filtert
+      // strict auf caller==me OR callee==me — ohne diesen Check könnte jeder
+      // mit Kenntnis der callId (Log-Leak) fremde Calls killen.
+      const call = await getCallForUser(env, callId, me);
+      if (!call || call.peer !== to) {
+        return json(request, { error: "No matching call" }, 404);
+      }
       // Idempotenz: Hangup auf bereits beendetem Call rejecten — kein zweiter
       // hangup-push an den Peer. Verhindert stale-Notification-Klick-Replays
       // und Doppel-Hangups bei flackernden Netzverbindungen.
-      const callRow = await env.RENEX_DB.prepare(
-        `SELECT answered_at, started_at, status FROM call_log WHERE id = ?`
-      ).bind(callId).first();
-      if (callRow && ['ended', 'declined', 'missed', 'cancelled'].includes(String(callRow.status))) {
-        return json(request, { ok: true, alreadyEnded: true, status: callRow.status });
+      if (['ended', 'declined', 'missed', 'cancelled'].includes(String(call.status))) {
+        return json(request, { ok: true, alreadyEnded: true, status: call.status });
       }
 
       const endedAt = Date.now();
 
       // Dauer aus answered_at berechnen (falls vorhanden)
       try {
-        const base = callRow?.answered_at || callRow?.started_at || endedAt;
+        const base = call.answered_at || call.started_at || endedAt;
         const duration_s = Math.max(0, Math.round((endedAt - base) / 1000));
         await env.RENEX_DB.prepare(
           `UPDATE call_log

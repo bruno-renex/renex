@@ -240,13 +240,15 @@ export function createAudioLevelMeter(stream, onLevel) {
  * ignoriert. Wir rufen das beim "Anruf starten"- und "Annehmen"-Klick auf:
  * - Erzeugt einen kurzlebigen AudioContext im User-Gesture-Frame
  * - Spielt einen 1-Sample-Silent-Buffer ab (klassischer iOS-Unlock-Trick)
- * - Schliesst den Context wieder, damit kein Resource-Leak entsteht
+ * - Schliesst den Context nach 500ms — getUserMedia muss in dem Fenster laufen
  *
- * Idempotent — mehrfach aufrufen ist harmlos.
+ * Wichtig: KEIN persistenter `_audioUnlocked`-Guard mehr — iOS-Safari benötigt
+ * je nach Audio-Session-State einen FRESH unlock pro Call. Symptom: 2nd call
+ * in der gleichen PWA-Session lieferte `getUserMedia` einen track mit
+ * `readyState=ended` weil Audio-Session zwischen den Calls in 'interrupted'
+ * Status gegangen war.
  */
-let _audioUnlocked = false;
 export function unlockAudio() {
-  if (_audioUnlocked) return;
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
@@ -259,9 +261,9 @@ export function unlockAudio() {
     if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
       ctx.resume().catch(() => {});
     }
-    setTimeout(() => { try { ctx.close(); } catch {} }, 200);
-    _audioUnlocked = true;
-    console.log('📞 audio unlock invoked (user-gesture)');
+    // 500ms reicht für getUserMedia + addLocalTracks Pipeline
+    setTimeout(() => { try { ctx.close(); } catch {} }, 500);
+    console.log('📞 audio unlock invoked (user-gesture, ctx.state=' + ctx.state + ')');
   } catch (e) {
     console.warn('📞 audio unlock failed:', e?.message);
   }

@@ -4,6 +4,52 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-05-27 — v1.0.0: Public Open-Source-Release 🚀
+
+RENEX-Repository öffentlich verfügbar: [`github.com/bruno-renex/renex`](https://github.com/bruno-renex/renex).
+
+### ✨ Added
+
+**Spec & Standard:**
+- [`PROTOCOL.md`](./PROTOCOL.md) als **Stable v1.0** veröffentlicht — Open Standard
+  `renex/1` für Passkey-only, AI-freie, E2E-verschlüsselte Echtzeit-Kommunikation.
+- Sub-Specs: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md), [`RECOVERY.md`](./RECOVERY.md),
+  [`GROUPS_MULTIDEVICE.md`](./GROUPS_MULTIDEVICE.md), [`VOICE.md`](./VOICE.md).
+
+**Lizenz-Setup:**
+- Spec, Docs, Frontend: MIT ODER Apache-2.0 (max. Verbreitung).
+- Reference-Server: AGPL-3.0 (Schutz vor Big-Tech-Forks-ohne-Beitrag).
+
+**GitHub-Setup:**
+- CI via GitHub Actions (npm test on push/PR).
+- Issue-Templates (bug, feature, spec-question), PR-Template, CODEOWNERS.
+- Security-Policy ([`SECURITY.md`](../SECURITY.md)), Bug-Bounty-Lifetime-Pass.
+
+### 🔄 Changed
+
+- `wrangler.toml` aus repo entfernt; `wrangler.toml.example` mit Placeholder-IDs
+  für Forks.
+- README-Wording entschärft für Reddit/HN-Survivability (siehe Commit
+  `d9dc841`): „first passkey-only" → „passkey-native", „Zero bots" →
+  „bot-resistant", technisch ungenaues „biometrischer Schlüssel" → korrekte
+  WebAuthn-Erklärung.
+
+### 🔒 Security
+
+- Voice 1:1 Security-Audit + Härtung abgeschlossen (Phase 8a):
+  `/voice/hangup`/`/voice/cancel` Participant-Check, `/voice/room/*`
+  deaktiviert (war Klartext-SDP-Pfad), `auth`-Feld REQUIRED auf
+  `/voice/ring` + `/voice/answer`. Server-Härtung: fail2ban, SSH-Lockdown,
+  COTURN_SECRET rotiert, denied-peer-ip + Quotas.
+
+### 📝 Notes
+
+Status: **Pre-Beta**. Erste Public Beta-User erwartet Juli 2026 (Phase 7).
+Voice-Channels (Multi-Party, LiveKit) + Signal-Protocol-Migration kommen
+in Phase 8b–8d (Aug-Nov 2026) als „v2.0-Update".
+
+---
+
 ## 2026-05-13 — Phase 4b: Channel-Send/Receive live
 
 Channels sind ab jetzt funktional. End-to-End in Production verifiziert:

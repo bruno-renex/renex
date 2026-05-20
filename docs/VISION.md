@@ -155,7 +155,7 @@ Diese Entscheidungen wurden bewusst getroffen und sind **NICHT verhandelbar** oh
 | Entscheidung | Wert | Begründung |
 |---|---|---|
 | Authentifizierung | WebAuthn/Passkey only | Markenkern |
-| E2E-Crypto | WebCrypto (Phase 1), Signal Protocol (Phase 2) | Schritt für Schritt |
+| E2E-Crypto | WebCrypto (Phase 1), Signal Protocol (Phase 8) | Schritt für Schritt |
 | Voice 1:1 | WebRTC P2P + self-hosted coturn (Hetzner CH/DE) | Privacy-Max (TURN sieht nur encrypted SRTP), 10× günstiger als CF Realtime |
 | Voice-Channels (Gruppen) | self-hosted LiveKit SFU (Apache-2.0) mit E2E Frame-Encryption über bestehendes GSK-System | Open-Standard-konform (Apache-2.0), Hetzner-self-hostbar, keine US-Jurisdiktion (FISA/NSL/CLOUD Act), Frame-Encryption hält Server zero-knowledge |
 | Backend | Cloudflare Workers + D1 + KV + R2 + DO | Bereits vorhanden, edge-native |
@@ -187,7 +187,7 @@ Diese Entscheidungen wurden bewusst getroffen und sind **NICHT verhandelbar** oh
 | Frontend | Open Source (MIT/Apache 2.0) |
 | Backend | Open Source (MIT/Apache 2.0) |
 | Spec | Public, versioniert |
-| Repository | `github.com/renex/renex` (öffentlich ab Phase 2) |
+| Repository | `github.com/bruno-renex/renex` (öffentlich ab 2026-05-27) |
 | Contributor-Lizenz | DCO (Developer Certificate of Origin) |
 
 ---
@@ -447,11 +447,11 @@ Master-Docs geschrieben (`VISION.md`).
 - ❌ Hardware-Attestation: deferred zu Phase 9 (Year 1)
 - ❌ Behavioral-Analysis: deferred zu Phase 9
 
-### Phase 2 — Open Standard veröffentlichen *(Wo 5-6: 2026-06-16 → 2026-06-29, parallel zu Phase 5-Light)*
-- GitHub-Repo öffentlich
-- Spec finalisiert (`PROTOCOL.md`)
-- AGPL Backend / MIT Frontend
-- CI eingerichtet (GitHub Actions)
+### Phase 2 — Open Standard veröffentlichen 🚀 *(2026-05-27, vorgezogen von Wo 5-6)*
+- GitHub-Repo `github.com/bruno-renex/renex` öffentlich am 2026-05-27
+- Spec finalisiert ✅ ([`PROTOCOL.md`](./PROTOCOL.md) Stable v1.0 seit 2026-05-20)
+- AGPL Backend / MIT+Apache Frontend ✅ ([`LICENSE`](../LICENSE) Triple-Setup)
+- CI eingerichtet (GitHub Actions) — Tag-3 vor Launch
 
 ### Phase 6 — Brand & Launch-Prep *(Wo 7: 2026-06-30 → 2026-07-06)*
 - Landing-Page Redesign
@@ -614,6 +614,7 @@ Wenn eine strategische Entscheidung geändert wird, hier dokumentieren:
 | 2026-05-13 | **Beta-Launch-Termin** | Okt/Nov 2026 (16 Wo) | **Mitte/Ende Juli 2026** (~10 Wo) | Phase 1 ist stable Foundation, Phase 3 → 3A (Voice deferred), Phase 4 deferred, Phase 5-Light, Phase 2 parallel. ~3 Monate früher live = früheres User-Feedback, momentum maintained. Trade-off: „Text-First Discord-Killer" Marketing-Pitch statt Voice am Tag 1. |
 | 2026-05-13 | **Voice/PTT/Screen-Sharing Phase** | Phase 3 (mit Beta) | **Phase 8 (post-Beta, gemeinsam mit Signal Protocol)** | 3-4 Wochen Solo-Arbeit für WebRTC SFU + UI. Voice + Signal Protocol als „v2.0-Update" gebündelt vermarktet. Detail: [`SERVERS.md`](./SERVERS.md) Decision Log 2026-05-13. |
 | 2026-05-15 | **Voice-Infrastruktur** | „WebRTC mit Cloudflare TURN/SFU" (CF Realtime für Channels) | **Self-hosted: coturn für 1:1, LiveKit (Apache-2.0) für Voice-Channels — beide auf Hetzner CH/DE** | (1) **Privacy-Bruch CF**: CF Realtime SFU im Plaintext-Modus wäre DTLS-Endpoint, hätte technisch Zugriff auf Audio. Im Frame-Encrypted-Modus immerhin Metadata + US-Jurisdiktion (FISA 702 / NSL / CLOUD Act) — direkter Widerspruch zur „You Are The Key"-Brand-Position. Schweizer Hetzner-Hosting unterliegt nur DE-Justiz mit Transparenz-Pflicht. (2) **Open-Standard-Bruch**: CF-Lock-in im wichtigsten Layer (Voice = Discord-Killer-USP) würde verhindern dass Dritte RENEX-kompatible Server deployen können — bricht Pillar #3. LiveKit ist Apache-2.0, self-hostbar von jedem. (3) **Kosten**: bei 30k MAU Faktor 10-100× günstiger (~80€/Mo vs ~$3'000+/Mo CF). (4) **Praxis-Bestätigung 2026-05-15**: CF Realtime TURN-Allocations zeigten in Tests beidseitige Carrier-NAT-Probleme (alle relay↔relay-Pairs blieben in-progress, kein STUN-Throughput). Self-hosted coturn löst das mit eigener PERMISSIONS-Forwarding-Config. (5) **GSK-Wiederverwendung**: existierendes Group-Sender-Key-System aus Phase 1C wird via HKDF-Derivation für Frame-Encryption nachgenutzt — keine neue Krypto-Schicht. (6) **Reliability-Tradeoff**: single-Server-Setup ist Year-1-akzeptabel (99.5% Uptime), Multi-Region-Cluster ab Year 3 wenn Pro-MRR die Infra finanziert. Phase-8-Architektur-Skizze von 2026-05-15-Session (LiveKit-Token-Flow, Frame-Crypto, Hetzner-Deploy-Script) verfügbar — VOICE.md-Detail-Spec folgt zu Phase-8-Start. |
+| 2026-05-20 | **Phase 2 vorziehen** (Open-Source-Launch) | (A) Original-Plan Wo 5-6 (2026-06-16+) / (B) sofort, parallel zu Phase 3A | **B** | Phase 1 ist stabil deployed, PROTOCOL.md ist Stable v1.0, Voice 1:1 (Phase 8a) ist live. Open-Source-Repo schon vor Beta-Launch zu öffnen schafft Reddit/HN-Visibility, GitHub-Stars als Social-Proof + zieht erste Contributors an. Trade-off: Phase 3A (Server/Channels-Polish) wird public sichtbar während Work-in-Progress — akzeptabel mit „Pre-Beta"-Status-Disclaimer. 8-Tage-Sprint 2026-05-20 → 2026-05-27. |
 
 ---
 

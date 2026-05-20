@@ -1,10 +1,21 @@
 # Das RENEX-Manifest
 
-> **AI-FREE FOREVER. PASSKEY-ONLY. HUMANS ONLY.**
+> **PASSKEY-ONLY. HUMAN-FIRST. OPEN-STANDARD.**
 
-**Version:** 1.1
-**Letzte Aktualisierung:** 2026-05-14
+**Version:** 1.2
+**Letzte Aktualisierung:** 2026-05-20
 **Lizenz:** CC BY 4.0 — du darfst dieses Manifest zitieren, mit Attribution.
+
+---
+
+## Warum jetzt
+
+RENEX ist nicht „noch ein Messenger". RENEX ist eine philosophische Antwort
+auf ein zunehmend AI-generiertes Internet.
+
+Wir bauen nicht *gegen* AI. Wir bauen *für* Menschen, in einer Zeit wo die
+Unterscheidung zwischen beiden verschwimmt. Wenn du in fünf Jahren mit
+jemandem auf RENEX redest, sollst du wissen: da sitzt ein Mensch.
 
 ---
 
@@ -24,10 +35,11 @@ Du bist der Schlüssel. **YOU ARE THE KEY.**
 
 Weil das Internet, das wir 2026 haben, kaputt ist.
 
-- **Discord** ist eine Datenkrake mit Bot-Spam.
-- **WhatsApp** ist Meta. Reicht.
-- **Signal** ist gut. Signal verlangt eine Telefonnummer.
-- **Telegram** ist nicht E2E by default und hostet halb-öffentliche Channels für alles.
+- **Discord** ist auf Skalierung, Integrations und Automation optimiert —
+  das ist legitim, aber nicht was wir wollen.
+- **WhatsApp** gehört Meta. Reicht.
+- **Signal** ist solide. Signal verlangt eine Telefonnummer.
+- **Telegram** ist nicht E2E by default und hostet halb-öffentliche Channels.
 - **Threema** ist ehrlich, aber niemand benutzt es.
 
 Und alle gemeinsam: sie haben sich der Realität ergeben, dass AI-generated-Content,
@@ -35,7 +47,9 @@ Bot-Armeen und LLM-Spam Teil des Produkts sind.
 
 Wir nicht. Nicht heute. Nicht in fünf Jahren.
 
-Wenn du auf RENEX schreibst, schreibst du an einen Menschen. Punkt.
+Wenn du auf RENEX schreibst, schreibst du an einen Menschen.
+Wir können das nicht garantieren — aber wir machen Automatisierung
+technisch und wirtschaftlich aufwändig genug, dass es sich selten lohnt.
 
 ---
 
@@ -50,13 +64,18 @@ Marketing-System scrapen kann. Nicht eine Telefonnummer, die ein Staat trianguli
 Recovery? Eine 12-Wort-Phrase. Auf Papier. In deiner Hand.
 Wenn du die Phrase verlierst, ist dein Account weg. Das ist Absicht — nicht ein Bug.
 
-### 2. AI-Free
+### 2. Human-First
 
-Keine Bots. Keine API für Bots. Keine Webhooks, in die ein Bot pushen könnte.
-Keine "AI-Assistants", die freundlich Vorschläge machen.
+**Wir beweisen Menschlichkeit nicht — wir machen Automatisierung
+unwirtschaftlich.**
 
-Wir erzwingen es **technisch** (Captcha, Rate-Limits, Hardware-Attestation, kein Public-API)
-und **sozial** (AGB explizit, sofortiger Bann bei Verstoß).
+Keine Bot-APIs. Keine Webhooks. Keine "AI-Assistants", die freundlich
+Vorschläge machen. Stattdessen: Captcha, Rate-Limits, Hardware-Attestation
+als Roadmap-Item, AGB explizit, sofortiger Bann bei Verstoß.
+
+Wer Bots betreibt, fliegt. Wer ein Tool wie Grammarly nutzt um seinen
+eigenen Text zu polishen, ist sein Business — wir kontrollieren keine
+User-side-Tools.
 
 Wenn dein Use-Case einen Bot erfordert: such dir einen anderen Messenger.
 Wir streiten uns nicht. Wir sagen einfach nein.
@@ -188,9 +207,10 @@ versuchen werden, RENEX zu unterwandern:
 Wir sehen euch. Wir bauen die Plattform so, dass ihr nicht reinkommt.
 Wenn ihr es trotzdem schafft: wir bannen euch sofort, ohne Anhörung, ohne
 Berufung. Es gibt kein "das war ein Versehen". Es gibt kein "wir kennen euch
-nicht so genau". Wir sind hier explizit, nicht inklusiv.
+nicht so genau".
 
-Das ist nicht Hass. Das ist Hygiene.
+Wir setzen klare Grenzen — gegen Bot-Operatoren und Spam-Networks,
+nicht gegen Menschen. Das ist nicht Hass, das ist Hygiene.
 
 ---
 

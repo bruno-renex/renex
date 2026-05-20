@@ -302,6 +302,45 @@ Wir akzeptieren, dass Security-First ein Wachstumsfilter ist. Wir kompensieren a
 
 Der ehrliche harte Fall: Wenn ein User Recovery-Phrase **und** alle Devices verliert, ist der Account weg. Das steht in der AGB. Das wird in der UI gewarnt. Das ist Architektur, kein Bug. Wer das nicht akzeptiert, ist nicht unsere Zielgruppe.
 
+### 8. Warum nicht Matrix/Element, Session oder SimpleX?
+
+Drei gute Projekte mit ähnlichem Ethos, drei verschiedene Trade-offs:
+
+- **Matrix/Element:** Föderation ist Stärke und Bürde zugleich. Onboarding ist für Nicht-Techies hart („Wähle einen Homeserver" ist nicht das, was 95% der User wollen). E2E hat sich verbessert, ist aber per-Default nicht überall aktiv. Wir wählen Single-Server-Modell mit Open-Standard-Spec — ein User-Onboarding-Schritt weniger, Föderations-Option als Roadmap Phase 9+.
+
+- **Session:** Anonym by design (kein Account, kein Identifier außer Onion-ID). Stark für Whistleblower, schwach für persistente Communities. Wir bauen für stabile Identitäten + Clans + Wiedererkennung — Passkey statt Anonymität.
+
+- **SimpleX:** Per-Contact-Queues, kein User-Identifier — sehr starkes Privacy-Modell. Trade-off: Discovery ist hart (du musst Links/QR-Codes austauschen für jeden Kontakt). Wir wählen Handle-basierte Identität mit E2E — etwas weniger paranoid, dramatisch besseres UX für Gruppen.
+
+Wir respektieren alle drei. RENEX ist nicht für Whistleblower (nimm Session), nicht für Föderations-Enthusiasten (nimm Matrix), nicht für maximal-paranoide Akteure (nimm SimpleX). RENEX ist für die Lücke dazwischen: **Communities, die WhatsApp/Discord-Bequemlichkeit wollen, aber ohne Bots, ohne Email-Erpressung, ohne dass Meta mitliest.**
+
+### 9. Ist Passkey-only nicht Apple/Google-Lock-in?
+
+Das ist die häufigste Sorge — und sie ist berechtigt zur Hälfte.
+
+**Was stimmt:** Passkeys werden auf vielen Geräten in iCloud Keychain oder Google Password Manager synced. Wer ausschließlich Apple- oder Android-Geräte nutzt, hängt damit indirekt am Cloud-Sync dieser Anbieter.
+
+**Was wir dagegen tun:**
+
+- **Hardware-Security-Keys werden voll unterstützt.** YubiKey, SoloKey, Nitrokey — keine Cloud, keine Hersteller-Sync.
+- **Bitwarden/1Password/KeePassXC** unterstützen mittlerweile Passkey-Storage out-of-the-box. Wer einen self-hosted Passwort-Manager fährt, bleibt unabhängig.
+- **Recovery-Phrase ist der Master-Override.** Wenn alle Devices weg sind und du keine Apple/Google-Sync hast: 12-Wort-BIP39-Phrase reaktiviert den Account. Du bist nie an einen einzigen Anbieter gebunden.
+
+Praktisch: RENEX funktioniert ohne Apple-ID, ohne Google-Account, ohne Hersteller-Cloud. Aber wir lügen nicht — der einfachste Pfad nutzt Plattform-Sync, weil das die UX ist die Nutzer kennen. Wer das nicht will, hat alle Alternativen offen.
+
+### 10. Wie kann ich der Web-Distribution trauen? Reproducible Builds?
+
+Ehrliche Antwort: bei einer PWA aus dem Browser kannst du dem Server **nicht** vollständig vertrauen. Cloudflare Pages liefert das Frontend-Bundle aus — theoretisch könnte ein kompromittiertes Deployment dir einen modifizierten Client mit Backdoor schicken, der dann lokal die Krypto schwächt.
+
+**Was wir dagegen tun:**
+
+- **Open-Source-Frontend** (MIT/Apache-2.0). Bundle ist im Repo reproduzierbar via `npm install && npm run build` — output-Hash gegen Live-Bundle vergleichbar.
+- **CI-Build mit Hash-Veröffentlichung** (Roadmap Tag-3 vor Launch). Jeder Release-Tag erzeugt ein deterministisches Bundle, dessen SHA-256 wir publik machen. Audit-able von außen.
+- **Server kann nichts mit-decrypten.** Selbst bei Frontend-Backdoor: CMKs, GSKs, Recovery-Phrase verlassen das Device nie unverschlüsselt. Backdoor müsste lokale IndexedDB exfiltrieren — schwerer und sichtbar im Browser-Netzwerk-Tab.
+- **Phase 8 Roadmap:** Native Apps (Capacitor/Tauri) für Nutzer die reproducible binaries gegen Hash-Liste verifizieren wollen.
+
+Wer maximale Crypto-Pureness will: warte auf Native-Builds oder baue selbst aus dem Repo. PWA-Pfad ist der Convenience-Trade-off, nicht das Security-Maximum.
+
 ---
 
 > Diese FAQ ist Living Document. Wenn eine Frage hier nicht ehrlich beantwortet ist: schreib uns, mit Argumenten. Wir aktualisieren.

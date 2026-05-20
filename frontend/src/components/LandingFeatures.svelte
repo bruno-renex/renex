@@ -7,10 +7,13 @@
 
   let lang = $derived(i18nStore.lang);
 
+  // Alle 6 Cards sind gleichwertig — kein highlight-Property mehr, kein
+  // blauer Border-Accent on hover. Reine Karten-Liste, gleiche Wirkung
+  // pro Item (war: Passkey + Bot-resistant blau hervorgehoben).
   let features = $derived([
-    { title: lang.featurePasskeyTitle    || '🌍 Passkey-Only',         desc: lang.featurePasskeyDesc    || '', highlight: true },
+    { title: lang.featurePasskeyTitle    || '🔑 Passkey-Native Login', desc: lang.featurePasskeyDesc    || '' },
     { title: lang.featureE2eTitle        || '🔒 End-to-End Encryption',desc: lang.featureE2eDesc        || '' },
-    { title: lang.featureBotResistantTitle || '🤖 Bot-resistant',       desc: lang.featureBotResistantDesc || '', highlight: true },
+    { title: lang.featureBotResistantTitle || '🤖 Bot-resistant',       desc: lang.featureBotResistantDesc || '' },
     { title: lang.featureGuestTitle      || '🔗 Guest Access',         desc: lang.featureGuestDesc      || '' },
     { title: lang.featureCallsTitle      || '🎙️ Anrufe ohne US-Cloud', desc: lang.featureCallsDesc      || '' },
     { title: lang.featureZeroTrackTitle  || '🛡️ Zero Tracking',       desc: lang.featureZeroTrackDesc  || '' },
@@ -23,7 +26,7 @@
 
   <div class="features-grid">
     {#each features as f, i (i)}
-      <div class="feature-card" class:highlight={f.highlight}>
+      <div class="feature-card">
         <h3>{f.title}</h3>
         <p>{f.desc}</p>
       </div>
@@ -72,14 +75,10 @@
   }
 
   .feature-card:hover {
-    border-color: var(--accent-voice);
+    /* Neutrales hover-Feedback (transform + shadow) — kein blauer Border-Accent,
+       damit alle 6 Cards visuell gleichwertig bleiben. */
     transform: translateY(-2px);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
-  }
-
-  .feature-card.highlight {
-    border-color: var(--accent-voice);
-    background: linear-gradient(180deg, var(--bg-panel) 0%, rgba(56, 189, 248, 0.06) 100%);
   }
 
   .feature-card h3 {

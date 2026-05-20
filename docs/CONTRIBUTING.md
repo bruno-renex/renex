@@ -59,11 +59,14 @@ testest.
 ### 2.2 Setup
 
 ```bash
-git clone https://github.com/renex/renex.git
-cd renex/app.renex
+git clone https://github.com/bruno-renex/renex.git
+cd renex
 npm install
 npm test           # Vitest-Suite muss grün sein, bevor du etwas änderst
 ```
+
+Wenn du Backend lokal/in eigener Cloudflare-Account betreiben willst,
+brauchst du eine eigene `wrangler.toml` — siehe §2.4.
 
 ### 2.3 Frontend-Dev (Svelte)
 
@@ -76,11 +79,25 @@ npm run dev        # Vite-Dev-Server, Hot-Reload
 Backend läuft auf Cloudflare Workers — lokal via `wrangler dev`:
 
 ```bash
-npx wrangler dev   # benötigt eigene wrangler.toml-Bindings (D1/KV/R2)
+cp wrangler.toml.example wrangler.toml
+# wrangler.toml ist gitignored — du editierst deine eigene Kopie
+
+# Eigene Cloudflare-Resources erstellen (einmalig):
+npx wrangler kv:namespace create RENEX_KV
+npx wrangler d1 create renex-db
+npx wrangler r2 bucket create renex-files
+
+# IDs aus den Output-Logs in wrangler.toml einsetzen (ersetzt YOUR_*_ID).
+# Dann Schema applizieren:
+npx wrangler d1 execute renex-db --file=schema.sql
+# (für alle weiteren schema-*.sql analog)
+
+# Dev-Server starten:
+npx wrangler dev
 ```
 
-`wrangler.toml` im Repo zeigt Bindings für die Reference-Infra. Für deine eigene
-Test-Umgebung kopiere die Datei nach `wrangler.local.toml` und ersetze die IDs.
+Externe Contributors: für PR-Tests reicht `npm test` — das Backend
+muss nicht lokal laufen.
 
 ### 2.5 Deploy (nur für Maintainer)
 
@@ -114,7 +131,7 @@ app.renex/
 ├── tests/                     # Vitest-Suite (Backend + Crypto)
 ├── schema*.sql                # D1-Migrationen (numbered, idempotent)
 ├── deploy.sh                  # Deploy-Script
-└── wrangler.toml              # Worker-Konfiguration
+└── wrangler.toml.example     # Template — `cp` zu wrangler.toml + eigene IDs
 ```
 
 **Faustregel:** wenn du Crypto, Auth, Multi-Device oder Recovery anfasst, schau zuerst in `docs/`. Wenn du UI-Polishing machst, kannst du direkt in `frontend/src/` starten.
@@ -130,7 +147,7 @@ app.renex/
 | **Specs** (`docs/PROTOCOL.md`, `MULTI_DEVICE.md`, `RECOVERY.md`) | MIT/Apache 2.0 Dual | maximale Standard-Verbreitung |
 | **`MANIFESTO.md`** | CC BY 4.0 | zitierbar mit Attribution |
 | **Frontend** (`frontend/`) | MIT/Apache 2.0 Dual | Forks willkommen |
-| **Reference-Backend** (`src/`, `wrangler.toml`, schemas) | AGPL v3 | Schutz vor Big-Tech-Forks-und-Hide |
+| **Reference-Backend** (`src/`, `wrangler.toml.example`, schemas) | AGPL v3 | Schutz vor Big-Tech-Forks-und-Hide |
 | **Tests** (`tests/`) | folgt der getesteten Komponente | — |
 
 Mit deinem PR akzeptierst du, dass dein Beitrag unter der Lizenz der Datei steht, die du änderst.

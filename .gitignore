@@ -7,6 +7,9 @@
 .dev.vars
 *.env
 .env*
+# Lokale wrangler.toml mit echten Cloudflare-Resource-IDs nicht committen.
+# Forks/Contributors kopieren wrangler.toml.example → wrangler.toml + eigene IDs.
+wrangler.toml
 
 # Node
 node_modules/
@@ -17,8 +20,10 @@ npm-debug.log*
 .idea/
 .claude/
 
-# DB Backups
+# DB Backups (D1 snapshots — können User-Daten enthalten, NIE committen)
 backup-*.sql
+*.bak
+*.bak.*
 
 # Vite / Svelte build output
 frontend/dist/

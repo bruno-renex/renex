@@ -1,0 +1,82 @@
+name = "renex-backend"
+main = "backend.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ── ROUTE ────────────────────────────────────────────
+# Eigene API-Domain. Cloudflare Custom Domain muss vorab im Dashboard angelegt sein.
+routes = [
+  { pattern = "api.YOUR_DOMAIN.tld", custom_domain = true }
+]
+
+# ── KV NAMESPACE ─────────────────────────────────────
+# Erstellen via: npx wrangler kv:namespace create RENEX_KV
+[[kv_namespaces]]
+binding = "RENEX_KV"
+id = "YOUR_KV_NAMESPACE_ID"
+
+# ── D1 DATABASE ──────────────────────────────────────
+# Erstellen via: npx wrangler d1 create renex-db
+# Schemas applizieren: npx wrangler d1 execute renex-db --file=schema.sql
+# (gleiches für schema-devices.sql, schema-feedback.sql, schema-push.sql,
+#  schema-servers.sql, schema-terms.sql, schema-voice.sql)
+[[d1_databases]]
+binding = "RENEX_DB"
+database_name = "renex-db"
+database_id = "YOUR_D1_DATABASE_ID"
+
+# ── DURABLE OBJECT (User-Sessions / WebSocket-Routing) ──
+[[durable_objects.bindings]]
+name = "USER_SESSION_DO"
+class_name = "UserSessionDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["UserSessionDO"]
+
+# ── R2 BUCKET (Recovery-Bundles + File-Uploads) ──────
+# Erstellen via: npx wrangler r2 bucket create renex-files
+[[r2_buckets]]
+binding = "RENEX_FILES"
+bucket_name = "renex-files"
+
+# ── CRON-TRIGGER (Auto-Revoke, etc.) ─────────────────
+[triggers]
+crons = ["0 * * * *"]
+
+# ======================================================
+# VAPID Keys für Web Push Notifications
+# Public Key = im Frontend (VAPID applicationServerKey)
+# Private Key = nur Backend (JWT-Signierung)
+#
+# GENERIEREN:
+#   npx web-push generate-vapid-keys
+#
+# Public hier eintragen. Private als Secret:
+#   npx wrangler secret put VAPID_PRIVATE_KEY
+# ======================================================
+[vars]
+VAPID_PUBLIC_KEY = "YOUR_VAPID_PUBLIC_KEY"
+VAPID_SUBJECT = "mailto:push@YOUR_DOMAIN.tld"
+# VAPID_PRIVATE_KEY → als Secret setzen: npx wrangler secret put VAPID_PRIVATE_KEY
+
+# ── SENTRY (Error-Tracking) ──────────────────────────
+# Frontend-DSN ist publik (wird im Browser-Code sichtbar). EU/Germany-Instanz
+# für DSGVO/DSG-Compliance empfohlen. Backend-DSN ist Secret.
+# Wenn du Sentry NICHT nutzt: einfach leer lassen oder Zeilen entfernen.
+SENTRY_DSN_FRONTEND = ""
+ENVIRONMENT = "production"
+
+# ======================================================
+# WEITERE SECRETS (via `npx wrangler secret put`, nicht hier eintragen):
+#
+#   COTURN_SECRET           — HMAC-Secret für TURN-credential-Generation
+#                             (siehe docs/VOICE.md §2). Wenn du keinen eigenen
+#                             coturn betreibst, kann /voice/turn-credentials
+#                             auf STUN-only fallback gehen.
+#   VAPID_PRIVATE_KEY       — JWT-Signing für Web Push (s. oben)
+#   TURNSTILE_SECRET        — Cloudflare Turnstile Captcha-Secret (Anti-AI)
+#   SENTRY_DSN_BACKEND      — falls Sentry für Backend-Errors gewünscht
+#
+# Liste: npx wrangler secret list
+# ======================================================

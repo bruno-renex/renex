@@ -10,8 +10,8 @@ einen Fix ausrollen können.
 
 **Stattdessen:**
 
-1. **E-Mail (bevorzugt):** `security@renex.id` (PGP optional, Key auf Anfrage)
-2. **GitHub Private Vulnerability Reporting:** [via Security-Tab des Repos](https://github.com/bruno-renex/renex/security/advisories/new)
+1. **GitHub Private Vulnerability Reporting (bevorzugt):** [via Security-Tab des Repos](https://github.com/bruno-renex/renex/security/advisories/new) — verschlüsselt von Haus aus, gut für sensitive Reports.
+2. **E-Mail:** `security@renex.id` — für Researcher ohne GitHub-Account. Klartext-Mail; für sensitive Details lieber GitHub-Reporting nutzen.
 
 ## Was wir brauchen
 

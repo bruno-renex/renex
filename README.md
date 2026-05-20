@@ -1,7 +1,7 @@
 # RENEX
 
-> **The first passkey-only messenger without AI.**
-> End-to-end encrypted. Zero bots. Open standard.
+> **Passkey-native, bot-resistant, human-first communication.**
+> End-to-end encrypted. Open standard. No email, no phone, no password.
 
 [![License: MIT/Apache](https://img.shields.io/badge/Spec%20%26%20Frontend-MIT%20OR%20Apache--2.0-blue)](./LICENSE)
 [![License: AGPL](https://img.shields.io/badge/Reference%20Server-AGPL--3.0-blue)](./LICENSE-AGPL)
@@ -15,11 +15,17 @@ RENEX ist ein Messenger und ein **offenes Protokoll** für Echtzeit-Kommunikatio
 gebaut auf drei nicht-verhandelbaren Versprechen:
 
 1. **Passkey-only** — keine E-Mail, kein Passwort, keine Telefonnummer. Deine
-   Identität ist dein biometrischer Schlüssel (WebAuthn / FIDO2).
-2. **AI-free** — keine Bots, keine Webhook-APIs, keine Auto-Responder.
-   Technisch und sozial erzwungen.
+   Identität ist ein Passkey auf deinen Geräten (WebAuthn / FIDO2), entsperrt
+   per Biometrie oder PIN.
+2. **Human-first** — keine Bots, keine AI-Agents, keine auto-generierten
+   Messages. RENEX hat bewusst keine Bot-APIs, keine Webhooks, keine
+   Public-Integration-Layer.
 3. **End-to-end encrypted** — DMs und Gruppen-Messages verlassen dein Gerät
    nur verschlüsselt. Server kann zu keinem Zeitpunkt Klartext lesen.
+
+Moderne Kommunikations-Plattformen optimieren auf Wachstum, Engagement und
+Automatisierung. RENEX optimiert auf **vertrauenswürdige menschliche
+Kommunikation**.
 
 **Tagline:** *YOU ARE THE KEY.*
 

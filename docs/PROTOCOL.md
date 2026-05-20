@@ -5,11 +5,11 @@
 > Client oder Servers. Sie integriert [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) (Multi-Device-Layer)
 > und [`RECOVERY.md`](./RECOVERY.md) (BIP39-Recovery) als verbindliche Sub-Specs.
 
-**Status:** Draft v1
+**Status:** Stable v1.0
 **Version:** 1.0 (Protocol-ID: `renex/1`)
-**Letzte Aktualisierung:** 2026-05-09
+**Letzte Aktualisierung:** 2026-05-20
 **Autor:** Bruno Hochstrasser
-**Verbindlich ab:** Phase 2 (Open-Source-Launch)
+**Verbindlich ab:** 2026-05-27 (Phase 2 — Open-Source-Launch)
 **Lizenz:** MIT/Apache 2.0 Dual (Spec & Reference-Frontend), AGPL v3 (Reference-Server)
 
 ---
@@ -54,7 +54,8 @@ RENEX-Client und einem RENEX-Server. Konform ist eine Implementierung, wenn sie:
 
 - Server-interne Storage-Layer (D1/KV/R2-Mapping ist Reference-Implementation, kein Standard).
 - Frontend-UI (Settings-Layout, Toast-Texte etc. — siehe [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §12).
-- Voice/Video-Signalisierung (separate Spec `VOICE.md`, geplant Phase 3).
+- Voice/Video-Signalisierung (siehe [`VOICE.md`](./VOICE.md); 1:1-Calls live
+  seit Phase 8a, Multi-Party-Voice-Channels in Phase 8b+).
 - Server-Server-Federation (out of scope für v1; Roadmap Phase 9+).
 
 ### 1.3 Verhältnis zu anderen Standards
@@ -683,6 +684,7 @@ Eine Implementierung darf den Conformance-Stamp tragen, wenn:
 | 2026-05-09 | Reactions E2E | (A) Plaintext / (B) E2E-encrypted | **A für v1** | Reactions sind Metadata-leakage-akzeptabel; E2E-Reactions = komplexer GSK-Handshake. Open Item für v2. |
 | 2026-05-09 | Federation | (A) v1-Spec / (B) Out of scope | **B** | Single-Server-Modell für Beta; Federation Phase 9+. |
 | 2026-05-09 | Sig-`ts`-Coverage | (A) Hard-Fail bei Mismatch / (B) Soft-Warn | **B** | `clientTs` vs `serverTs` Konsens noch nicht final; Hard-Fail würde Beta-User regressen. Verschärfung in v2. |
+| 2026-05-20 | Promotion `Draft v1` → `Stable v1.0` | (A) bleibt Draft / (B) Stable für Public-Launch | **B** | Spec stabil seit 6+ Monaten Implementation; alle 12 Sections gegen Code abgeglichen; keine breaking changes geplant für `renex/1`; Public-Launch 2026-05-27. |
 
 ---
 
@@ -694,7 +696,7 @@ Eine Implementierung darf den Conformance-Stamp tragen, wenn:
 | Reactions-E2E-Encryption (heute Plaintext-Metadata) | v2 | `PROTOCOL.md` §7.4 + §10 |
 | Sig-`ts`-Coverage: Hard-Fail-Cutoff (Decision-Date + Telemetrie-Threshold) | v2 | dieses Doc §11.1 |
 | TOFU-Replacement: Safety-Numbers / Verifikations-UX | Phase 8 (Signal-Migration) | `PROTOCOL_v2.md` (TBD) |
-| Voice/Video-Signalisierung (WebRTC SFU/TURN) | Phase 3 | `VOICE.md` (TBD) |
+| Voice-Channels (Multi-Party, LiveKit SFU + Frame-Encryption) | Phase 8b–8d | [`VOICE.md`](./VOICE.md) §3 |
 | Group-Member-Permission-Model (Roles, Mute, Ban) | Phase 3 | `GROUPS.md` (TBD) |
 | Server-Server-Federation | Phase 9+ | `FEDERATION.md` (TBD) |
 | Hardware-Attestation-Layer (Anti-Bot, VISION §2 Punkt 2) | Phase 5 | `ATTESTATION.md` (TBD) |

@@ -1,0 +1,17 @@
+# Default owner for everything
+*                           @bruno-renex
+
+# Protocol & spec changes — explicit review
+/docs/PROTOCOL.md           @bruno-renex
+/docs/MULTI_DEVICE.md       @bruno-renex
+/docs/RECOVERY.md           @bruno-renex
+/docs/VISION.md             @bruno-renex
+/docs/MANIFESTO.md          @bruno-renex
+
+# Security, licensing, contributing
+/SECURITY.md                @bruno-renex
+/LICENSE*                   @bruno-renex
+/docs/CONTRIBUTING.md       @bruno-renex
+
+# CI and repo governance
+/.github/                   @bruno-renex

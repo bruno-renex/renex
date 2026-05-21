@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/bruno-renex/renex/security/advisories/new
+    about: Report security issues privately through GitHub Security Advisories — not in public issues.
+  - name: General discussion
+    url: https://github.com/bruno-renex/renex/discussions
+    about: Open-ended questions, ideas, and conversations.

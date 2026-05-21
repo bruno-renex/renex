@@ -1,41 +1,44 @@
-# RENEX — Lizenzübersicht
+# RENEX — License Overview
 
-RENEX wird unter einer **Dual-Lizenz-Struktur** veröffentlicht. Welche Lizenz
-für welchen Teil gilt, hängt vom Verzeichnis ab:
+RENEX is published under a **dual-license structure**. Which license applies
+to which part depends on the directory:
 
-| Verzeichnis / Inhalt | Lizenz | Datei |
+| Directory / Content | License | File |
 |---|---|---|
-| `frontend/` (Reference Client, Svelte/Vite) | **MIT OR Apache-2.0** (Dual, dein Wahl) | [`LICENSE-MIT`](./LICENSE-MIT), [`LICENSE-APACHE`](./LICENSE-APACHE) |
-| `docs/` (Spec, inkl. PROTOCOL.md, MULTI_DEVICE.md, RECOVERY.md) | **MIT OR Apache-2.0** (Dual, deine Wahl) | [`LICENSE-MIT`](./LICENSE-MIT), [`LICENSE-APACHE`](./LICENSE-APACHE) |
+| `frontend/` (Reference Client, Svelte/Vite) | **MIT OR Apache-2.0** (dual, your choice) | [`LICENSE-MIT`](./LICENSE-MIT), [`LICENSE-APACHE`](./LICENSE-APACHE) |
+| `docs/` (Spec, incl. PROTOCOL.md, MULTI_DEVICE.md, RECOVERY.md) | **MIT OR Apache-2.0** (dual, your choice) | [`LICENSE-MIT`](./LICENSE-MIT), [`LICENSE-APACHE`](./LICENSE-APACHE) |
 | `src/` (Reference Server, Cloudflare Workers) | **AGPL-3.0-only** | [`LICENSE-AGPL`](./LICENSE-AGPL) |
-| `tests/` | gleiche Lizenz wie das jeweils getestete Verzeichnis | siehe oben |
+| `tests/` | same license as the directory being tested | see above |
 
-## Warum diese Aufteilung?
+## Why this split?
 
-- **Spec & Frontend (MIT/Apache)** sollen sich maximal verbreiten. Jeder soll
-  eigene RENEX-kompatible Clients bauen können — ohne juristische Reibung.
-- **Reference Server (AGPL)** verhindert, dass Big-Tech den Server forkt,
-  um eigene SaaS-Versionen zu hosten ohne Verbesserungen zurückzugeben. Wer
-  einen RENEX-Server kommerziell betreibt, muss seine Modifikationen unter
-  AGPL veröffentlichen.
+- **Spec & Frontend (MIT/Apache)** are meant to spread as widely as possible.
+  Anyone should be able to build a RENEX-compatible client — without legal
+  friction.
+- **Reference Server (AGPL)** prevents hyperscalers from forking the server
+  to host their own SaaS versions without contributing improvements back.
+  If you operate a RENEX server commercially, you must publish your
+  modifications under AGPL.
 
-Wenn du einen **alternativen** Server schreiben willst (von Grund auf, ohne
-unsere `src/` zu forken), kannst du ihn unter jeder beliebigen Lizenz
-veröffentlichen — die Spec selbst ist permissiv.
+If you want to write an **alternative** server (from scratch, without
+forking our `src/`), you can release it under any license you choose — the
+spec itself is permissive.
 
 ## Contributor License
 
-Alle Beiträge stehen unter den oben genannten Lizenzen, abhängig vom
-Verzeichnis. Wir nutzen das **Developer Certificate of Origin (DCO)** —
-jeder Commit muss mit `Signed-off-by: Name <email>` signiert sein.
+All contributions are licensed under the licenses above, depending on the
+directory. We use the **Developer Certificate of Origin (DCO)** — every
+commit must be signed with `Signed-off-by: Name <email>`.
 Details: [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) §4.
 
 ## Trademarks
 
-Der Name **RENEX** und das RENEX-Logo sind keine durch die Lizenzen
-abgedeckten Rechte. Forks dürfen sich nicht „RENEX" nennen, ohne dass dies
-zu Verwechslungen führt — bitte einen distinkten Namen wählen.
+The name **RENEX** and the RENEX logo are not covered by these licenses.
+Forks must not call themselves "RENEX" if this would cause confusion —
+please choose a distinct name.
 
 ---
 
-**Copyright (c) 2026 Bruno Hochstrasser und RENEX-Contributors.**
+**Copyright (c) 2026 Bruno Hochstrasser and RENEX contributors.**
+</content>
+</invoke>

@@ -9,6 +9,10 @@
 
 ---
 
+> ⚠️ **Pre-beta, not externally audited.** RENEX Protocol v1 has not undergone third-party security review. Do not use for high-risk scenarios (whistleblowing, activist coordination in hostile jurisdictions, persistent journalism sources) until v1.0 audit is complete (planned Year 2). See [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md) for the full security assumptions and acknowledged weaknesses.
+
+---
+
 ## Was ist RENEX?
 
 RENEX ist ein Messenger und ein **offenes Protokoll** für Echtzeit-Kommunikation,

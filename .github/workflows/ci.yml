@@ -61,6 +61,7 @@ jobs:
         run: |
           for f in docs/MANIFESTO.md docs/VISION.md docs/PROTOCOL.md \
                    docs/MULTI_DEVICE.md docs/RECOVERY.md docs/GROUPS_MULTIDEVICE.md \
+                   docs/THREAT_MODEL.md \
                    docs/CONTRIBUTING.md docs/CHANGELOG.md \
                    LICENSE LICENSE-MIT LICENSE-APACHE LICENSE-AGPL \
                    README.md SECURITY.md; do

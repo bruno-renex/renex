@@ -2,6 +2,10 @@
 
 RENEX ist ein Krypto-Messenger. Sicherheits-Issues nehmen wir ernst.
 
+> ⚠️ **Pre-beta status — not externally audited.** RENEX has not undergone third-party security review. Until v1.0 audit completion (planned Year 2), do not rely on RENEX for high-risk threat scenarios. See [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md) for the full threat model + acknowledged weaknesses.
+
+---
+
 ## Wo bugs melden
 
 **Nicht** als GitHub-Issue — auch nicht „nur ein kleiner Verdacht".

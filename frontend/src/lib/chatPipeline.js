@@ -359,6 +359,52 @@ export async function ensureSecureDmSession(myHandle, peerHandle) {
   }
 }
 
+/**
+ * Re-publish den lokalen CMK an alle Peer- und Eigen-Devices unter dem AKTUELLEN
+ * `myHandle`. Notwendig nach Guest-Convert: `migrateMyHandle` re-encryptet das
+ * lokale CMK auf den neuen Storage-Key, aber der KV-Wrap (`e2e:cmk:${cid}:*`)
+ * liegt weiterhin unter dem alten `cid = [guest_xxx, peer].sort()`. Wenn der
+ * Empfänger den Convert verpasst hat, sucht er unter `[realHandle, peer].sort()`
+ * und findet nichts → `cmk_req` → Sender offline → unrecoverable.
+ *
+ * Idempotent — `/e2e/cmk/store` überschreibt einen existing KV-Eintrag mit
+ * identischem Wrap als no-op aus Sicht des Empfängers.
+ *
+ * @returns {Promise<{ok: boolean, wrapped?: number, reason?: string}>}
+ */
+export async function republishCMKForPeer(myHandle, peerHandle) {
+  try {
+    const cmk = await getCMKIfExists(peerHandle);
+    if (!cmk) return { ok: false, reason: 'no_local_cmk' };
+
+    const peerDevices = await fetchPeerDevices(peerHandle);
+    let myDevices = [];
+    try {
+      myDevices = await fetchPeerDevices(myHandle);
+    } catch {}
+
+    const myDeviceId = getDeviceId();
+    const recipients = [...peerDevices, ...myDevices].filter(d => d.deviceId !== myDeviceId);
+    if (recipients.length === 0) {
+      return { ok: false, reason: 'no_recipients' };
+    }
+
+    const payloads = await wrapCMKForInboxDevices(recipients, cmk);
+    if (payloads.length === 0) {
+      return { ok: false, reason: 'no_wraps' };
+    }
+
+    const r = await apiFetch('/e2e/cmk/store', {
+      method: 'POST',
+      body: { to: peerHandle, payloads },
+    });
+    return { ok: r.ok === true, wrapped: payloads.length };
+  } catch (e) {
+    captureException(e, { context: 'republishCMKForPeer', peerHandle });
+    return { ok: false, reason: 'exception' };
+  }
+}
+
 // ======================================================
 // Decrypt eingehender E2E-Message
 // ======================================================

@@ -611,6 +611,71 @@ export async function handleInviteRoutes(request, env, path, params) {
         "UPDATE messages SET convo_id = ? WHERE convo_id = ?"
       ).bind(newConvoId, oldConvoId).run();
 
+      // 2b. E2E-CMK-KV-Wraps migrieren: `e2e:cmk:${oldCid}:*` → `e2e:cmk:${newCid}:*`
+      // Sonst sucht der Empfänger nach Convert unter `[realHandle,peer].sort()` und
+      // findet nichts → cmk_req → konvertierter User evtl. offline → unrecoverable.
+      // Der Wrap selbst ist ECDH-encrypted für ein Empfänger-Device und damit
+      // handle-agnostisch — 1:1-Kopie reicht.
+      const oldCmkCid = [guestHandle, peerHandle].sort().join(":");
+      const newCmkCid = [realHandle, peerHandle].sort().join(":");
+      if (oldCmkCid !== newCmkCid) {
+        try {
+          const oldIdxKey = `e2e:cmk:index:${oldCmkCid}`;
+          const newIdxKey = `e2e:cmk:index:${newCmkCid}`;
+          let deviceIds = [];
+          const rawOldIdx = await env.RENEX_KV.get(oldIdxKey);
+          if (rawOldIdx) { try { deviceIds = JSON.parse(rawOldIdx); } catch {} }
+
+          let copied = 0;
+          for (const deviceId of deviceIds) {
+            if (typeof deviceId !== "string" || deviceId.length < 8 || deviceId.length > 64) continue;
+            const oldKvKey = `e2e:cmk:${oldCmkCid}:${deviceId}`;
+            const newKvKey = `e2e:cmk:${newCmkCid}:${deviceId}`;
+            const wrap = await env.RENEX_KV.get(oldKvKey);
+            if (!wrap) continue;
+            // Defensiv: existiert newKvKey schon (z.B. real-user → real-user Send vor Convert),
+            // NICHT überschreiben — der frischere Wrap ist autoritativ.
+            const existingNew = await env.RENEX_KV.get(newKvKey);
+            if (!existingNew) {
+              await env.RENEX_KV.put(newKvKey, wrap);
+            }
+            await env.RENEX_KV.delete(oldKvKey);
+            copied++;
+          }
+
+          if (copied > 0) {
+            // Index mergen: vorhandene deviceIds aus oldIdx in newIdx einbauen
+            let newIdx = [];
+            const rawNewIdx = await env.RENEX_KV.get(newIdxKey);
+            if (rawNewIdx) { try { newIdx = JSON.parse(rawNewIdx); } catch {} }
+            for (const did of deviceIds) {
+              if (typeof did === "string" && !newIdx.includes(did)) newIdx.push(did);
+            }
+            await env.RENEX_KV.put(newIdxKey, JSON.stringify(newIdx));
+            await env.RENEX_KV.delete(oldIdxKey);
+
+            // user-idx: peerHandle's und realHandle's user-Index müssen newCid kennen,
+            // oldCid raus. (peerHandle = Einlader; realHandle = ehem. Gast)
+            for (const u of [peerHandle, realHandle]) {
+              const userIdxKey = `e2e:cmk:user-idx:${u}`;
+              let userIdx = [];
+              const raw = await env.RENEX_KV.get(userIdxKey);
+              if (raw) { try { userIdx = JSON.parse(raw); } catch {} }
+              userIdx = userIdx.filter(c => c !== oldCmkCid);
+              if (!userIdx.includes(newCmkCid)) userIdx.push(newCmkCid);
+              await env.RENEX_KV.put(userIdxKey, JSON.stringify(userIdx));
+            }
+            // guest_xxx-User-Index ist obsolet — guest_sessions wird gleich auf
+            // converted markiert, der Account selbst ist tot.
+            await env.RENEX_KV.delete(`e2e:cmk:user-idx:${guestHandle}`);
+          }
+        } catch (e) {
+          // KV-Migration ist best-effort — der Convert selbst gilt auch ohne als gelungen.
+          // Frontend-Republish (App.svelte nach migrateMyHandle) ist der Fallback.
+          console.error("guest-convert: CMK-KV-migration failed", e);
+        }
+      }
+
       // 3. Conversation Members: alten Gast entfernen, echten User + Partner eintragen
       await env.RENEX_DB.prepare(
         "DELETE FROM conversation_members WHERE convo_id = ?"
@@ -649,7 +714,10 @@ export async function handleInviteRoutes(request, env, path, params) {
       ).bind(oldConvoId).run();
 
       // 7. System-Messages in neuer Konversation
-      // Hinweis: Alte Nachrichten sind nicht mehr entschlüsselbar
+      // Hinweis: Alte Nachrichten bleiben entschlüsselbar, da `sid` pro Message
+      // persistiert ist (messages.sid) und CMK bei A via `migratePeerHandle`
+      // re-encrypted wird (Live-WS-Event GUEST_CONVERTED oder Catchup via
+      // /contacts.previous_handle bei nächstem loadContacts-Call).
       await env.RENEX_DB.prepare(
         `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
          VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`

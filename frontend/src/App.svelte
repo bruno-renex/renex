@@ -26,7 +26,7 @@
   import { heartbeat } from './lib/multidevice.js';
   import { getRecoveryStatus } from './lib/recovery.js';
   import { uploadInboxKeyIfNeeded } from './lib/e2eKeys.js';
-  import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer, ensureSecureDmSession } from './lib/chatPipeline.js';
+  import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer, ensureSecureDmSession, republishCMKForPeer } from './lib/chatPipeline.js';
   import { isGuestHandle } from './lib/guestNames.js';
   import { isGuestConvertPending, performGuestConvert, readPendingGuestConvert } from './lib/guestConvert.js';
   import { migratePeerHandle, migrateMyHandle } from './lib/handleMigration.js';
@@ -141,6 +141,16 @@
                 const r = await migrateMyHandle(pendingPre.oldGuestHandle, conv.realHandle);
                 if (r?.renamed > 0) {
                   console.log(`🔁 Self-Migration: ${r.renamed} IDB-Keys umgeschrieben (${pendingPre.oldGuestHandle} → ${conv.realHandle})`);
+                }
+                // CMK-Republish: KV-Wrap unter altem `cid=[guest_xxx,peer].sort()` liegt
+                // weiterhin im KV. Empfänger sucht nach Convert unter `[realHandle,peer]`
+                // und findet nichts → cmk_req → wir offline → unrecoverable.
+                // Daher pro migrated peer einen frischen Wrap unter dem neuen cid posten.
+                for (const peer of (r?.migratedDmPeers || [])) {
+                  void republishCMKForPeer(conv.realHandle, peer).then(res => {
+                    if (res.ok) console.log(`📤 CMK-Republish ${peer}: ${res.wrapped} device-wraps publiziert`);
+                    else console.warn(`⚠️ CMK-Republish ${peer} failed: ${res.reason}`);
+                  });
                 }
               } catch (e) {
                 captureException(e, { context: 'postRegisterConvert.migrateMyHandle' });
@@ -274,6 +284,13 @@
             try {
               const r = await migrateMyHandle(pendingPre.token, conv.realHandle);
               if (r.renamed > 0) console.log(`🔁 Self-Migration: ${r.renamed} IDB-Keys umgeschrieben`);
+              // CMK-Republish: siehe Erklärung im post-register $effect.
+              for (const peer of (r?.migratedDmPeers || [])) {
+                void republishCMKForPeer(conv.realHandle, peer).then(res => {
+                  if (res.ok) console.log(`📤 CMK-Republish ${peer}: ${res.wrapped} device-wraps publiziert`);
+                  else console.warn(`⚠️ CMK-Republish ${peer} failed: ${res.reason}`);
+                });
+              }
             } catch (e) {
               captureException(e, { context: 'guestConvert.migrateMyHandle' });
             }

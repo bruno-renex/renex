@@ -46,7 +46,11 @@ export async function handleContactRoutes(request, env, path, params) {
              WHERE convo_id = IIF(? < c.contact_handle,
                ? || ':' || c.contact_handle,
                c.contact_handle || ':' || ?)
-            ) as last_ts
+            ) as last_ts,
+            (SELECT guest_handle FROM guest_sessions
+             WHERE created_by = ? AND converted_to = c.contact_handle
+             ORDER BY created_at DESC LIMIT 1
+            ) as previous_handle
           FROM contacts c
           WHERE c.user_handle = ? AND c.status NOT IN ('removed', 'rejected')
             AND (
@@ -59,7 +63,7 @@ export async function handleContactRoutes(request, env, path, params) {
               )
             )
           ORDER BY COALESCE(last_ts, 0) DESC
-        `).bind(handle, handle, handle, handle, now).all();
+        `).bind(handle, handle, handle, handle, handle, now).all();
 
         // Display-Names parallel aus KV holen (eliminiert N x /users/<h>/profile-Calls
         // im Frontend beim App-Boot). Profile-KV ist Hot-Path, billig.
@@ -85,6 +89,7 @@ export async function handleContactRoutes(request, env, path, params) {
             status: r.status,
             direction: r.direction ?? undefined,
             last_ts: r.last_ts || null,
+            previous_handle: r.previous_handle || null,
           }))
         });
         return new Response(body, {

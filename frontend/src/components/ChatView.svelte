@@ -9,6 +9,7 @@
   import { autoDeleteStore, autoDeleteLabel } from '../stores/autoDelete.svelte.js';
   import { toastStore } from '../stores/toast.svelte.js';
   import { memberActionsStore } from '../stores/memberActions.svelte.js';
+  import { presenceStore } from '../stores/presence.svelte.js';
   import ChatHeader from './ChatHeader.svelte';
   import MessageBubble from './MessageBubble.svelte';
   import ChatInput from './ChatInput.svelte';
@@ -91,6 +92,28 @@
   let messages = $derived(chatStore.messages);
   let isLoading = $derived(chatStore.isLoading);
   let pendingJumpTo = $derived(chatStore.pendingJumpTo);
+
+  // ── Decrypt-Pending-Banner ───────────────────────────────
+  // Zeigt einen Hinweis wenn Messages persistent verschlüsselt bleiben.
+  //
+  // DM-Pfad: Multi-Device-Race nach Guest-Convert — A's Device wurde erst
+  // hochgeladen NACHDEM B's CMK-Republish schon durch war. B muss kurz online
+  // kommen damit sein `cmk_req`-Handler den fehlenden Wrap nachreicht.
+  // Banner verschwindet sobald Peer wieder online ist ODER Decrypt klappt.
+  //
+  // Gruppen-Pfad: Analoger Race auf GSK-Ebene — entweder ein Sender hat seine
+  // GSK noch nicht für mein (neues) Device gewrapt, oder die GSK-Migration nach
+  // Convert wurde verpasst (GUEST_CONVERTED-WS-Event verloren).
+  // Banner ohne Online-Check (kein einzelner Peer in Group).
+  let hasPendingEncrypted = $derived(
+    messages.some(m => m.e2e && m.text === '🔐 …')
+  );
+  let peerIsOnline = $derived(
+    chat?.type === 'dm' && chat?.peer ? presenceStore.isOnline(chat.peer) : false
+  );
+  let showCmkPendingBanner = $derived(
+    hasPendingEncrypted && (chat?.type === 'group' || (chat?.type === 'dm' && !peerIsOnline))
+  );
 
   let messagesEl = $state(null);
 
@@ -187,6 +210,21 @@
         <button class="ad-btn-small" onclick={cancelAd} disabled={adBannerBusy} title={lang.cancel || 'Abbrechen'}>
           ✕
         </button>
+      </div>
+    {/if}
+
+    {#if showCmkPendingBanner}
+      <div class="cmk-pending-banner" role="status" aria-live="polite">
+        <div class="cmk-pending-icon">🔐</div>
+        <div class="cmk-pending-body">
+          {#if chat.type === 'dm'}
+            {(lang.cmkPendingBanner || 'Einige Nachrichten sind noch verschlüsselt. ')}
+            <strong>@{chat.peer}</strong>
+            {(lang.cmkPendingBannerSuffix || 'muss kurz online kommen — der fehlende Schlüssel lädt dann automatisch nach.')}
+          {:else}
+            {(lang.cmkPendingBannerGroup || 'Einige Nachrichten sind noch verschlüsselt. Sobald die Absender kurz online kommen, lädt der fehlende Schlüssel automatisch nach.')}
+          {/if}
+        </div>
       </div>
     {/if}
 
@@ -326,6 +364,33 @@
     font-size: 11px;
     padding: 3px 10px;
     border-radius: 10px;
+    font-weight: 600;
+  }
+
+  /* ── CMK-Pending-Hinweis (Multi-Device-Race nach Convert) ───── */
+  .cmk-pending-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-panel-alt);
+    flex-shrink: 0;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+  }
+  .cmk-pending-icon {
+    font-size: 18px;
+    flex-shrink: 0;
+    opacity: 0.85;
+  }
+  .cmk-pending-body {
+    flex: 1;
+    min-width: 0;
+  }
+  .cmk-pending-body strong {
+    color: var(--text-primary);
     font-weight: 600;
   }
 

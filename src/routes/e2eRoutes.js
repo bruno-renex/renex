@@ -740,11 +740,66 @@ export async function handleE2eRoutes(request, env, path, params) {
         // Friend-Graph enumerieren.
         if (!session.isGuest) {
           const ok = await isAcceptedContact(env, me, from);
-          if (!ok) return json(request, { payload: null });
+          if (!ok) {
+            console.warn(`cmk/fetch: ${me}→${from} blocked (not accepted contact)`);
+            return json(request, { payload: null });
+          }
         }
 
         const cid = [me, from].sort().join(":");
-        const raw = await env.RENEX_KV.get(`e2e:cmk:${cid}:${myDeviceId}`);
+        let raw = await env.RENEX_KV.get(`e2e:cmk:${cid}:${myDeviceId}`);
+
+        // Fallback bei payload=null: ist `from` ein konvertierter Gast? Dann liegt
+        // der Wrap noch unter dem ALTEN cid mit `guest_xxx`. Das passiert wenn:
+        //  - Der initiale Wrap aus der Guest-Phase nie zum neuen cid migriert wurde
+        //    (Convert-KV-Migration race / silently failed / pre-deploy data)
+        //  - Der Convert hat keine `migrateMyHandle`-Frontend-Migration auf Sender-
+        //    seite ausgelöst (Sender war never online to publish under new handle)
+        // Wir lookup'en hier defensiv den vorigen guest_handle, returnen den Wrap
+        // und kopieren ihn lazy zum neuen cid (one-shot self-heal).
+        if (!raw) {
+          const guestRow = await env.RENEX_DB.prepare(
+            `SELECT guest_handle FROM guest_sessions
+             WHERE converted_to = ? AND created_by = ?
+             ORDER BY created_at DESC LIMIT 1`
+          ).bind(from, me).first();
+          if (guestRow?.guest_handle) {
+            const oldCid = [me, guestRow.guest_handle].sort().join(":");
+            const oldKey = `e2e:cmk:${oldCid}:${myDeviceId}`;
+            raw = await env.RENEX_KV.get(oldKey);
+            if (raw) {
+              console.log(`cmk/fetch: ${me}→${from} fallback hit (was ${guestRow.guest_handle}), lazy-migrating wrap`);
+              // Lazy-Migration: Wrap zum neuen cid kopieren, alten Key löschen.
+              // Identical content — wrap ist device-ECDH-encrypted, handle-agnostisch.
+              const newKey = `e2e:cmk:${cid}:${myDeviceId}`;
+              await env.RENEX_KV.put(newKey, raw);
+              await env.RENEX_KV.delete(oldKey);
+              // Convo-Index auch lazy migrieren (best-effort).
+              try {
+                const oldIdxKey = `e2e:cmk:index:${oldCid}`;
+                const newIdxKey = `e2e:cmk:index:${cid}`;
+                const rawOldIdx = await env.RENEX_KV.get(oldIdxKey);
+                if (rawOldIdx) {
+                  let oldIdx = [];
+                  try { oldIdx = JSON.parse(rawOldIdx); } catch {}
+                  let newIdx = [];
+                  const rawNewIdx = await env.RENEX_KV.get(newIdxKey);
+                  if (rawNewIdx) { try { newIdx = JSON.parse(rawNewIdx); } catch {} }
+                  for (const did of oldIdx) {
+                    if (typeof did === "string" && !newIdx.includes(did)) newIdx.push(did);
+                  }
+                  await env.RENEX_KV.put(newIdxKey, JSON.stringify(newIdx));
+                  await env.RENEX_KV.delete(oldIdxKey);
+                }
+              } catch {}
+            } else {
+              console.warn(`cmk/fetch: ${me}→${from} no wrap (also no fallback under ${guestRow.guest_handle})`);
+            }
+          } else {
+            console.warn(`cmk/fetch: ${me}→${from} no wrap (no guest-convert history)`);
+          }
+        }
+
         if (!raw) return json(request, { payload: null });
 
         let payload = null;

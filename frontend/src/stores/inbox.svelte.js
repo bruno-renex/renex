@@ -15,6 +15,7 @@ import { get, set } from '../lib/storage.js';
 import { apiFetch } from '../lib/api.js';
 import { profileCache } from './profileCache.svelte.js';
 import { voiceStore } from './voice.svelte.js';
+import { migratePeerHandle } from '../lib/handleMigration.js';
 
 const SECTIONS = ["chats", "groups", "voice", "servers"];
 
@@ -171,6 +172,28 @@ export const inboxStore = {
         // Fallback-Prefetch nur für Handles wo Backend kein display_name geliefert hat.
         if (handlesNeedingFetch.length > 0) {
           profileCache.prefetch(handlesNeedingFetch);
+        }
+
+        // Guest-Convert-Catchup: für Kontakte mit `previous_handle` (= guest_xxx,
+        // der inzwischen registriert wurde) rufen wir `migratePeerHandle` nach,
+        // falls A das WS-Event `GUEST_CONVERTED` verpasst hat (offline während
+        // Convert; DO-Push persistiert das Event nicht). Sonst bleibt der CMK
+        // unter `cmk:me:guest_xxx` liegen und Decrypt für Messages vom neuen
+        // realHandle scheitert mit cmk_req → unrecoverable wenn Peer offline.
+        // Idempotent — `migratePeerHandle` returnt {renamed:0} bei no-op.
+        const pendingConverts = r.data.contacts
+          .filter(c => c.previous_handle && c.previous_handle !== c.handle);
+        if (pendingConverts.length > 0) {
+          void (async () => {
+            for (const c of pendingConverts) {
+              try {
+                const r2 = await migratePeerHandle(c.previous_handle, c.handle);
+                if (r2?.renamed > 0) {
+                  console.log(`🔁 Catchup-Migration: ${r2.renamed} IDB-Keys (${c.previous_handle} → ${c.handle})`);
+                }
+              } catch {}
+            }
+          })();
         }
       }
     } finally {

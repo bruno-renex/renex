@@ -113,6 +113,40 @@ Known design limitations that v2 will address:
 | No reproducible-build hashes per release | Pre-beta | Hash-publish in release notes + native builds (Capacitor/Tauri) |
 | Single-server topology (no federation) | Pre-beta | Federation spec — v3 roadmap |
 | Cloudflare-dependent reference server | Pre-beta | Documented as reference-impl lock-in, protocol portable |
+| Multi-Device CMK-Race on receiver-side device-add (see §4.1) | Pre-beta | Persistent `cmk_req` queue + sender-side device-add subscription |
+
+### 4.1 Multi-Device CMK Race after Guest-Convert
+
+**Scenario:** A invites B as Guest. B sends M1 as Guest, registers via passkey,
+sends M2 as real user, then goes offline immediately. A opens the app *after*
+B is offline (e.g. via push notification). If A's device was not in the
+inbox-index at the time of B's CMK-publish (e.g. because A's PWA had lost its
+IDB state and re-uploaded a fresh device key only on app-open), B's wrap will
+not target A's current device. A's `cmk_req` to B is queued in B's Durable
+Object backlog and delivered only when B reconnects.
+
+**Real-world impact:** Low. The standard flow assumes the receiver (A) has at
+least one stable device in the inbox-index before the sender (B) finalises
+their CMK distribution. iOS PWA IDB-eviction (7-day inactivity, storage
+pressure) is the main trigger. In production traffic the sender returns online
+within hours/days (push notification motivation), at which point the queued
+`cmk_req` is processed and the missing wrap is published.
+
+**Mitigation in UI:** ChatView shows a `🔐 Some messages are still encrypted — @peer needs to come online briefly` banner when undecryptable messages exist and peer is offline. The banner clears automatically as soon as the missing wrap arrives via DO-backlog delivery.
+
+**Truly-lost case:** If the sender never reconnects (account abandoned),
+historic messages from the Guest-Convert window remain undecryptable on A's
+new device. This is consistent with strict-E2E semantics — no key escrow.
+
+**Groups — analogous race:** The same multi-device race applies to GSK (group
+session key) distribution. GSKs are distributed via `/chat/send type=gsk`
+messages (DB-persistent) rather than KV-wraps, so the DO-backlog robustly
+delivers them on the receiver's next connect. The `GUEST_CONVERTED` WS-event
+to all group members triggers `migratePeerHandle`, which renames `gsk:peer:*`
+storage keys. The undecryptable-banner is shown in group chats too (without
+the peer-online check, since groups have N senders). Recovery semantics
+identical: if a sender is never online again, the GSK-wraps for receiver
+devices added after that sender's last distribution remain inaccessible.
 
 ---
 

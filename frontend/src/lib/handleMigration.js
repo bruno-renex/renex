@@ -154,14 +154,19 @@ export async function migratePeerHandle(oldPeer, newPeer) {
  *
  * @param {string} oldMe - alter Handle (z.B. "guest_2d7bd3a1")
  * @param {string} newMe - neuer Handle (z.B. "panther16")
- * @returns {Promise<{renamed: number}>}
+ * @returns {Promise<{renamed: number, migratedDmPeers: string[]}>}
+ *   migratedDmPeers — Liste der Peers für die ein CMK-Storage-Rename passiert
+ *   ist. Caller muss für jeden `republishCMKForPeer(newMe, peer)` triggern, damit
+ *   der KV-Wrap unter dem neuen `cid = [newMe,peer].sort()` liegt. Sonst kann
+ *   der Empfänger den Wrap nach Convert nicht fetchen.
  */
 export async function migrateMyHandle(oldMe, newMe) {
   const o = String(oldMe || '').toLowerCase();
   const n = String(newMe || '').toLowerCase();
-  if (!o || !n || o === n) return { renamed: 0 };
+  if (!o || !n || o === n) return { renamed: 0, migratedDmPeers: [] };
 
   let renamed = 0;
+  const migratedDmPeers = [];
 
   // 1. CMK-Keys: cmk:${oldMe}:${peer} → cmk:${newMe}:${peer} (mit Re-Encryption!)
   // Defensiv: rotation-map-Keys (`cmk:rotation-map:*`) nicht matchen.
@@ -171,7 +176,10 @@ export async function migrateMyHandle(oldMe, newMe) {
     const peer = k.slice(`cmk:${o}:`.length);
     if (!peer || peer.includes(':')) continue;
     peers.push(peer);
-    if (await _migrateCmkEntry(k, `cmk:${n}:${peer}`, o, peer, n, peer)) renamed++;
+    if (await _migrateCmkEntry(k, `cmk:${n}:${peer}`, o, peer, n, peer)) {
+      renamed++;
+      migratedDmPeers.push(peer);
+    }
   }
 
   // 2. Session-bound Keys: für jeden Peer wechselt sid = dmSessionId(me, peer). Plain-Werte.
@@ -204,5 +212,5 @@ export async function migrateMyHandle(oldMe, newMe) {
     if (await _migrateGskEntry(k, `gsk:peer:${n}:${rest}`, 'peer', o, n, groupId)) renamed++;
   }
 
-  return { renamed };
+  return { renamed, migratedDmPeers };
 }

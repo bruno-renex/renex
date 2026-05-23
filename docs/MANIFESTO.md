@@ -1,366 +1,324 @@
-# Das RENEX-Manifest
+# The RENEX Manifesto
 
 > **PASSKEY-ONLY. HUMAN-FIRST. OPEN-STANDARD.**
 
-**Version:** 1.2
-**Letzte Aktualisierung:** 2026-05-20
-**Lizenz:** CC BY 4.0 — du darfst dieses Manifest zitieren, mit Attribution.
+**Version:** 1.3
+**Last updated:** 2026-05-23
+**License:** CC BY 4.0 — you may quote this manifesto with attribution.
 
 ---
 
-## Warum jetzt
+## Why now
 
-RENEX ist nicht „noch ein Messenger". RENEX ist eine philosophische Antwort
-auf ein zunehmend AI-generiertes Internet.
+RENEX is not "another messenger". RENEX is a philosophical response to an increasingly AI-generated internet.
 
-Wir bauen nicht *gegen* AI. Wir bauen *für* Menschen, in einer Zeit wo die
-Unterscheidung zwischen beiden verschwimmt. Wenn du in fünf Jahren mit
-jemandem auf RENEX redest, sollst du wissen: da sitzt ein Mensch.
+We don't build *against* AI. We build *for* humans, in a time where the distinction between the two is blurring. When you talk to someone on RENEX five years from now, you should know: there's a human on the other side.
 
 ---
 
-## Was wir bauen
+## What we're building
 
-Einen Messenger für Menschen. Nur für Menschen.
+A messenger for humans. Humans only.
 
-Keine Bots. Keine AI-Companions. Keine Foundation-Models, die mitlesen.
-Keine Email als Identität. Keine Telefonnummer. Kein Passwort.
-Keine Werbung. Niemals.
+No bots. No AI companions. No foundation models reading along. No email as identity. No phone number. No password. No ads. Ever.
 
-Du bist der Schlüssel. **YOU ARE THE KEY.**
+You are the key. **YOU ARE THE KEY.**
 
 ---
 
-## Warum
+## Why
 
-Weil das Internet, das wir 2026 haben, kaputt ist.
+Because the internet we have in 2026 is broken.
 
-- **Discord** ist auf Skalierung, Integrations und Automation optimiert —
-  das ist legitim, aber nicht was wir wollen.
-- **WhatsApp** gehört Meta. Reicht.
-- **Signal** ist solide. Signal verlangt eine Telefonnummer.
-- **Telegram** ist nicht E2E by default und hostet halb-öffentliche Channels.
-- **Threema** ist ehrlich, aber niemand benutzt es.
+- **Discord** is optimized for scale, integrations, and automation — legitimate, but not what we want.
+- **WhatsApp** belongs to Meta. Enough said.
+- **Signal** is solid. Signal requires a phone number.
+- **Telegram** is not E2E by default and hosts half-public channels.
+- **Threema** is honest, but nobody uses it.
 
-Und alle gemeinsam: sie haben sich der Realität ergeben, dass AI-generated-Content,
-Bot-Armeen und LLM-Spam Teil des Produkts sind.
+And all of them together: they've accepted that AI-generated content, bot armies, and LLM spam are part of the product.
 
-Wir nicht. Nicht heute. Nicht in fünf Jahren.
+We haven't. Not today. Not in five years.
 
-Wenn du auf RENEX schreibst, schreibst du an einen Menschen.
-Wir können das nicht garantieren — aber wir machen Automatisierung
-technisch und wirtschaftlich aufwändig genug, dass es sich selten lohnt.
+When you write on RENEX, you write to a human. We can't guarantee this — but we make automation technically and economically expensive enough that it rarely pays off.
 
 ---
 
-## Die 5 Prinzipien
+## The 5 principles
 
-### 1. Passkey-Only
+### 1. Passkey-only
 
-Authentifizierung ausschließlich über WebAuthn / FIDO2.
-Deine Identität ist dein biometrischer Schlüssel. Nicht eine Email-Adresse, die ein
-Marketing-System scrapen kann. Nicht eine Telefonnummer, die ein Staat triangulieren kann.
+Authentication exclusively via WebAuthn / FIDO2. Your identity is your biometric key. Not an email address that a marketing system can scrape. Not a phone number that a state can triangulate.
 
-Recovery? Eine 12-Wort-Phrase. Auf Papier. In deiner Hand.
-Wenn du die Phrase verlierst, ist dein Account weg. Das ist Absicht — nicht ein Bug.
+Recovery? A 12-word phrase. On paper. In your hand. If you lose the phrase, your account is gone. That's by design — not a bug.
 
-### 2. Human-First
+### 2. Human-first
 
-**Wir beweisen Menschlichkeit nicht — wir machen Automatisierung
-unwirtschaftlich.**
+**We don't prove humanity — we make automation uneconomical.**
 
-Keine Bot-APIs. Keine Webhooks. Keine "AI-Assistants", die freundlich
-Vorschläge machen. Stattdessen: Captcha, Rate-Limits, Hardware-Attestation
-als Roadmap-Item, AGB explizit, sofortiger Bann bei Verstoß.
+No bot APIs. No webhooks. No "AI assistants" politely making suggestions. Instead: captcha, rate limits, hardware attestation as a roadmap item, explicit Terms of Service, immediate ban on violation.
 
-Wer Bots betreibt, fliegt. Wer ein Tool wie Grammarly nutzt um seinen
-eigenen Text zu polishen, ist sein Business — wir kontrollieren keine
-User-side-Tools.
+If you run bots, you're out. If you use a tool like Grammarly to polish your own text, that's your business — we don't control user-side tools.
 
-Wenn dein Use-Case einen Bot erfordert: such dir einen anderen Messenger.
-Wir streiten uns nicht. Wir sagen einfach nein.
+If your use case requires a bot: find another messenger. We don't argue. We just say no.
 
-### 3. Open Standard
+### 3. Open standard
 
-Das **RENEX Protocol v1** ist öffentlich, vollständig dokumentiert
-([`PROTOCOL.md`](./PROTOCOL.md), [`MULTI_DEVICE.md`](./MULTI_DEVICE.md), [`RECOVERY.md`](./RECOVERY.md)),
-versioniert.
+The **RENEX Protocol v1** is public, fully documented ([`PROTOCOL.md`](./PROTOCOL.md), [`MULTI_DEVICE.md`](./MULTI_DEVICE.md), [`RECOVERY.md`](./RECOVERY.md), [`THREAT_MODEL.md`](./THREAT_MODEL.md)), and versioned.
 
-Jeder Mensch darf einen RENEX-kompatiblen Server bauen. Jeder Mensch darf einen
-Client bauen. Lock-in ist das Gegenteil von Vertrauen.
+Anyone may build a RENEX-compatible server. Anyone may build a client. Lock-in is the opposite of trust.
 
-- **Spec & Frontend:** MIT/Apache 2.0 Dual — maximale Verbreitung.
-- **Reference-Server:** AGPL v3 — Schutz vor Big-Tech-Forks-und-Hide.
+- **Spec & frontend:** MIT OR Apache-2.0 (dual) — maximum spread.
+- **Reference server:** AGPL-3.0-only — protection against hyperscaler forks-and-hide.
 
-### 4. Privacy by Default
+### 4. Privacy by default
 
-Der Server lernt das absolute Minimum.
+The server learns the absolute minimum.
 
-- E2E-Verschlüsselung ist nicht optional. Auch nicht in Gruppen. Auch nicht in Voice.
-- Kontaktlisten leben auf deinem Gerät, nicht im Cloud-Index.
-- Keine Werbung. Keine Tracker. Kein "Analytics, weil wir's brauchen".
-- Schweizer Datenschutz-Standard (DSG + DSGVO).
-- Logs werden nicht über das technisch Nötige hinaus aufbewahrt.
+- E2E encryption is not optional. Not in groups. Not in voice.
+- Contact lists live on your device, not in a cloud index.
+- No ads. No trackers. No "analytics because we need them".
+- Swiss data-protection standard (DSG + GDPR).
+- Logs are not retained beyond the technically necessary.
 
-Wenn die Polizei klingelt: wir haben nichts, was sie haben wollen.
-Das ist Architektur, nicht Politik.
+If law enforcement knocks: we have nothing they want. That's architecture, not politics.
 
-### 5. Gamer-First UX
+### 5. Gamer-first UX
 
-Wir bauen keinen Enterprise-Compliance-Messenger. Wir bauen für Communities.
+We don't build an enterprise compliance messenger. We build for communities.
 
-- Niedrige Latency.
-- Voice-Channels mit Drop-in.
-- Push-to-Talk.
-- Screen-Sharing.
+- Low latency.
+- Voice channels with drop-in.
+- Push-to-talk.
+- Screen sharing.
 - Steam Rich Presence.
-- Keine Native App, weil PWA reicht und schneller ist.
+- No native app, because PWA is enough and faster.
 
-Performance > Schnickschnack. Bundle-Size matters.
+Performance > bells and whistles. Bundle size matters.
 
 ---
 
-## Was wir nie machen werden
+## What we will never do
 
-| ❌ Nicht | ❌ Niemals |
+| ❌ Won't | ❌ Never |
 |---|---|
-| Werbung schalten | User-Daten verkaufen |
-| Backdoors für Behörden einbauen | AI-Generated-Content erlauben |
-| Public-API für externe Bots öffnen | Verschlüsselung paywallen |
-| Phone/Email als Auth zulassen | Privacy-Features paywallen |
-| Tracking-Pixel | Algorithmischen Feed bauen |
-| Newsletter-Liste mit User-Daten füttern | "Verified Profile" gegen Aufpreis |
+| Run ads | Sell user data |
+| Build backdoors for governments | Allow AI-generated content |
+| Open a public API for external bots | Paywall encryption |
+| Allow phone/email as auth | Paywall privacy features |
+| Tracking pixels | Build an algorithmic feed |
+| Feed newsletter lists with user data | "Verified profile" for a fee |
 
-Das ist keine Marketing-Liste. Das sind harte Architektur-Entscheidungen.
-Wenn ein Investor verlangt, dass eine dieser Zeilen weicht: dann nehmen wir den
-Investor nicht. Bootstrap > Ausverkauf.
+This is not a marketing list. These are hard architectural decisions. If an investor demands one of these lines be softened: we don't take the investor. Bootstrap > sellout.
 
 ---
 
-## Was wir zugeben
+## What we admit
 
-Wir lügen nicht. Drei ehrliche Punkte:
+We don't lie. Three honest points:
 
-### 1. Cloudflare-Lock-in (heute)
+### 1. Cloudflare lock-in (today)
 
-Der Reference-Server läuft auf Cloudflare Workers, D1, KV, R2, Durable Objects.
-Das ist **Lock-in für die Reference-Implementation**, nicht für das Protokoll.
-Jeder kann einen RENEX-konformen Server auf eigener Infra bauen — die Spec
-schreibt nicht vor, wo er läuft.
+The reference server runs on Cloudflare Workers, D1, KV, R2, Durable Objects. That's **lock-in for the reference implementation**, not for the protocol. Anyone can build a RENEX-compliant server on their own infra — the spec does not prescribe where it runs.
 
-Wenn Cloudflare uns morgen rauswirft: das Protokoll überlebt. Die Daten der User
-sind E2E-encrypted und transportabel.
+If Cloudflare drops us tomorrow: the protocol survives. User data is E2E-encrypted and portable.
 
-### 2. WebAuthn-Coverage
+### 2. WebAuthn coverage
 
-Passkey-only ist Vision-konsequent, aber WebAuthn ist 2026 noch nicht überall
-schmerzfrei. Cross-Device-Passkeys per Bluetooth/QR sind teils flaky, manche
-Browser haben rough Edges. Wir tragen das, weil die Alternative (Email-Auth) den
-ganzen Markenkern bricht.
+Passkey-only is vision-consistent, but WebAuthn is not pain-free everywhere in 2026. Cross-device passkeys via Bluetooth/QR are sometimes flaky, some browsers have rough edges. We accept that, because the alternative (email auth) breaks the brand core entirely.
 
-### 3. Anti-AI ist Best-Effort
+### 3. Anti-AI is best-effort
 
-Wir können nicht garantieren, dass nie ein Bot durchschlüpft. Wir können
-garantieren, dass wir alles dafür tun: Hardware-Attestation, Behavioral-Analysis,
-Captcha-Hardening, sofortiger Bann bei Verstoß. Die AGB sind explizit. Wer
-trotzdem AI auf RENEX laufen lässt, fliegt — ohne Vorwarnung.
+We can't guarantee that no bot ever slips through. We can guarantee we do everything for it: hardware attestation, behavioral analysis, captcha hardening, immediate ban on violation. The Terms are explicit. Whoever runs AI on RENEX anyway is banned — without prior warning.
 
 ---
 
-## Was wir sind, was wir nicht sind
+## What RENEX is, what it is not
 
-| RENEX **ist**… | RENEX ist **nicht**… |
+| RENEX **is**… | RENEX is **not**… |
 |---|---|
-| Ein Messenger | Ein Social-Network mit Feed |
-| Open Source | Ein Crypto/Web3-Wallet |
-| Schweizer-gehostet | Eine Anonymous-Plattform |
-| Community-finanziert (heute) | VC-funded |
-| Brand-konform mit Privacy-First | Ein Discord-Klon |
-| Eine Gegenbewegung | Eine Compliance-Suite |
+| A messenger | A social network with a feed |
+| Open source | A Crypto/Web3 wallet |
+| Swiss-hosted | An anonymous platform |
+| Community-funded (today) | VC-funded |
+| Brand-aligned with privacy-first | A Discord clone |
+| A counter-movement | A compliance suite |
 
 ---
 
-## An die Mitstreiter
+## To allies
 
-Wir suchen Menschen, die:
+We're looking for people who:
 
-- **Code beitragen** — Frontend (Svelte), Backend (Workers/JS), Spec-Reviews. Siehe [`CONTRIBUTING.md`](./CONTRIBUTING.md).
-- **Specs lesen und challengen** — wenn unsere Decision-Logs falsch sind, sag's.
-- **Streamen, schreiben, weitersagen** — RENEX wächst durch Word-of-Mouth, nicht durch Ad-Spend.
-- **Auf eigener Infra hosten** — Federations-Spec ist Roadmap, aber alleinstehende Server sind heute schon möglich.
-- **Geld geben** — GitHub Sponsors, Founder's Pass ($25 Lifetime Pro, limitiert auf erste 1000), später Pro-Subscription.
+- **Contribute code** — Frontend (Svelte), backend (Workers/JS), spec reviews. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+- **Read and challenge specs** — if our decision logs are wrong, say so.
+- **Stream, write, spread the word** — RENEX grows through word-of-mouth, not ad spend.
+- **Host on your own infra** — federation spec is roadmap, but standalone servers are possible today.
+- **Give money** — GitHub Sponsors, Founder's Pass ($25 lifetime Pro, capped at first 1000), later Pro subscription.
 
-Wer es nicht tun soll:
+Not for:
 
-- Wer einen Bot bauen will. Spar dir die Zeit.
-- Wer "schnelles Wachstum durch dunkle Patterns" gut findet.
-- Wer denkt, AI-Companions seien das nächste große Ding und Messenger müssen mitziehen.
-- Wer Discord als Vorbild sieht.
-
----
-
-## An die Gegenseite
-
-An die Bot-Operatoren, AI-Spam-Networks, Growth-Hacker, die früher oder später
-versuchen werden, RENEX zu unterwandern:
-
-Wir sehen euch. Wir bauen die Plattform so, dass ihr nicht reinkommt.
-Wenn ihr es trotzdem schafft: wir bannen euch sofort, ohne Anhörung, ohne
-Berufung. Es gibt kein "das war ein Versehen". Es gibt kein "wir kennen euch
-nicht so genau".
-
-Wir setzen klare Grenzen — gegen Bot-Operatoren und Spam-Networks,
-nicht gegen Menschen. Das ist nicht Hass, das ist Hygiene.
+- Anyone who wants to build a bot. Save your time.
+- Anyone who thinks "fast growth via dark patterns" is fine.
+- Anyone who thinks AI companions are the next big thing and messengers must follow.
+- Anyone who sees Discord as a role model.
 
 ---
 
-## An die Zukunft
+## To the other side
 
-In fünf Jahren wird die Frage nicht sein, ob ein Messenger E2E-verschlüsselt ist —
-das wird Standard sein. Die Frage wird sein, ob er **menschlich** ist. Ob du sicher
-sein kannst, dass auf der anderen Seite kein Modell sitzt.
+To the bot operators, AI spam networks, growth hackers who will sooner or later try to subvert RENEX:
 
-RENEX ist die Antwort darauf.
+We see you. We build the platform so you don't get in. If you still manage to: we ban you immediately, without hearing, without appeal. There is no "it was a mistake". There is no "we don't really know you".
 
-Wir bauen das, weil es sonst niemand baut. Wenn das, was wir hier machen, in fünf
-Jahren als selbstverständlich gilt: gut. Dann haben wir gewonnen.
+We draw clear lines — against bot operators and spam networks, not against humans. This is not hate, this is hygiene.
+
+---
+
+## To the future
+
+In five years the question won't be whether a messenger is E2E-encrypted — that will be standard. The question will be whether it is **human**. Whether you can be sure that on the other side there is no model.
+
+RENEX is the answer to that.
+
+We build this because no one else does. If what we do here is taken for granted in five years: good. Then we've won.
 
 ---
 
 **Made in Switzerland. Made for humans. Made to last.**
 
-> Wenn du dem hier zustimmst: [`CONTRIBUTING.md`](./CONTRIBUTING.md). Mach mit.
-> Wenn du dem hier widersprichst: schreib uns, mit Argumenten. Wir lesen.
-> Wenn du dem hier gleichgültig gegenüberstehst: dann ist RENEX vielleicht nicht für dich. Auch ok.
+> If you agree with this: [`CONTRIBUTING.md`](./CONTRIBUTING.md). Build with us.
+> If you disagree: write to us, with arguments. We read.
+> If you're indifferent to this: then RENEX is maybe not for you. Also fine.
 
 ---
 
-## Anhang A: Skeptic FAQ
+## Appendix A: Skeptic FAQ
 
-Sieben Fragen, die zuverlässig kommen — von skeptischen Investoren, von Hacker-News-Kommentatoren, von Redditors, von Journalisten. Wir beantworten sie hier einmal schriftlich. Wenn du gefragt wirst: hierhin verlinken.
+Ten questions that reliably come — from skeptical investors, Hacker News commenters, Redditors, journalists. We answer them here once in writing. When you get asked: link here.
 
-Diese Antworten sind bewusst ehrlich, nicht marketing-glatt. Wir nennen die Grenzen unserer eigenen Versprechen, weil sonst jemand anders das tut — und weniger fair.
+These answers are deliberately honest, not marketing-glossy. We name the limits of our own promises, because otherwise someone else will — less fairly.
 
-### 1. Warum nicht einfach Discord + Passkeys?
+### 1. Why not just Discord + passkeys?
 
-Discord hat Passkeys — als zweiten Faktor, nicht als primäres Auth. Email und Phone bleiben Pflicht. Sie können das nicht aufgeben: Email ist ihr Recovery-, Marketing- und Compliance-Anker.
+Discord has passkeys — as a second factor, not as primary auth. Email and phone remain mandatory. They can't give that up: email is their recovery, marketing, and compliance anchor.
 
-Schwerwiegender: Discord **ist** eine Bot-Plattform. Ein nennenswerter Teil ihres Developer-Ökosystems sind Bots. Ein "AI-Free Discord" würde das eigene Geschäftsmodell killen. Selbst wenn sie morgen einen Passkey-only-Modus ankündigen — niemand glaubt ihnen. Und die DMs sind weiterhin nicht E2E-verschlüsselt.
+More seriously: Discord **is** a bot platform. A significant part of their developer ecosystem are bots. An "AI-Free Discord" would kill their own business model. Even if they announced a passkey-only mode tomorrow — nobody would believe them. And DMs are still not E2E-encrypted.
 
-Wir können das Versprechen halten, weil wir nichts zu schützen haben außer das Versprechen.
+We can keep the promise because we have nothing to protect except the promise.
 
-### 2. Wie verhindert ihr Sybil-Angriffe?
+### 2. How do you prevent Sybil attacks?
 
-Nicht vollständig. Niemand kann das. Wir erhöhen die **Kosten pro Fake-Identität**:
+Not fully. Nobody can. We raise the **cost per fake identity**:
 
-- Turnstile-Captcha → ~$0.001/Solve (niedrige Hürde)
-- Passkey-Registration → echtes Gerät + Biometrie-Setup, ~5 Min Mensch-Arbeit pro Account
-- Rate-Limits + Behavioral-Signale → skaliert nicht für Farmen
-- Hardware-Attestation (Roadmap Phase 9) → Bypass kostet ~$200/Gerät
+- Turnstile captcha → ~$0.001/solve (low barrier)
+- Passkey registration → real device + biometric setup, ~5 min of human work per account
+- Rate limits + behavioral signals → doesn't scale for farms
+- Hardware attestation (roadmap Phase 9) → bypass costs ~$200/device
 
-Realistisch: Wir drücken die Account-Kosten von ~$0 (Email-Signup anderswo) auf ~$5–50 heute, mit Phase 9 auf ~$200. Damit wird Spam ökonomisch unattraktiv. Das reicht für eine Community-Plattform.
+Realistically: we push account cost from ~$0 (email signup elsewhere) to ~$5–50 today, with Phase 9 to ~$200. That makes spam economically unattractive. Enough for a community platform.
 
-"Sybil-resistant" wäre eine Lüge. "Sybil-teuer" ist die Wahrheit.
+"Sybil-resistant" would be a lie. "Sybil-expensive" is the truth.
 
-### 3. Wie beweist ihr „human"?
+### 3. How do you prove "human"?
 
-Wir beweisen es nicht. Wir machen Automatisierung teuer.
+We don't. We make automation expensive.
 
-- **Architektonisch:** Kein Public API, keine Webhooks, keine Bot-Tokens. RENEX ist nicht skriptbar ohne Reverse-Engineering plus Captcha-Farm.
-- **Technisch:** Passkey + Hardware-Attestation + Captcha + Rate-Limits → hohe Setup-Kosten pro Fake.
-- **Sozial:** AGB explizit, sofortiger Bann, "Pure Human Verified"-Badge als Community-Signal.
+- **Architecturally:** no public API, no webhooks, no bot tokens. RENEX is not scriptable without reverse engineering plus a captcha farm.
+- **Technically:** passkey + hardware attestation + captcha + rate limits → high setup cost per fake.
+- **Socially:** explicit Terms, immediate ban, "Pure Human Verified" badge as a community signal.
 
-We don't prove humanity — we make automation uneconomical. Das ist intellektuell ehrlich. Jede stärkere Aussage wäre Marketing, und Marketing-Versprechen brechen vor Gericht und auf Reddit.
+We don't prove humanity — we make automation uneconomical. That's intellectually honest. Any stronger statement would be marketing, and marketing promises break in court and on Reddit.
 
-### 4. Warum wechseln Communities von Discord?
+### 4. Why would communities switch from Discord?
 
-Die meisten wechseln nicht. Das ist die Wahrheit über Network-Effects.
+Most won't. That's the truth about network effects.
 
-Was wir verkaufen, ist nicht "Switch", sondern **"Second Home"**:
+What we sell is not "switch", but **"second home"**:
 
-- Privacy-bewusste Inner-Circles innerhalb größerer Discord-Communities
-- Indie-Dev-Communities, die Bot-Spam satthaben
-- Clans, die nach Datenleak oder Discord-Policy-Drama einen sauberen Restart wollen
+- Privacy-aware inner circles inside larger Discord communities
+- Indie-dev communities tired of bot spam
+- Clans wanting a clean restart after a data leak or Discord policy drama
 
-User bleiben auf Discord für ihre Hauptcommunity und nutzen RENEX für die Kerngruppe daneben. Wir ersetzen nicht Discord — wir ersetzen die WhatsApp-Gruppe, die ohnehin daneben läuft.
+Users stay on Discord for their main community and use RENEX for the core group next to it. We don't replace Discord — we replace the WhatsApp group that runs alongside it anyway.
 
-Niche-First. Sechs bis zwölf Monate Network-Effects einplanen. Wer in diesem Markt schneller wächst, wächst meistens mit Bots.
+Niche-first. Plan six to twelve months of network effects. Anyone who grows faster in this market usually grows with bots.
 
-### 5. Was ist euer unfairer Vorteil?
+### 5. What's your unfair advantage?
 
-Zwei echte Moats, zwei kleinere Hebel:
+Two real moats, two smaller levers:
 
-1. **„AI-Free" als Brand-Moat.** Discord, Slack, Telegram können das nicht imitieren, ohne ihr Bot- und Developer-Business zu killen. Ein "AI-Free Mode" wäre bei jedem Incumbent unglaubwürdig. Glaubwürdigkeit ist nicht imitierbar, wenn man zu viel zu verlieren hat.
-2. **Schweizer Jurisdiction.** DSG-Standard, kein CLOUD-Act, kein FISA. Rechtlicher Vorteil, nicht bloß Standort-Marketing.
-3. Open Standard + AGPL-Server → schützt vor Big-Tech-Forks-und-Hide.
-4. Solo-Dev + Bootstrap → schnelle Iteration, kein Investor-Druck, principled statt ausverkaufen.
+1. **"AI-Free" as a brand moat.** Discord, Slack, Telegram cannot imitate this without killing their bot and developer business. An "AI-Free mode" at any incumbent would be unbelievable. Credibility is not imitable when you have too much to lose.
+2. **Swiss jurisdiction.** DSG standard, no CLOUD Act, no FISA. A legal advantage, not just location marketing.
+3. Open standard + AGPL server → protects against hyperscaler forks-and-hide.
+4. Solo dev + bootstrap → fast iteration, no investor pressure, principled rather than sellout.
 
-Der schwere Moat ist Punkt 1.
+The heavy moat is #1.
 
-### 6. Wie onboardet ihr Nutzer ohne Friction?
+### 6. How do you onboard users without friction?
 
-Nicht friction-frei. Friction-low.
+Not friction-free. Friction-low.
 
-- **Kein App-Download** — PWA, ein Klick zu "Add to Home Screen".
-- **Keine Email, keine SMS, keine Verifikation** — Handle-only-Identity.
-- **Sign-In via Passkey** — 1-Klick auf bekanntem Gerät, QR-Scan auf neuem.
-- **Recovery-Phrase ist Schritt 2, nicht Schritt 1.** Wird beim ersten Login angeboten, nicht erzwungen.
-- **Aggressives Install-Tutorial mit GIF/Video**, weil iOS-PWA-Push einen manuellen Schritt braucht.
+- **No app download** — PWA, one click to "Add to Home Screen".
+- **No email, no SMS, no verification** — handle-only identity.
+- **Sign-in via passkey** — 1 click on a known device, QR scan on a new one.
+- **Recovery phrase is step 2, not step 1.** Offered at first login, not enforced.
+- **Aggressive install tutorial with GIF/video**, because iOS-PWA push needs a manual step.
 
-Wo es bricht: Safari/iOS-Passkey-UX ist 2026 immer noch nicht perfekt. User ohne Touch-ID/Face-ID-Gerät verlieren wir — das ist der Preis fürs Versprechen.
+Where it breaks: Safari/iOS passkey UX is still not perfect in 2026. Users without Touch-ID/Face-ID devices we lose — that's the price of the promise.
 
-30 Sekunden Passkey-Setup gegen null Spam und null Datenleak: fairer Trade.
+30 seconds of passkey setup against zero spam and zero data leak: fair trade.
 
-### 7. Wie verhindert ihr Growth-Death durch zu starke Security?
+### 7. How do you prevent growth death by too-strong security?
 
-Wir akzeptieren, dass Security-First ein Wachstumsfilter ist. Wir kompensieren an vier Stellen:
+We accept that security-first is a growth filter. We compensate in four places:
 
-1. **Security als Empowerment, nicht als Last.** "YOU ARE THE KEY" verkauft Kontrolle, nicht Paranoia.
-2. **Friction nur dort, wo nötig.** Login ist 1 Klick. E2E läuft unsichtbar. Verify-Contact ist TOFU + Auto-Toast (Apple-Style), nicht Modal-Hölle.
-3. **UX-Quality > Security-Theatre.** Performance, Latency, später Voice — Gamer-First. Wer RENEX startet, soll merken, dass es schneller ist, nicht dass es paranoider ist.
-4. **Realistische Wachstumserwartung.** Year-1-Ziel sind 5'000 aktive User. Nicht 5 Millionen. Wir planen für Slow-Path und Knappheits-Hype (Founder's Pass), nicht für Massen-Push.
+1. **Security as empowerment, not burden.** "YOU ARE THE KEY" sells control, not paranoia.
+2. **Friction only where necessary.** Login is 1 click. E2E runs invisibly. Verify-contact is TOFU + auto-toast (Apple-style), not modal hell.
+3. **UX quality > security theatre.** Performance, latency, voice later — gamer-first. Anyone starting RENEX should notice it's faster, not more paranoid.
+4. **Realistic growth expectations.** Year 1 target: 5,000 active users. Not 5 million. We plan for slow-path and scarcity hype (Founder's Pass), not for mass push.
 
-Der ehrliche harte Fall: Wenn ein User Recovery-Phrase **und** alle Devices verliert, ist der Account weg. Das steht in der AGB. Das wird in der UI gewarnt. Das ist Architektur, kein Bug. Wer das nicht akzeptiert, ist nicht unsere Zielgruppe.
+The honest hard case: if a user loses recovery phrase **and** all devices, the account is gone. It's in the Terms. It's warned in the UI. That's architecture, not a bug. Whoever doesn't accept that is not our target audience.
 
-### 8. Warum nicht Matrix/Element, Session oder SimpleX?
+### 8. Why not Matrix/Element, Session, or SimpleX?
 
-Drei gute Projekte mit ähnlichem Ethos, drei verschiedene Trade-offs:
+Three good projects with similar ethos, three different trade-offs:
 
-- **Matrix/Element:** Föderation ist Stärke und Bürde zugleich. Onboarding ist für Nicht-Techies hart („Wähle einen Homeserver" ist nicht das, was 95% der User wollen). E2E hat sich verbessert, ist aber per-Default nicht überall aktiv. Wir wählen Single-Server-Modell mit Open-Standard-Spec — ein User-Onboarding-Schritt weniger, Föderations-Option als Roadmap Phase 9+.
+- **Matrix/Element:** Federation is strength and burden at once. Onboarding is hard for non-techies ("choose a homeserver" is not what 95% of users want). E2E has improved, but is not active by default everywhere. We chose a single-server model with an open-standard spec — one less onboarding step, federation as a roadmap option for v3+.
 
-- **Session:** Anonym by design (kein Account, kein Identifier außer Onion-ID). Stark für Whistleblower, schwach für persistente Communities. Wir bauen für stabile Identitäten + Clans + Wiedererkennung — Passkey statt Anonymität.
+- **Session:** Anonymous by design (no account, no identifier except onion ID). Strong for whistleblowers, weak for persistent communities. We build for stable identities + clans + re-recognition — passkey instead of anonymity.
 
-- **SimpleX:** Per-Contact-Queues, kein User-Identifier — sehr starkes Privacy-Modell. Trade-off: Discovery ist hart (du musst Links/QR-Codes austauschen für jeden Kontakt). Wir wählen Handle-basierte Identität mit E2E — etwas weniger paranoid, dramatisch besseres UX für Gruppen.
+- **SimpleX:** Per-contact queues, no user identifier — very strong privacy model. Trade-off: discovery is hard (you must exchange links/QR codes for every contact). We chose handle-based identity with E2E — slightly less paranoid, dramatically better UX for groups.
 
-Wir respektieren alle drei. RENEX ist nicht für Whistleblower (nimm Session), nicht für Föderations-Enthusiasten (nimm Matrix), nicht für maximal-paranoide Akteure (nimm SimpleX). RENEX ist für die Lücke dazwischen: **Communities, die WhatsApp/Discord-Bequemlichkeit wollen, aber ohne Bots, ohne Email-Erpressung, ohne dass Meta mitliest.**
+We respect all three. RENEX is not for whistleblowers (take Session), not for federation enthusiasts (take Matrix), not for maximum-paranoid actors (take SimpleX). RENEX is for the gap between: **communities that want WhatsApp/Discord convenience but without bots, without email coercion, without Meta reading along.**
 
-### 9. Ist Passkey-only nicht Apple/Google-Lock-in?
+### 9. Isn't passkey-only Apple/Google lock-in?
 
-Das ist die häufigste Sorge — und sie ist berechtigt zur Hälfte.
+This is the most common concern — and it's half justified.
 
-**Was stimmt:** Passkeys werden auf vielen Geräten in iCloud Keychain oder Google Password Manager synced. Wer ausschließlich Apple- oder Android-Geräte nutzt, hängt damit indirekt am Cloud-Sync dieser Anbieter.
+**What's true:** passkeys on many devices sync via iCloud Keychain or Google Password Manager. Anyone using exclusively Apple or Android devices is indirectly tied to those providers' cloud sync.
 
-**Was wir dagegen tun:**
+**What we do about it:**
 
-- **Hardware-Security-Keys werden voll unterstützt.** YubiKey, SoloKey, Nitrokey — keine Cloud, keine Hersteller-Sync.
-- **Bitwarden/1Password/KeePassXC** unterstützen mittlerweile Passkey-Storage out-of-the-box. Wer einen self-hosted Passwort-Manager fährt, bleibt unabhängig.
-- **Recovery-Phrase ist der Master-Override.** Wenn alle Devices weg sind und du keine Apple/Google-Sync hast: 12-Wort-BIP39-Phrase reaktiviert den Account. Du bist nie an einen einzigen Anbieter gebunden.
+- **Hardware security keys are fully supported.** YubiKey, SoloKey, Nitrokey — no cloud, no vendor sync.
+- **Bitwarden / 1Password / KeePassXC** now support passkey storage out of the box. Anyone running a self-hosted password manager stays independent.
+- **Recovery phrase is the master override.** If all devices are gone and you have no Apple/Google sync: a 12-word BIP39 phrase reactivates the account. You are never tied to a single vendor.
 
-Praktisch: RENEX funktioniert ohne Apple-ID, ohne Google-Account, ohne Hersteller-Cloud. Aber wir lügen nicht — der einfachste Pfad nutzt Plattform-Sync, weil das die UX ist die Nutzer kennen. Wer das nicht will, hat alle Alternativen offen.
+In practice: RENEX works without an Apple ID, without a Google account, without a vendor cloud. But we don't lie — the easiest path uses platform sync because that's the UX users know. Anyone who doesn't want that has all alternatives open.
 
-### 10. Wie kann ich der Web-Distribution trauen? Reproducible Builds?
+### 10. How can I trust web distribution? Reproducible builds?
 
-Ehrliche Antwort: bei einer PWA aus dem Browser kannst du dem Server **nicht** vollständig vertrauen. Cloudflare Pages liefert das Frontend-Bundle aus — theoretisch könnte ein kompromittiertes Deployment dir einen modifizierten Client mit Backdoor schicken, der dann lokal die Krypto schwächt.
+Honest answer: with a PWA from the browser, you cannot **fully** trust the server. Cloudflare Pages ships the frontend bundle — theoretically a compromised deployment could send you a modified client with a backdoor that weakens the crypto locally.
 
-**Was wir dagegen tun:**
+**What we do about it:**
 
-- **Open-Source-Frontend** (MIT/Apache-2.0). Bundle ist im Repo reproduzierbar via `npm install && npm run build` — output-Hash gegen Live-Bundle vergleichbar.
-- **CI-Build mit Hash-Veröffentlichung** (Roadmap Tag-3 vor Launch). Jeder Release-Tag erzeugt ein deterministisches Bundle, dessen SHA-256 wir publik machen. Audit-able von außen.
-- **Server kann nichts mit-decrypten.** Selbst bei Frontend-Backdoor: CMKs, GSKs, Recovery-Phrase verlassen das Device nie unverschlüsselt. Backdoor müsste lokale IndexedDB exfiltrieren — schwerer und sichtbar im Browser-Netzwerk-Tab.
-- **Phase 8 Roadmap:** Native Apps (Capacitor/Tauri) für Nutzer die reproducible binaries gegen Hash-Liste verifizieren wollen.
+- **Open-source frontend** (MIT/Apache-2.0). Bundle is reproducible from the repo via `npm install && npm run build` — output hash can be compared against the live bundle.
+- **CI build with hash publication** (planned post-launch). Each release tag produces a deterministic bundle whose SHA-256 we publish. Externally auditable.
+- **Server can't decrypt anything.** Even with a frontend backdoor: CMKs, GSKs, recovery phrase never leave the device unencrypted. A backdoor would have to exfiltrate local IndexedDB — harder and visible in the browser network tab.
+- **Roadmap:** Native apps (Capacitor/Tauri) for users who want to verify reproducible binaries against a hash list.
 
-Wer maximale Crypto-Pureness will: warte auf Native-Builds oder baue selbst aus dem Repo. PWA-Pfad ist der Convenience-Trade-off, nicht das Security-Maximum.
+Whoever wants maximum crypto purity: wait for native builds or build yourself from the repo. The PWA path is the convenience trade-off, not the security maximum.
 
 ---
 
-> Diese FAQ ist Living Document. Wenn eine Frage hier nicht ehrlich beantwortet ist: schreib uns, mit Argumenten. Wir aktualisieren.
+> This FAQ is a living document. If a question is not honestly answered here: write to us, with arguments. We update.

@@ -604,7 +604,7 @@ npx wrangler d1 execute renex-db --file=schema-recovery.sql --remote
 npx wrangler deploy
 
 # 3. Frontend (Recovery-Komponenten + bip39-Lib)
-bash deploy-svelte.sh
+bash deploy.sh
 
 # 4. Smoke-Test via curl + Browser
 ```

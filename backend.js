@@ -1,3 +1,11 @@
+// ===========================================================
+// RENEX Cloudflare Worker Entry-Point
+// ===========================================================
+// Worker dispatch: receives all HTTP + WebSocket requests, routes
+// to src/routes/* and src/cron.js (scheduled). Wrangler binds this
+// file as `main` per wrangler.toml (see wrangler.toml.example).
+// ===========================================================
+
 import { json, corsHeaders } from './src/utils.js';
 import { handleWsRoutes } from './src/routes/wsRoutes.js';
 import { handleE2eRoutes } from './src/routes/e2eRoutes.js';

@@ -1,60 +1,58 @@
-# Mitarbeiten an RENEX
+# Contributing to RENEX
 
-> **Pragmatisch, direkt, Spec-First.**
-> Diese Datei beschreibt, wie Code, Specs und Bug-Reports zu RENEX beitragen werden.
+> **Pragmatic, direct, spec-first.**
+> This file describes how code, specs, and bug reports are contributed to RENEX.
 
-**Version:** 1.0
-**Letzte Aktualisierung:** 2026-05-09
-**Verbindlich ab:** Phase 2 (Open-Source-Launch)
+**Version:** 1.1
+**Last updated:** 2026-05-23
+**Effective:** Phase 2 (Open-Source Launch, 2026-05-27)
 
 ---
 
-## Inhaltsverzeichnis
+## Table of Contents
 
-1. [Bevor du anfängst](#1-bevor-du-anfängst)
-2. [Quick-Start: Lokal entwickeln](#2-quick-start-lokal-entwickeln)
-3. [Repo-Struktur](#3-repo-struktur)
-4. [Lizenz & DCO](#4-lizenz--dco)
-5. [Spec-First-Regel](#5-spec-first-regel)
-6. [Coding-Konventionen](#6-coding-konventionen)
+1. [Before you start](#1-before-you-start)
+2. [Quick start: local development](#2-quick-start-local-development)
+3. [Repo structure](#3-repo-structure)
+4. [License & DCO](#4-license--dco)
+5. [Spec-first rule](#5-spec-first-rule)
+6. [Coding conventions](#6-coding-conventions)
 7. [Tests](#7-tests)
-8. [Pull-Request-Prozess](#8-pull-request-prozess)
-9. [Bug-Reports & Feature-Requests](#9-bug-reports--feature-requests)
-10. [Security-Disclosure](#10-security-disclosure)
+8. [Pull request process](#8-pull-request-process)
+9. [Bug reports & feature requests](#9-bug-reports--feature-requests)
+10. [Security disclosure](#10-security-disclosure)
 11. [Code of Conduct](#11-code-of-conduct)
-12. [Was wir nicht akzeptieren](#12-was-wir-nicht-akzeptieren)
+12. [What we don't accept](#12-what-we-dont-accept)
 
 ---
 
-## 1. Bevor du anfängst
+## 1. Before you start
 
-Lies diese drei Dokumente — in der Reihenfolge:
+Read these three documents — in this order:
 
-1. [`MANIFESTO.md`](./MANIFESTO.md) — Wofür wir bauen.
-2. [`VISION.md`](./VISION.md) — Wie wir bauen (Strategie, Roadmap, Decision-Logs).
-3. [`PROTOCOL.md`](./PROTOCOL.md) — Was wir bauen (Wire-Format, Protocol v1).
+1. [`MANIFESTO.md`](./MANIFESTO.md) — what we're building for.
+2. [`VISION.md`](./VISION.md) — how we're building (strategy, roadmap, decision logs).
+3. [`PROTOCOL.md`](./PROTOCOL.md) — what we're building (wire format, Protocol v1).
 
-Wenn du nach dem Lesen denkst „dieses Projekt ist nichts für mich" — alles gut. Spar dir und uns die Zeit.
+If after reading you think "this project is not for me" — fair. Save yourself and us the time.
 
-Wenn du denkst „yes, hier will ich mitbauen" — weiter unten.
+If you think "yes, I want to build this with you" — continue below.
 
 ---
 
-## 2. Quick-Start: Lokal entwickeln
+## 2. Quick start: local development
 
-### 2.1 Voraussetzungen
+### 2.1 Prerequisites
 
-| Tool | Min-Version | Wofür |
+| Tool | Min version | Purpose |
 |---|---|---|
-| **Node** | 20+ | Runtime für Tests + Build |
-| **npm** | 10+ | Package-Manager |
-| **wrangler** | 3.x | Cloudflare-Worker-Deploy |
-| **Cloudflare Account** | — | für eigene Test-Infra (D1/KV/R2) |
-| **Browser mit WebAuthn** | aktuell | Chrome/Safari/Firefox letzte 2 Major |
+| **Node** | 20+ | Runtime for tests + build |
+| **npm** | 10+ | Package manager |
+| **wrangler** | 3.x | Cloudflare Worker deploy |
+| **Cloudflare Account** | — | for your own test infra (D1/KV/R2) |
+| **Browser with WebAuthn** | current | Chrome / Safari / Firefox last 2 major versions |
 
-Du brauchst **keinen** Cloudflare-Account, wenn du nur Frontend-Komponenten oder
-isolierte Backend-Logik (alles in `src/helpers/`, `src/utils/`) anfasst und gegen Vitest
-testest.
+You do **not** need a Cloudflare account if you only touch frontend components or isolated backend logic (anything in `src/helpers/`, `src/utils/`) and test against Vitest.
 
 ### 2.2 Setup
 
@@ -62,395 +60,392 @@ testest.
 git clone https://github.com/bruno-renex/renex.git
 cd renex
 npm install
-npm test           # Vitest-Suite muss grün sein, bevor du etwas änderst
+npm test           # Vitest suite must be green before you change anything
 ```
 
-Wenn du Backend lokal/in eigener Cloudflare-Account betreiben willst,
-brauchst du eine eigene `wrangler.toml` — siehe §2.4.
+If you want to run the backend locally / in your own Cloudflare account, you need your own `wrangler.toml` — see §2.4.
 
-### 2.3 Frontend-Dev (Svelte)
+### 2.3 Frontend dev (Svelte)
 
 ```bash
-npm run dev        # Vite-Dev-Server, Hot-Reload
+npm run dev        # Vite dev server, hot reload
 ```
 
-### 2.4 Backend lokal
+### 2.4 Backend locally
 
-Backend läuft auf Cloudflare Workers — lokal via `wrangler dev`:
+The backend runs on Cloudflare Workers — locally via `wrangler dev`:
 
 ```bash
 cp wrangler.toml.example wrangler.toml
-# wrangler.toml ist gitignored — du editierst deine eigene Kopie
+# wrangler.toml is gitignored — you edit your own copy
 
-# Eigene Cloudflare-Resources erstellen (einmalig):
+# Create your own Cloudflare resources (once):
 npx wrangler kv:namespace create RENEX_KV
 npx wrangler d1 create renex-db
 npx wrangler r2 bucket create renex-files
 
-# IDs aus den Output-Logs in wrangler.toml einsetzen (ersetzt YOUR_*_ID).
-# Dann Schema applizieren:
+# Put the IDs from the output logs into wrangler.toml (replaces YOUR_*_ID).
+# Then apply schemas:
 npx wrangler d1 execute renex-db --file=schema.sql
-# (für alle weiteren schema-*.sql analog)
+# (analogously for all other schema-*.sql files)
 
-# Dev-Server starten:
+# Start dev server:
 npx wrangler dev
 ```
 
-Externe Contributors: für PR-Tests reicht `npm test` — das Backend
-muss nicht lokal laufen.
+External contributors: for PR tests, `npm test` is enough — the backend does not need to run locally.
 
-### 2.5 Deploy (nur für Maintainer)
+### 2.5 Deploy (maintainers only)
 
 ```bash
-bash deploy.sh     # Backend + Frontend in einem Schritt (Auto-Versioning)
+bash deploy.sh     # Backend + frontend in one step (auto-versioning)
 ```
 
-Externe Contributors deployen nicht direkt auf die Production-Infra. PRs werden in
-einer Preview-Umgebung getestet.
+External contributors do not deploy directly to production infra. PRs are tested in a preview environment.
 
 ---
 
-## 3. Repo-Struktur
+## 3. Repo structure
 
 ```
 app.renex/
-├── docs/                      # Specs (verbindlich, siehe §5)
+├── docs/                      # Specs (normative, see §5)
 │   ├── VISION.md
 │   ├── MANIFESTO.md
 │   ├── PROTOCOL.md
 │   ├── MULTI_DEVICE.md
 │   ├── RECOVERY.md
+│   ├── THREAT_MODEL.md
 │   └── CHANGELOG.md
 ├── src/                       # Backend (Cloudflare Workers, JS ESM)
-│   ├── routes/                # Route-Handler
+│   ├── routes/                # Route handlers
 │   ├── helpers/               # Reusable handlers
 │   ├── utils/                 # Stateless utils (rate-limit, json, csrf, …)
 │   └── cron.js                # Scheduled jobs
-├── frontend/                  # Svelte-App (PWA)
+├── frontend/                  # Svelte app (PWA)
 │   └── src/
-├── tests/                     # Vitest-Suite (Backend + Crypto)
-├── schema*.sql                # D1-Migrationen (numbered, idempotent)
-├── deploy.sh                  # Deploy-Script
-└── wrangler.toml.example     # Template — `cp` zu wrangler.toml + eigene IDs
+├── tests/                     # Vitest suite (backend + crypto)
+├── schema*.sql                # D1 migrations (numbered, idempotent)
+├── backend.js                 # Cloudflare Worker entry point
+├── deploy.sh                  # Deploy script
+└── wrangler.toml.example      # Template — `cp` to wrangler.toml + your own IDs
 ```
 
-**Faustregel:** wenn du Crypto, Auth, Multi-Device oder Recovery anfasst, schau zuerst in `docs/`. Wenn du UI-Polishing machst, kannst du direkt in `frontend/src/` starten.
+**Rule of thumb:** if you touch crypto, auth, multi-device, or recovery — read `docs/` first. If you're polishing UI, you can start directly in `frontend/src/`.
 
 ---
 
-## 4. Lizenz & DCO
+## 4. License & DCO
 
-### 4.1 Lizenz-Split
+### 4.1 License split
 
-| Komponente | Lizenz | Begründung |
+| Component | License | Rationale |
 |---|---|---|
-| **Specs** (`docs/PROTOCOL.md`, `MULTI_DEVICE.md`, `RECOVERY.md`) | MIT/Apache 2.0 Dual | maximale Standard-Verbreitung |
-| **`MANIFESTO.md`** | CC BY 4.0 | zitierbar mit Attribution |
-| **Frontend** (`frontend/`) | MIT/Apache 2.0 Dual | Forks willkommen |
-| **Reference-Backend** (`src/`, `wrangler.toml.example`, schemas) | AGPL v3 | Schutz vor Big-Tech-Forks-und-Hide |
-| **Tests** (`tests/`) | folgt der getesteten Komponente | — |
+| **Specs** (`docs/PROTOCOL.md`, `MULTI_DEVICE.md`, `RECOVERY.md`, `THREAT_MODEL.md`) | MIT OR Apache-2.0 (dual) | maximum standard spread |
+| **`MANIFESTO.md`** | CC BY 4.0 | quotable with attribution |
+| **Frontend** (`frontend/`) | MIT OR Apache-2.0 (dual) | forks welcome |
+| **Reference backend** (`src/`, `wrangler.toml.example`, schemas) | AGPL-3.0-only | anti-fork-and-hide for hyperscalers |
+| **Tests** (`tests/`) | follows the tested component | — |
 
-Mit deinem PR akzeptierst du, dass dein Beitrag unter der Lizenz der Datei steht, die du änderst.
+By submitting a PR, you accept that your contribution falls under the license of the file you modify. Full overview: [`LICENSE`](../LICENSE).
 
 ### 4.2 DCO (Developer Certificate of Origin)
 
-Wir nutzen **DCO**, nicht CLA. Jeder Commit muss signed-off-by sein:
+We use **DCO**, not a CLA. Every commit must be signed-off:
 
 ```bash
 git commit -s -m "fix: cmk rotation race when authority deletes account"
 ```
 
-Das fügt eine Zeile `Signed-off-by: Dein Name <deine-email@…>` hinzu und bestätigt:
-„Ich habe das Recht, diesen Beitrag unter der angegebenen Lizenz beizutragen." Volltext: <https://developercertificate.org>.
+This adds a `Signed-off-by: Your Name <your-email@…>` line and confirms: "I have the right to contribute this under the stated license." Full text: <https://developercertificate.org>.
 
-Ohne `Signed-off-by` wird der PR nicht gemerged. Kein workaround.
+Without `Signed-off-by`, the PR will not be merged. No workaround.
 
 ---
 
-## 5. Spec-First-Regel
+## 5. Spec-first rule
 
-**Wire-Format-Änderungen, Crypto-Konstanten, Endpoint-Verträge, State-Machine-Transitions
-ändern sich in der Spec — bevor sie sich im Code ändern.**
+**Wire-format changes, crypto constants, endpoint contracts, state-machine transitions change in the spec — before they change in code.**
 
-### 5.1 Wann Spec-First gilt
+### 5.1 When spec-first applies
 
-| Änderung | Spec-Update Pflicht? | Welche Spec |
+| Change | Spec update required? | Which spec |
 |---|---|---|
-| Neue HTTP-Endpoint-Felder | ✅ ja | [`PROTOCOL.md`](./PROTOCOL.md) §6/§8/§13 |
-| Neuer Control-Message-Type | ✅ ja | [`PROTOCOL.md`](./PROTOCOL.md) §10.1 |
-| Krypto-Konstante (PBKDF2-Iter, AES-Key-Size, IV-Size) | ✅ ja | [`PROTOCOL.md`](./PROTOCOL.md) §4 + [`RECOVERY.md`](./RECOVERY.md) §4.5 |
-| Device-State-Transition | ✅ ja | [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §3 |
-| Recovery-Bundle-Schema | ✅ ja | [`RECOVERY.md`](./RECOVERY.md) §3.1 |
-| Rate-Limit-Wert | ✅ ja | jeweilige Spec §6 oder §8 |
-| Bug-Fix ohne Verhaltens-Änderung | ❌ nein | — |
-| UI-Text, CSS, Settings-Layout | ❌ nein | — |
-| Internes Refactor ohne Wire-Impact | ❌ nein | — |
+| New HTTP endpoint fields | ✅ yes | [`PROTOCOL.md`](./PROTOCOL.md) §6 / §8 / §13 |
+| New control-message type | ✅ yes | [`PROTOCOL.md`](./PROTOCOL.md) §10.1 |
+| Crypto constant (PBKDF2 iters, AES key size, IV size) | ✅ yes | [`PROTOCOL.md`](./PROTOCOL.md) §4 + [`RECOVERY.md`](./RECOVERY.md) §4.5 |
+| Device state transition | ✅ yes | [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §3 |
+| Recovery bundle schema | ✅ yes | [`RECOVERY.md`](./RECOVERY.md) §3.1 |
+| Rate-limit value | ✅ yes | relevant spec §6 or §8 |
+| New threat model adversary or weakness | ✅ yes | [`THREAT_MODEL.md`](./THREAT_MODEL.md) §3 / §4 |
+| Bug fix without behavior change | ❌ no | — |
+| UI text, CSS, settings layout | ❌ no | — |
+| Internal refactor without wire impact | ❌ no | — |
 
-### 5.2 Wie Spec-Updates aussehen
+### 5.2 How spec updates look
 
-1. **Decision-Log-Eintrag** in der relevanten Spec ergänzen (Datum, Optionen, Pick, Rationale).
-2. **Body-Sektion** der Spec aktualisieren (Wire-Format, Tabelle, Mermaid-Diagram).
-3. **`CHANGELOG.md`** updaten mit Spec-Version-Bump (semver-mäßig: minor für additive, major für breaking).
-4. **Code-PR im selben Branch** wie Spec-Update — nicht zwei getrennte PRs.
+1. **Decision log entry** in the relevant spec (date, options considered, pick, rationale).
+2. **Body section** of the spec updated (wire format, table, Mermaid diagram).
+3. **`CHANGELOG.md`** updated with spec-version bump (semver: minor for additive, major for breaking).
+4. **Code PR in the same branch** as the spec update — not two separate PRs.
 
-Reviewer prüfen Spec-Update zuerst. Wenn die Spec unklar ist, gewinnt der Spec-Reviewer
-gegen den Code-Reviewer.
+Reviewers check the spec update first. If the spec is unclear, the spec reviewer wins against the code reviewer.
 
-### 5.3 Wenn die Spec falsch ist
+### 5.3 When the spec is wrong
 
-Du darfst die Spec angreifen. Decision-Log-Eintrag mit der besseren Option,
-PR mit Spec-Korrektur, dann Code. Wir verteidigen keine Specs aus Stolz —
-wir verteidigen sie, weil sie sonst auseinanderdriften.
+You may challenge the spec. Decision-log entry with the better option, PR with the spec correction, then code. We don't defend specs out of pride — we defend them because otherwise implementations drift apart.
 
 ---
 
-## 6. Coding-Konventionen
+## 6. Coding conventions
 
-### 6.1 JavaScript (Backend + Frontend)
+### 6.1 JavaScript (backend + frontend)
 
-- **ESM only** (`type: "module"` im package.json). Keine CommonJS-Imports.
-- **Vanilla JS** im Backend, **Svelte 5** im Frontend.
-- **Keine Frameworks** im Backend. Kein Express, kein Hono, nichts. Workers laufen
-  nativ; Routenhandler sind switch-statements (siehe `src/routes/*.js`).
-- **TypeScript** ist optional. Wenn du TS schreibst: `.ts`-Datei, JSDoc-equivalent
-  via `@ts-check`-Pragma im JS funktioniert auch.
-- **Async/Await**, kein Callback-Hell.
-- **Keine Lodash, Underscore, Ramda** — Vanilla reicht. Bundle-Size matters.
+- **ESM only** (`type: "module"` in package.json). No CommonJS imports.
+- **Vanilla JS** in the backend, **Svelte 5** in the frontend.
+- **No frameworks** in the backend. No Express, no Hono, nothing. Workers run natively; route handlers are switch statements (see `src/routes/*.js`).
+- **TypeScript** is optional. If you write TS: `.ts` file. JSDoc-equivalent via `@ts-check` pragma in JS also works.
+- **Async/await**, no callback hell.
+- **No Lodash, Underscore, Ramda** — vanilla is enough. Bundle size matters.
 
 ### 6.2 Naming
 
 - Files: `camelCase.js` (`chatSend.js`, `e2eRoutes.js`).
 - Functions: `camelCase`.
-- Constants: `SCREAMING_SNAKE_CASE` für echte Konstanten, `camelCase` für lokale Werte.
-- Routen-Cases: lowercase mit Slashes (`/e2e/inbox/upload`).
+- Constants: `SCREAMING_SNAKE_CASE` for real constants, `camelCase` for local values.
+- Route paths: lowercase with slashes (`/e2e/inbox/upload`).
 
-### 6.3 Kommentare
+### 6.3 Comments
 
-- **Default: keine.** Code soll lesbar sein, nicht kommentiert.
-- Kommentar dann, wenn das **Warum** nicht offensichtlich ist (Sicherheits-Constraint, Workaround für Browser-Bug, subtile Race-Condition).
-- **Niemals** „added X for the Y flow" — das gehört in die PR-Description.
-- Kein `// TODO` ohne Issue-Referenz.
+- **Default: none.** Code should be readable, not commented.
+- Comment when the **why** is non-obvious (security constraint, browser-bug workaround, subtle race condition).
+- **Never** "added X for the Y flow" — that belongs in the PR description.
+- No `// TODO` without an issue reference.
 
 ### 6.4 Performance
 
-- Bundle-Size > Convenience.
-- Frontend: jeder neue Top-Level-Import wird gefragt.
-- Backend: Workers haben CPU-Limits; vermeide synchrone Loops über große Listen.
+- Bundle size > convenience.
+- Frontend: every new top-level import gets challenged.
+- Backend: Workers have CPU limits; avoid synchronous loops over large lists.
 
-### 6.5 Sicherheit
+### 6.5 Security
 
-- **Keine Plaintext-Logs** von Message-Bodies, CMKs, GSKs, Master-Keys, Phrases.
-- **Keine** `eval()`, `new Function()`, `innerHTML` (use `textContent`).
-- **Rate-Limits** auf jedem state-mutierenden Endpoint.
-- **CSRF-Check** auf jedem POST/DELETE.
-- **JWK-Validation** vor Persistierung (siehe [`e2eRoutes.js`](../src/routes/e2eRoutes.js) `_isValidEcdhPubJwk`).
+- **No plaintext logs** of message bodies, CMKs, GSKs, master keys, phrases.
+- **No** `eval()`, `new Function()`, `innerHTML` (use `textContent`).
+- **Rate limits** on every state-mutating endpoint.
+- **CSRF check** on every POST/DELETE.
+- **JWK validation** before persistence (see [`e2eRoutes.js`](../src/routes/e2eRoutes.js) `_isValidEcdhPubJwk`).
 
 ### 6.6 Commits
 
-- Eine logische Änderung pro Commit.
-- Imperativ-Form im Subject: `add cmk rotation telemetry`, nicht `added` oder `adds`.
-- Subject ≤ 72 Zeichen, Body bei Bedarf mit Begründung.
-- Conventional-Commits-Prefix optional, aber konsistent: `fix:`, `feat:`, `spec:`, `chore:`, `test:`.
-- **Pflicht:** `Signed-off-by:` (siehe §4.2).
+- One logical change per commit.
+- Imperative form in subject: `add cmk rotation telemetry`, not `added` or `adds`.
+- Subject ≤ 72 chars, body with rationale when useful.
+- Conventional-commits prefix optional but consistent: `fix:`, `feat:`, `spec:`, `chore:`, `test:`.
+- **Required:** `Signed-off-by:` (see §4.2).
 
 ---
 
 ## 7. Tests
 
-> **„Crypto ohne Tests = Selbstmord."** ([`VISION.md`](./VISION.md) §12 Decision-Log, 2026-04-27)
+> **"Crypto without tests = suicide."** ([`VISION.md`](./VISION.md) §12 decision log, 2026-04-27)
 
-### 7.1 Was Vitest abdeckt heute
+### 7.1 What Vitest covers today
 
 ```
 tests/
-├── chatCrypto.test.js           # CMK-Encrypt/Decrypt
-├── chatSendControlTypes.test.js # Whitelist-Enforcement (PROTOCOL §10.1)
+├── chatCrypto.test.js           # CMK encrypt/decrypt
+├── chatSendControlTypes.test.js # whitelist enforcement (PROTOCOL §10.1)
 ├── cmk.test.js, cmkRotation.test.js
-├── cronAutoRevoke.test.js       # 30d-Sweep
-├── groupCrypto.test.js          # GSK-Roundtrip
-├── messageSig.test.js           # Sig-Verify (PROTOCOL §11)
-├── multidevice.test.js          # State-Machine (MULTI_DEVICE §3)
+├── cronAutoRevoke.test.js       # 30d sweep
+├── groupCrypto.test.js          # GSK roundtrip
+├── messageSig.test.js           # sig-verify (PROTOCOL §11)
+├── multidevice.test.js          # state machine (MULTI_DEVICE §3)
 ├── recovery.test.js, recoveryConstants.test.js
-├── replayRace.test.js           # CMK-Distribution-Race
+├── replayRace.test.js           # CMK distribution race
 ├── session.test.js
 └── …
 ```
 
-### 7.2 Pflicht-Tests bei PRs
+Current count: 460 tests, ~17 seconds.
 
-| PR-Typ | Tests Pflicht |
+### 7.2 Tests required for PRs
+
+| PR type | Tests required |
 |---|---|
-| Crypto-Code (alles unter `src/crypto/`, `src/utils/crypto*.js`, Recovery, CMK, GSK) | ✅ Vitest, neue Test-Cases für neue Branches |
-| Wire-Format (`src/routes/*.js`, `src/helpers/chatSend.js`) | ✅ Round-Trip-Test |
-| Cron-Logik (`src/cron.js`) | ✅ Mock-Time-Tests |
-| State-Machine ([`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §3 Transitions) | ✅ Test pro neuer Transition |
-| Frontend-UI | ❌ Vitest nicht zwingend (Svelte-Component-Tests willkommen, aber nicht Pflicht) |
-| Spec-only-Änderungen | ❌ keine Code-Tests |
+| Crypto code (anything under `src/crypto/`, `src/utils/crypto*.js`, Recovery, CMK, GSK) | ✅ Vitest, new test cases for new branches |
+| Wire format (`src/routes/*.js`, `src/helpers/chatSend.js`) | ✅ round-trip test |
+| Cron logic (`src/cron.js`) | ✅ mock-time tests |
+| State machine ([`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §3 transitions) | ✅ test per new transition |
+| Frontend UI | ❌ Vitest not mandatory (Svelte component tests welcome but optional) |
+| Spec-only changes | ❌ no code tests |
 
-### 7.3 Test-Run lokal
+### 7.3 Local test run
 
 ```bash
-npm test                # einmaliger Run, CI-Form
-npm run test:watch      # Watch-Mode für Dev
-npm run test:ui         # Vitest-UI im Browser
+npm test                # one-shot run, CI form
+npm run test:watch      # watch mode for dev
+npm run test:ui         # Vitest UI in browser
 ```
 
-PR wird nicht gemerged, wenn die Suite rot ist. Auch nicht wenn „nur ein Test, der eh flaky ist". Flaky-Tests werden **fixed**, nicht gemutet.
+A PR will not be merged if the suite is red. Not even "just one test that's flaky anyway". Flaky tests are **fixed**, not muted.
 
-### 7.4 Manuelle Integration-Tests
+### 7.4 Manual integration tests
 
-Für Multi-Device + Recovery existieren Test-Matrizen in den Specs:
-- [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §8.2 — 5×5-Konfiguration u.a.
-- [`RECOVERY.md`](./RECOVERY.md) §11.2 — Recovery-Roundtrip auf 2. Browser.
+For multi-device + recovery, test matrices exist in the specs:
+- [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §8.2 — 5×5 configuration etc.
+- [`RECOVERY.md`](./RECOVERY.md) §11.2 — recovery roundtrip on a 2nd browser.
 
-Diese werden vor Phase-Cuts manuell durchlaufen — Maintainer-Verantwortung.
+These are run manually before phase cuts — maintainer responsibility.
 
 ---
 
-## 8. Pull-Request-Prozess
+## 8. Pull request process
 
-### 8.1 Bevor du einen PR aufmachst
+### 8.1 Before you open a PR
 
-- [ ] Issue verlinkt? (Bei nicht-trivialen Änderungen: ja, sonst Diskussion verloren.)
-- [ ] Spec-Update parat? (Siehe §5.1 — wenn ja, im selben Branch.)
-- [ ] `npm test` ist grün?
-- [ ] Commits sind `Signed-off-by`?
-- [ ] PR-Description erklärt das **Warum**, nicht das **Was**?
+- [ ] Linked issue? (For non-trivial changes: yes, otherwise discussion is lost.)
+- [ ] Spec update prepared? (See §5.1 — if yes, in the same branch.)
+- [ ] `npm test` is green?
+- [ ] Commits are `Signed-off-by`?
+- [ ] PR description explains the **why**, not the **what**?
 
-### 8.2 PR-Template
+### 8.2 PR template
 
 ```markdown
 ## Summary
-<1–3 Sätze: Was ändert sich, warum.>
+<1–3 sentences: what changes, why.>
 
-## Spec-Änderung
-<Falls ja: Link auf Decision-Log-Eintrag in der relevanten Spec. Falls nein: "n/a".>
+## Spec change
+<If yes: link to decision-log entry in the relevant spec. If no: "n/a".>
 
-## Test-Plan
-- [ ] Vitest-Suite grün
-- [ ] Manuell getestet: <konkret was, in welchem Browser>
-- [ ] Telemetrie geprüft (falls relevant): <Sentry-Event-Name oder n/a>
+## Test plan
+- [ ] Vitest suite green
+- [ ] Manually tested: <what exactly, in which browser>
+- [ ] Telemetry checked (if relevant): <Sentry event name or n/a>
 
-## Risiko & Rollback
-<Was passiert im Worst-Case? Wie machen wir das rückgängig?>
+## Risk & rollback
+<What happens in the worst case? How do we revert?>
 ```
 
-### 8.3 Review-Erwartung
+### 8.3 Review expectations
 
-- **Erste Antwort:** binnen 5 Werktagen (Solo-Maintainer, kann variieren).
-- **Approvals:** mindestens 1 Maintainer-Approval. Bei Crypto/Wire-Format: 2 Approvals oder externe Audit-Notiz.
-- **Blocker:** Spec-Lücken, fehlende Tests, Plaintext-Leaks, neue Dependencies ohne Begründung.
+- **First response:** within 5 working days (solo maintainer, may vary).
+- **Approvals:** at least 1 maintainer approval. For crypto / wire format: 2 approvals or external audit note.
+- **Blockers:** spec gaps, missing tests, plaintext leaks, new dependencies without justification.
 
-### 8.4 Squash vs. Merge
+### 8.4 Squash vs. merge
 
-- Default: **Squash-Merge** (eine Commit-Zeile pro PR auf main).
-- Ausnahme: Multi-Phase-Migrationen, wo die Historie selbst erklärend ist — dann Merge-Commit nach Absprache.
+- Default: **Squash merge** (one commit line per PR on main).
+- Exception: multi-phase migrations where the history itself is self-explanatory — then merge commit by agreement.
 
 ---
 
-## 9. Bug-Reports & Feature-Requests
+## 9. Bug reports & feature requests
 
-### 9.1 Bug-Reports
+### 9.1 Bug reports
 
-- Issue-Tracker: GitHub Issues (Repo `github.com/renex/renex`, ab Phase 2).
-- **Sicherheits-Bugs gehören NICHT in den öffentlichen Issue-Tracker** — siehe §10.
-- Template:
+- Issue tracker: GitHub Issues (repo `github.com/bruno-renex/renex`).
+- **Security bugs do NOT go into the public issue tracker** — see §10.
+- Template (also available in the repo as `.github/ISSUE_TEMPLATE/bug_report.md`):
 
 ```markdown
-**Was passiert?**
-**Was sollte passieren?**
-**Reproduktion (Schritte):**
+**What happens?**
+**What should happen?**
+**Reproduction (steps):**
 **Browser/OS:**
-**Console-Errors / Sentry-Event-ID (falls vorhanden):**
+**Console errors / Sentry event ID (if available):**
 ```
 
-### 9.2 Feature-Requests
+### 9.2 Feature requests
 
-Bevor du eines aufmachst, frag dich:
+Before opening one, ask yourself:
 
-- Verletzt es eines der 5 Prinzipien aus [`MANIFESTO.md`](./MANIFESTO.md)?
-- Ist es schon im [`VISION.md`](./VISION.md) §10 Roadmap-Plan? Dann lieber dort kommentieren statt neuen Issue.
-- Gibt es eine [`PROTOCOL.md`](./PROTOCOL.md) §17 / [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §13 / [`RECOVERY.md`](./RECOVERY.md) §13 Open-Item-Zeile dafür? Dann dort kommentieren.
+- Does it violate one of the 5 principles from [`MANIFESTO.md`](./MANIFESTO.md)?
+- Is it already in [`VISION.md`](./VISION.md) §10 roadmap? Then comment there instead of opening a new issue.
+- Is there a [`PROTOCOL.md`](./PROTOCOL.md) §17 / [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §13 / [`RECOVERY.md`](./RECOVERY.md) §13 open-item line for it? Then comment there.
 
-Features, die ein Prinzip verletzen, werden **direkt geschlossen**. Wir streiten uns nicht.
+Features that violate a principle are **closed directly**. We don't argue.
 
 ---
 
-## 10. Security-Disclosure
+## 10. Security disclosure
 
-### 10.1 Wo melden
+### 10.1 Where to report
 
-**Nicht** in GitHub-Issues. **Nicht** in Discord/Slack. **Nicht** auf Twitter.
+**Not** in GitHub Issues. **Not** in Discord/Slack. **Not** on Twitter.
 
-Stattdessen: **<security@renex.id>** (PGP-Key in `SECURITY.md`, TBD).
+Instead — see [`SECURITY.md`](../SECURITY.md):
 
-### 10.2 Was wir versprechen
+1. **GitHub Private Vulnerability Reporting (preferred):** [via the repo's Security tab](https://github.com/bruno-renex/renex/security/advisories/new) — encrypted by design.
+2. **Email:** `security@renex.id` — for researchers without a GitHub account.
 
-- **Acknowledgment:** binnen 72h.
-- **Triage:** binnen 7 Tagen.
-- **Fix-Plan:** binnen 14 Tagen, je nach Schweregrad.
-- **Credit:** öffentliche Nennung im Advisory, nach deinem Einverständnis (oder anonym).
+### 10.2 What we promise
 
-### 10.3 Was wir NICHT akzeptieren
+- **Acknowledgement:** within 72h.
+- **Triage:** within 7 days.
+- **Fix plan:** within 14 days, depending on severity.
+- **Credit:** public mention in the advisory with your consent (or anonymous).
 
-- Public-Disclosure ohne 90-Tage-Embargo.
-- „Security-Audits", die nichts gefunden haben, aber Advertising verlangen.
-- Kreative Auslegungen unseres Bug-Bounty-Budgets (das es heute nicht gibt — siehe Year 2 in [`VISION.md`](./VISION.md) §10).
+### 10.3 What we do NOT accept
 
-### 10.4 Was sicher ein Bug ist
+- Public disclosure without a 90-day embargo.
+- "Security audits" that found nothing but demand advertising.
+- Creative interpretations of our bug-bounty budget (which doesn't exist today — see Year 2 in [`VISION.md`](./VISION.md) §10).
 
-- Plaintext-Leaks in Logs (Server oder Frontend).
-- Auth-Bypass jeder Form.
+### 10.4 What's definitely a bug
+
+- Plaintext leaks in logs (server or frontend).
+- Auth bypass of any form.
 - CSRF / XSS / SQLi.
-- Brute-Force-Bypass auf `/e2e/recovery/*`.
-- Decrypt-Pfade, die ohne korrekten Key Plaintext zurückgeben.
-- State-Machine-Bypass (z.B. `revoked` → `active` ohne neuen Pubkey).
+- Brute-force bypass on `/e2e/recovery/*`.
+- Decrypt paths that return plaintext without the correct key.
+- State-machine bypass (e.g. `revoked` → `active` without a new pubkey).
 
 ---
 
 ## 11. Code of Conduct
 
-Kurz, weil Bullshit-Detector hoch.
+Short, because the bullshit detector is high.
 
-**Erwartet:**
-- Direkte, technische Argumentation.
-- Disagreement vor Push-zu-Konsens.
-- Begründungen statt Statusspiele („ich bin Senior, also …" zählt nicht).
-- Geduld mit Newcomers — auch wir waren mal das.
+**Expected:**
+- Direct, technical argumentation.
+- Disagreement before push-to-consensus.
+- Reasoning instead of status games ("I'm senior, so …" doesn't count).
+- Patience with newcomers — we were once too.
 
-**Nicht akzeptiert:**
-- Persönliche Angriffe, Diskriminierung jeder Art.
-- AI-generated Reviews oder Code-PRs ohne Disclosure (siehe §12).
-- Moderations-Spielchen, Community-Drama, Off-Topic-Dauerbeschallung.
-- „Whataboutism" gegen das Manifest.
+**Not accepted:**
+- Personal attacks, discrimination of any kind.
+- AI-generated reviews or code PRs without disclosure (see §12).
+- Moderation games, community drama, off-topic noise.
+- "Whataboutism" against the manifesto.
 
-Verstöße: einmalig Verwarnung, dann Bann. Keine drei-Strikes-Politik. Maintainer-Entscheidung ist final.
+Violations: one warning, then ban. No three-strikes policy. Maintainer decision is final.
 
-Vollständig (zukünftig): `CODE_OF_CONDUCT.md` (TBD, Phase 2).
+Full document (future): `CODE_OF_CONDUCT.md` (planned post-launch).
 
 ---
 
-## 12. Was wir nicht akzeptieren
+## 12. What we don't accept
 
-| ❌ | Warum |
+| ❌ | Why |
 |---|---|
-| **AI-generated Code ohne Disclosure** | Wir sind ein AI-freier Messenger. Wenn dein PR von Copilot/Cursor generiert ist, sag's in der PR-Description. AI-assisted ist ok mit Offenlegung; reine AI-PRs werden geprüft, aber strenger. |
-| **Drive-by-Cleanup-PRs ohne Issue** | „Ich hab das Mal aufgeräumt" verbrennt Reviewer-Zeit ohne Plan. Frag erst, bevor du 200 Files anfasst. |
-| **Dependencies-PRs ohne Begründung** | Jede neue npm-Package erweitert die Supply-Chain-Surface. Begründung im PR: warum, was kostet sie an Bundle-Size, gibt's Alternativen. |
-| **Style-PRs (nur Formatting)** | Formatting wird per Pre-Commit-Hook gelöst, nicht per PR. |
-| **Wire-Format-Änderungen ohne Spec-Update** | Siehe §5. |
-| **Crypto-Änderungen ohne Tests** | Siehe §7. |
-| **PRs gegen die 5 Prinzipien** | „Ich hab nur einen kleinen Bot-Webhook gebaut, ist optional" — nein. Closed. Siehe [`MANIFESTO.md`](./MANIFESTO.md). |
+| **AI-generated code without disclosure** | We're an AI-free messenger. If your PR is generated by Copilot / Cursor, say so in the PR description. AI-assisted is ok with disclosure; pure-AI PRs get reviewed but more strictly. |
+| **Drive-by cleanup PRs without an issue** | "I just cleaned up" burns reviewer time without a plan. Ask first before touching 200 files. |
+| **Dependency PRs without justification** | Every new npm package extends the supply-chain surface. Justify in the PR: why, what bundle-size cost, are there alternatives. |
+| **Style PRs (formatting only)** | Formatting is solved via pre-commit hook, not via PR. |
+| **Wire-format changes without spec update** | See §5. |
+| **Crypto changes without tests** | See §7. |
+| **PRs against the 5 principles** | "I only built a small bot webhook, it's optional" — no. Closed. See [`MANIFESTO.md`](./MANIFESTO.md). |
 
 ---
 
-## Schluss
+## Closing
 
-Wenn du bis hierher gelesen hast: gut.
+If you've read this far: good.
 
-Bau mit. Specs lesen, Code schreiben, Bugs melden, Streamen, Weitersagen.
-Wir antworten auf jedes ehrliche PR / Issue / Mail.
+Build with us. Read specs, write code, report bugs, stream, spread the word. We respond to every honest PR / issue / mail.
 
-Wenn etwas in dieser Datei unklar ist: PR. Auch dieses Dokument ist Spec.
+If something in this file is unclear: PR. This document is also a spec.
 
-— RENEX-Maintainer
+— RENEX maintainers

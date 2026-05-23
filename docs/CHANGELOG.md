@@ -15,14 +15,31 @@ RENEX-Repository öffentlich verfügbar: [`github.com/bruno-renex/renex`](https:
   `renex/1` für Passkey-only, AI-freie, E2E-verschlüsselte Echtzeit-Kommunikation.
 - Sub-Specs: [`MULTI_DEVICE.md`](./MULTI_DEVICE.md), [`RECOVERY.md`](./RECOVERY.md),
   [`GROUPS_MULTIDEVICE.md`](./GROUPS_MULTIDEVICE.md), [`VOICE.md`](./VOICE.md).
+- [`THREAT_MODEL.md`](./THREAT_MODEL.md) v0.1 (pre-beta): 10 adversaries
+  (4 defended / 2 partial / 4 not-defended), 8 acknowledged weaknesses with
+  v2 migration plan, crypto-primitives summary.
+- [`MANIFESTO.md`](./MANIFESTO.md) v1.2 — human-first tone-shift; FAQ erweitert
+  §8 (Matrix/Element/Session/SimpleX), §9 (Apple/Google-Lock-in via Passkeys),
+  §10 (PWA-Trust + reproducible builds).
 
 **Lizenz-Setup:**
 - Spec, Docs, Frontend: MIT ODER Apache-2.0 (max. Verbreitung).
-- Reference-Server: AGPL-3.0 (Schutz vor Big-Tech-Forks-ohne-Beitrag).
+- Reference-Server: AGPL-3.0-only (Schutz vor Big-Tech-Forks-ohne-Beitrag).
+- LICENSE-File ins Englische übersetzt für internationale Audience.
+- DCO (Developer Certificate of Origin) als Contributor-License-Modell.
 
 **GitHub-Setup:**
-- CI via GitHub Actions (npm test on push/PR).
-- Issue-Templates (bug, feature, spec-question), PR-Template, CODEOWNERS.
+- CI via GitHub Actions: `ci.yml` mit Node 20+22 Matrix, Frontend-Build,
+  Spec-Sanity-Check (validiert dass alle required docs + LICENSE-Files
+  existieren, inkl. THREAT_MODEL.md).
+- Issue-Templates: `bug_report.md`, `feature_request.md`, `spec_question.md`,
+  `config.yml` (blank-issues disabled, Security-Advisories + Discussions
+  als contact_links).
+- `PULL_REQUEST_TEMPLATE.md` mit Spec-Compatibility-Checklist +
+  Tri-License-Confirmation.
+- `dependabot.yml`: wöchentlich Mo 06:00 Europe/Zurich, npm + github-actions.
+- `CODEOWNERS`: `@bruno-renex` als Default-Owner, explizit für Spec-,
+  Security- und Licensing-Files.
 - Security-Policy ([`SECURITY.md`](../SECURITY.md)), Bug-Bounty-Lifetime-Pass.
 
 ### 🔄 Changed
@@ -33,20 +50,61 @@ RENEX-Repository öffentlich verfügbar: [`github.com/bruno-renex/renex`](https:
   `d9dc841`): „first passkey-only" → „passkey-native", „Zero bots" →
   „bot-resistant", technisch ungenaues „biometrischer Schlüssel" → korrekte
   WebAuthn-Erklärung.
+- VISION.md: Phase 2 (Open-Source-Launch) als **LIVE** statt KW5-6 markiert;
+  Decision-Log-Eintrag für Public-Release-Date 2026-05-27.
+- Landing-Page (app.renex.id): tone-shift + technische Korrekturen + visuelle
+  Gleichwertigkeit (Commit `8fd3ff8`).
+- SECURITY.md: GitHub Private Vulnerability Reporting als primary channel
+  (PGP-Erwähnung entfernt).
+- CONTRIBUTING.md: align mit pre-public repo-refactor (PR-from-fork-Workflow).
+- `backend.js`: Comment-Header klärt Rolle als Cloudflare-Worker-Entry-Point
+  (wrangler `main = "backend.js"`).
+
+### 🗑️ Removed
+
+- `deploy.sh.legacy` (pre-Phase-1A.6.6-Cutover backup, nicht mehr referenziert).
+- `deploy-svelte.sh` (Phase-1A.6 transitional Svelte-parallel-Deploy; Cutover
+  abgeschlossen, `deploy.sh` deployt jetzt Svelte).
+- Backup-SQL-Files (`backup-*.sql`, `backup-pre-multidevice-*.sql`) aus
+  voller git history entfernt via `git filter-repo` — `.git`-Größe 14 MB → 2.2 MB.
 
 ### 🔒 Security
 
+- **Pre-beta NOT AUDITED warnings** prominent in README + SECURITY.md
+  mit Link zu THREAT_MODEL.md.
+- gitleaks-Scan über volle history: 0 echte Secrets (3 false positives:
+  `PRIV_JWK_KEY` ist localStorage-Key-Name).
 - Voice 1:1 Security-Audit + Härtung abgeschlossen (Phase 8a):
   `/voice/hangup`/`/voice/cancel` Participant-Check, `/voice/room/*`
   deaktiviert (war Klartext-SDP-Pfad), `auth`-Feld REQUIRED auf
   `/voice/ring` + `/voice/answer`. Server-Härtung: fail2ban, SSH-Lockdown,
   COTURN_SECRET rotiert, denied-peer-ip + Quotas.
+- npm audit: `devalue` 5.7.1 → 5.8.1 (HIGH: DoS via sparse-array
+  deserialization), `svelte` 5.55.5 → 5.55.9 (4× moderate: XSS spread-attr,
+  SSR Promise, DOM clobbering, ReDoS in `svelte:element`). 7 verbleibende
+  moderate sind dev-only (esbuild/vite dev-server CORS), acceptable for
+  pre-beta — `vite 5→8` breaking update deferred post-launch.
+
+### 🐛 Fixed
+
+- **Multi-Device CMK Race after Guest-Convert** (Commit `b3317ce`):
+  Backend persistent `cmk_req` via DO-backlog + sender-side device-add
+  re-subscription; Frontend `migratePeerHandle` returns `migratedDmPeers`
+  → caller triggers `republishCMKForPeer` per peer so wrap lands under new
+  cid. UI-Banner in ChatView („🔐 Some messages are still encrypted — @peer
+  needs to come online briefly") + i18n DE/EN/ES. Documented as
+  `THREAT_MODEL.md` §4.1. Real-world-impact niedrig (Standard-Flow trifft
+  Race nicht), aber strict-E2E-konformer truly-lost-Pfad jetzt sauber.
+- `docs/RECOVERY.md` L607: stale Referenz `bash deploy-svelte.sh` →
+  `bash deploy.sh`.
 
 ### 📝 Notes
 
 Status: **Pre-Beta**. Erste Public Beta-User erwartet Juli 2026 (Phase 7).
 Voice-Channels (Multi-Party, LiveKit) + Signal-Protocol-Migration kommen
 in Phase 8b–8d (Aug-Nov 2026) als „v2.0-Update".
+
+External audit geplant Year 2 (vor v1.0.0-Stable nach Audit-Completion).
 
 ---
 

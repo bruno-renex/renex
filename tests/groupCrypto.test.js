@@ -525,6 +525,23 @@ describe('GSK Distribution APIs', () => {
     expect(r.delivered).toBe(0);
   });
 
+  it('distributeMyGSKToMembers handles empty member list (solo group cold-start)', async () => {
+    // Solo-Group: Gruppe nur mit Creator erstellt, keine Member ausgewählt.
+    // ensureMyGSK ruft distributeMyGSKToMembers(groupId, gsk, []) — muss
+    // sauber no-op'en (kein throw), recipients=0. Verifiziert dass der
+    // Cold-Start-Flow (CreateGroupModal "Leere Gruppe erstellen") Crypto-safe ist.
+    let inboxCalls = 0;
+    resetApiMock((path) => {
+      if (path.startsWith('/e2e/inbox/get')) { inboxCalls++; return { ok: true, data: { devices: [] } }; }
+      return { ok: true };
+    });
+    const r = await distributeMyGSKToMembers('solo-group', crypto.getRandomValues(new Uint8Array(32)), []);
+    expect(r.ok).toBe(false);     // ok:false = "0 erfolgreiche Zustellungen", kein Fehler
+    expect(r.recipients).toBe(0);
+    expect(r.delivered).toBe(0);
+    expect(inboxCalls).toBe(0);   // keine Member → kein einziger inbox-fetch
+  });
+
   it('storeMyGSKForOwnDevices: skipped wenn nur eigenes Device existiert', async () => {
     resetApiMock((path) => {
       if (path.startsWith('/e2e/inbox/get')) {

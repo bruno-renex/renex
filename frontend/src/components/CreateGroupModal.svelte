@@ -40,7 +40,10 @@
   // Validierung
   let trimmedName = $derived(groupName.trim());
   let canProceedToStep2 = $derived(trimmedName.length >= 2 && trimmedName.length <= 50);
-  let canCreate = $derived(canProceedToStep2 && selectedHandles.size > 0 && !isSubmitting);
+  // Members sind optional: leere Gruppe (nur Creator) erlaubt — Cold-Start-Flow,
+  // User kann nach Erstellung per Invite-Link / AddGroupMembersModal einladen.
+  // Backend (groupRoutes.js) akzeptiert members=[] (GSK-Distribution geguarded).
+  let canCreate = $derived(canProceedToStep2 && !isSubmitting);
 
   // Step 2: Live-Filter auf Handle + DisplayName
   let filteredContacts = $derived.by(() => {
@@ -176,7 +179,7 @@
         </div>
       {:else}
         <p class="hint">
-          {lang.selectMembersHint || "Wähle aus deinen Kontakten."}
+          {lang.selectMembersHintOptional || "Wähle aus deinen Kontakten — optional. Du kannst die Gruppe auch leer starten und später einladen."}
           {#if selectedHandles.size > 0}
             <strong class="count-badge">{selectedHandles.size} {lang.selected || "ausgewählt"}</strong>
           {/if}
@@ -184,8 +187,8 @@
 
         {#if contacts.length === 0}
           <div class="empty-contacts">
-            <p>{lang.noContactsToAdd || "Keine Kontakte vorhanden."}</p>
-            <p class="hint-sm">{lang.addContactsFirst || "Füge zuerst Kontakte hinzu."}</p>
+            <p>{lang.noContactsToAdd || "Noch keine Kontakte."}</p>
+            <p class="hint-sm">{lang.noContactsCreateEmpty || "Kein Problem — erstelle die Gruppe leer und lade Mitglieder später per Invite-Link ein."}</p>
           </div>
         {:else}
           {#if selectedContactList.length > 0}
@@ -248,7 +251,9 @@
             {#if isSubmitting}
               <span class="spinner"></span>
             {/if}
-            {lang.createGroupBtn || "Gruppe erstellen"}
+            {selectedHandles.size === 0
+              ? (lang.createEmptyGroupBtn || "Leere Gruppe erstellen")
+              : (lang.createGroupBtn || "Gruppe erstellen")}
           </button>
         </div>
       {/if}

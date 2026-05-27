@@ -80,6 +80,19 @@ export async function scheduled(event, env) {
     console.error("❌ Push-Cleanup fehlgeschlagen:", e);
   }
 
+  // ── Abgelaufene Server-Invites aufräumen ─────────────────────────────
+  try {
+    const invResult = await env.RENEX_DB.prepare(
+      "DELETE FROM server_invites WHERE expires_at IS NOT NULL AND expires_at < ?"
+    ).bind(Date.now()).run();
+    const invDeleted = invResult.meta?.changes ?? 0;
+    if (invDeleted > 0) {
+      console.log(`🔗 Invite-Cleanup: ${invDeleted} abgelaufene Server-Invites gelöscht`);
+    }
+  } catch (e) {
+    console.error("❌ Invite-Cleanup fehlgeschlagen:", e);
+  }
+
   // ── Abgelaufene Gast-Mitgliedschaften aufräumen ──────────────────────
   try {
     const now = Date.now();

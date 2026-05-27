@@ -4,6 +4,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-05-27 — Phase 3A: Server & Channels (live) 🧩
+
+Discord-artige Text-Server am Launch-Tag fertiggestellt + deployed (~3 Wochen vor Plan).
+
+### ✨ Added
+- **Server & Text-Channels** mit Roles, Multi-Role-Permissions (Bitfield), Audit-Log.
+- **Channel Send/Receive** end-to-end: Absendernamen, Unread-Badge, Live-Rename,
+  Reaction-Toasts, channel-agnostische GSK-Pipeline (Multi-Device via `request_gsk`).
+- **Channel-Auto-Delete** (admin-gated via `MANAGE_CHANNELS`) — type-aware Backend.
+- **Server-Invites**: Token-Link erstellen/beitreten/verwalten/widerrufen
+  (`server_invites`-Tabelle, `INVITE_MEMBERS`-gated, Cron-Cleanup abgelaufener Invites).
+- **WS-Live-Updates** für Member-/Channel-/Role-Änderungen am offenen Server.
+- i18n de/en/es für alle neuen Strings.
+
+### 🐛 Fixed
+- `/chat/list`, `/groups/auto-delete` + Membership-Checks **type-aware** (Channels in
+  `server_members`, nicht `conversation_members`) — behob 403/leere History + „0 Mitglieder".
+- Invite-Link-Kopieren via Modal mit Copy-Button (Safari/iOS-Clipboard-Geste).
+
+---
+
 ## 2026-05-27 — v1.0.0: Public Open-Source-Release 🚀
 
 RENEX-Repository öffentlich verfügbar: [`github.com/bruno-renex/renex`](https://github.com/bruno-renex/renex).

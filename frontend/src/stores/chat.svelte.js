@@ -652,7 +652,7 @@ export const chatStore = {
    */
   renameSelectedIfMatch(groupId, newName) {
     if (!groupId || !newName) return;
-    if (_selectedChat?.type !== 'group' || _selectedChat?.key !== groupId) return;
+    if ((_selectedChat?.type !== 'group' && _selectedChat?.type !== 'channel') || _selectedChat?.key !== groupId) return;
     if (_selectedChat.name === newName) return;
     _selectedChat = { ..._selectedChat, name: newName };
   },

@@ -15,6 +15,7 @@
   import { toastStore } from '../stores/toast.svelte.js';
   import { Permissions, resolvePermissions } from '../lib/permissions.js';
   import RoleEditModal from './RoleEditModal.svelte';
+  import { autoDeleteStore, autoDeleteLabel, ALLOWED_DAYS } from '../stores/autoDelete.svelte.js';
 
   let { isOpen = $bindable(false) } = $props();
 
@@ -22,7 +23,7 @@
   let detail = $derived(serverStore.selectedServerDetail);
   let serverId = $derived(detail?.server?.id);
 
-  let activeTab = $state('roles');     // 'roles' | 'members'
+  let activeTab = $state('roles');     // 'roles' | 'members' | 'channels'
   let editRole = $state(null);          // role-object → öffnet RoleEditModal in edit-mode
   let editModalOpen = $state(false);    // bindable boolean für RoleEditModal
   let createRoleOpen = $state(false);   // → öffnet RoleEditModal in create-mode
@@ -61,7 +62,103 @@
   let canManageRoles = $derived(
     detail?.myMembership?.isOwner === true || (myPerms & Permissions.MANAGE_ROLES) === Permissions.MANAGE_ROLES
   );
+  let canManageChannels = $derived(
+    detail?.myMembership?.isOwner === true || (myPerms & Permissions.MANAGE_CHANNELS) === Permissions.MANAGE_CHANNELS
+  );
+  let canInvite = $derived(
+    detail?.myMembership?.isOwner === true || (myPerms & Permissions.INVITE_MEMBERS) === Permissions.INVITE_MEMBERS
+  );
   let isOwner = $derived(detail?.myMembership?.isOwner === true);
+
+  // Auto-Delete pro Channel: Settings beim Öffnen des Channels-Tabs laden.
+  let busyChannelAd = $state(null);   // channelId während set
+  const channelChat = (c) => ({ type: 'channel', key: c.id, serverId });
+
+  $effect(() => {
+    if (activeTab === 'channels' && detail?.channels) {
+      for (const c of detail.channels) autoDeleteStore.loadFor(channelChat(c));
+    }
+  });
+
+  async function setChannelAutoDelete(c, days) {
+    if (!canManageChannels || busyChannelAd) return;
+    busyChannelAd = c.id;
+    const r = await autoDeleteStore.set(channelChat(c), days);
+    busyChannelAd = null;
+    if (!r.ok) {
+      toastStore.push((lang.error || 'Fehler') + ': ' + r.error, { kind: 'error' });
+    } else {
+      toastStore.push('✅ Auto-Delete: ' + autoDeleteLabel(days, lang), { kind: 'success' });
+    }
+  }
+
+  // ── Invite-Verwaltung (Invites-Tab) ──
+  let invites = $state([]);
+  let invitesLoading = $state(false);
+  let busyInvite = $state(false);
+  let busyRevoke = $state(null);   // token während revoke
+  let copiedToken = $state(null);  // token mit aktivem "Kopiert"-Feedback
+
+  const inviteUrlFor = (token) => `https://app.renex.id/?join-server=${token}`;
+
+  async function loadInvites() {
+    if (!serverId) return;
+    invitesLoading = true;
+    const r = await serverStore.listInvites(serverId);
+    invitesLoading = false;
+    invites = r.ok ? r.invites : [];
+    if (!r.ok) toastStore.push((lang.error || 'Fehler') + ': ' + r.error, { kind: 'error' });
+  }
+
+  $effect(() => {
+    if (activeTab === 'invites' && serverId) void loadInvites();
+  });
+
+  async function createNewInvite() {
+    if (!serverId || busyInvite) return;
+    busyInvite = true;
+    const r = await serverStore.createInvite(serverId, { ttlMin: 10080, maxUses: 0 });
+    busyInvite = false;
+    if (!r.ok) {
+      toastStore.push((lang.inviteCreateFailed || 'Invite-Erstellung fehlgeschlagen') + ': ' + r.error, { kind: 'error' });
+      return;
+    }
+    await loadInvites();
+  }
+
+  async function copyInvite(token) {
+    try {
+      await navigator.clipboard.writeText(inviteUrlFor(token));
+      copiedToken = token;
+      setTimeout(() => { if (copiedToken === token) copiedToken = null; }, 2000);
+    } catch {
+      toastStore.push(lang.copyFailed || 'Kopieren nicht möglich — Link manuell auswählen', { kind: 'info' });
+    }
+  }
+
+  async function revokeInvite(token) {
+    if (busyRevoke) return;
+    if (!confirm(lang.inviteRevokeConfirm || 'Diesen Invite-Link widerrufen? Er wird sofort ungültig.')) return;
+    busyRevoke = token;
+    const r = await serverStore.deleteInvite(serverId, token);
+    busyRevoke = null;
+    if (!r.ok) {
+      toastStore.push((lang.inviteRevokeFailed || 'Widerruf fehlgeschlagen') + ': ' + r.error, { kind: 'error' });
+      return;
+    }
+    invites = invites.filter(i => i.token !== token);
+  }
+
+  function inviteExpiryText(inv) {
+    if (!inv.expires_at) return lang.inviteNeverExpires || 'unbegrenzt';
+    const d = new Date(inv.expires_at);
+    if (Date.now() > inv.expires_at) return lang.inviteExpired || 'abgelaufen';
+    return d.toLocaleString(lang.locale || 'de-DE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function inviteUsesText(inv) {
+    return inv.max_uses > 0 ? `${inv.uses}/${inv.max_uses}` : `${inv.uses}/∞`;
+  }
 
   // Höchste eigene Role-Position (für Position-Slider-Cap im RoleEditModal)
   let actorMaxPosition = $derived.by(() => {
@@ -131,6 +228,24 @@
         >
           👥 {lang.tabMembers || 'Mitglieder'} ({detail.members?.length || 0})
         </button>
+        <button
+          role="tab"
+          class="ss-tab"
+          class:active={activeTab === 'channels'}
+          onclick={() => activeTab = 'channels'}
+        >
+          # {lang.tabChannels || 'Channels'} ({detail.channels?.length || 0})
+        </button>
+        {#if canInvite}
+          <button
+            role="tab"
+            class="ss-tab"
+            class:active={activeTab === 'invites'}
+            onclick={() => activeTab = 'invites'}
+          >
+            🔗 {lang.tabInvites || 'Invites'}
+          </button>
+        {/if}
       </nav>
 
       <!-- ═══════ ROLES TAB ═══════ -->
@@ -216,6 +331,80 @@
               </li>
             {/each}
           </ul>
+        </div>
+      {/if}
+
+      <!-- ═══════ CHANNELS TAB (Auto-Delete) ═══════ -->
+      {#if activeTab === 'channels'}
+        <div class="ss-content">
+          {#if !canManageChannels}
+            <div class="ss-info-banner">
+              {lang.channelsAutoDeleteReadOnly || '👁 Read-only — du brauchst MANAGE_CHANNELS um Auto-Delete zu ändern.'}
+            </div>
+          {:else}
+            <div class="ss-info-banner">
+              {lang.channelsAutoDeleteHint || 'Auto-Delete löscht Nachrichten im Channel nach Ablauf für alle Mitglieder. Alle bekommen eine System-Nachricht.'}
+            </div>
+          {/if}
+
+          <ul class="ss-channel-list">
+            {#each (detail.channels || []) as c (c.id)}
+              {@const ad = autoDeleteStore.getFor({ type: 'channel', key: c.id })}
+              <li class="ss-channel-row">
+                <div class="ss-channel-label">
+                  <span class="ss-channel-hash">#</span>
+                  <span class="ss-channel-nm">{c.name}</span>
+                </div>
+                <div class="ss-ad-options">
+                  {#each ALLOWED_DAYS as days}
+                    <button
+                      class="ss-ad-btn"
+                      class:active={(ad?.days || 0) === days}
+                      onclick={() => setChannelAutoDelete(c, days)}
+                      disabled={!canManageChannels || busyChannelAd === c.id}
+                    >
+                      {autoDeleteLabel(days, lang)}
+                    </button>
+                  {/each}
+                </div>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+
+      <!-- ═══════ INVITES TAB ═══════ -->
+      {#if activeTab === 'invites'}
+        <div class="ss-content">
+          <button class="btn-create" onclick={createNewInvite} disabled={busyInvite}>
+            {#if busyInvite}…{:else}+ {lang.inviteCreateBtn || 'Invite-Link erstellen'}{/if}
+          </button>
+
+          {#if invitesLoading}
+            <div class="ss-info-banner">{lang.loading || 'Lädt…'}</div>
+          {:else if invites.length === 0}
+            <div class="ss-info-banner">{lang.invitesEmpty || 'Noch keine aktiven Invite-Links. Erstelle einen oben.'}</div>
+          {:else}
+            <ul class="ss-invite-list">
+              {#each invites as inv (inv.token)}
+                <li class="ss-invite-row">
+                  <div class="ss-invite-link-row">
+                    <input class="ss-invite-input" type="text" value={inviteUrlFor(inv.token)} readonly onclick={(e) => e.currentTarget.select()} />
+                    <button class="ss-invite-copy" class:copied={copiedToken === inv.token} onclick={() => copyInvite(inv.token)}>
+                      {#if copiedToken === inv.token}✓{:else}📋{/if}
+                    </button>
+                  </div>
+                  <div class="ss-invite-meta">
+                    <span>{lang.inviteUses || 'Nutzungen'}: {inviteUsesText(inv)}</span>
+                    <span>{lang.expiresAt || 'Gültig bis'}: {inviteExpiryText(inv)}</span>
+                    <button class="ss-invite-revoke" onclick={() => revokeInvite(inv.token)} disabled={busyRevoke === inv.token}>
+                      {#if busyRevoke === inv.token}…{:else}🗑️ {lang.inviteRevokeBtn || 'Widerrufen'}{/if}
+                    </button>
+                  </div>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         </div>
       {/if}
     </div>
@@ -513,4 +702,135 @@
     animation: spin 0.6s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  .ss-channel-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ss-channel-row {
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ss-channel-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .ss-channel-hash {
+    color: var(--text-muted);
+    font-weight: 700;
+  }
+  .ss-channel-nm {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ss-ad-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .ss-ad-btn {
+    padding: 5px 10px;
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .ss-ad-btn:hover:not(:disabled) {
+    border-color: var(--accent-voice);
+    color: var(--accent-voice);
+  }
+  .ss-ad-btn.active {
+    background: var(--accent-voice);
+    border-color: var(--accent-voice);
+    color: #07070a;
+  }
+  .ss-ad-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .ss-invite-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .ss-invite-row {
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ss-invite-link-row {
+    display: flex;
+    gap: 6px;
+  }
+  .ss-invite-input {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 10px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 11px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  .ss-invite-input:focus { border-color: var(--accent-voice); outline: none; }
+  .ss-invite-copy {
+    flex-shrink: 0;
+    padding: 7px 11px;
+    background: var(--accent-voice);
+    color: #07070a;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .ss-invite-copy.copied { background: var(--status-success); }
+  .ss-invite-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .ss-invite-revoke {
+    margin-left: auto;
+    padding: 5px 10px;
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .ss-invite-revoke:hover:not(:disabled) {
+    color: var(--status-error);
+    border-color: var(--status-error);
+  }
+  .ss-invite-revoke:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

@@ -16,6 +16,7 @@ import { captureException } from '../lib/sentry.js';
 import { chatToConvoId } from './notifications.svelte.js';
 import { chatStore } from './chat.svelte.js';
 import { i18nStore } from './i18n.svelte.js';
+import { isGroupLike } from '../lib/convoType.js';
 
 // settings[convoId] = { days, status, proposedBy, originalDays, type: 'dm'|'group' }
 let _settings = $state({});
@@ -46,7 +47,7 @@ export const autoDeleteStore = {
     if (!cid) return null;
     try {
       let r;
-      if (chat.type === 'group') {
+      if (isGroupLike(chat)) {
         r = await apiFetch(`/groups/auto-delete?groupId=${encodeURIComponent(cid)}`);
       } else {
         const peer = chat.peer || chat.key;
@@ -82,7 +83,7 @@ export const autoDeleteStore = {
 
     try {
       let r;
-      if (chat.type === 'group') {
+      if (isGroupLike(chat)) {
         r = await apiFetch('/groups/auto-delete', {
           method: 'POST',
           body: { groupId: cid, days: days || 0 },
@@ -98,7 +99,7 @@ export const autoDeleteStore = {
 
       // Local update
       const me = userStore.myUser;
-      if (chat.type === 'group') {
+      if (isGroupLike(chat)) {
         _settings = {
           ..._settings,
           [cid]: {
@@ -106,7 +107,7 @@ export const autoDeleteStore = {
             status: days ? 'active' : 'off',
             proposedBy: me,
             originalDays: null,
-            type: 'group',
+            type: chat.type,
             myRole: _settings[cid]?.myRole || 'member',
           },
         };

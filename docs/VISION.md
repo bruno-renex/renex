@@ -433,17 +433,26 @@ Master-Docs geschrieben (`VISION.md`).
 ### Phase 1B/1C Loose-End ✅ *(2026-05-13)*
 - AddDeviceModal mit QR-Onboarding-Helper (siehe `MULTI_DEVICE.md` §12.1)
 
-### Phase 3A — Text-Server & Channels *(Wo 1-4: 2026-05-18 → 2026-06-15)*
+### Phase 3A — Text-Server & Channels ✅ *(fertig 2026-05-27 — ~3 Wochen vor Plan, live getestet)*
 **Voice ausgeklammert** — siehe [`SERVERS.md`](./SERVERS.md) Decision Log 2026-05-13.
-- Server/Channel-Konzept (Datenmodell, Roles, Permissions, Audit-Log)
-- Sidebar-Refactor (Server-Stack + DMs + Standalone-Groups)
-- Server-Settings-UI (Channels, Roles, Members, Invites, Audit-Log)
-- Permission-Resolution-Algorithmus (Frontend-Hide + Backend-Enforce)
-- Multi-Device-Code-Erweiterung: `redistributeGSKsForPeerDeviceAdded` umfasst Channel-Memberships
+- ✅ Server/Channel-Konzept (Datenmodell, Roles, Permissions, Audit-Log)
+- ✅ Sidebar-Refactor (Server-Stack + DMs + Standalone-Groups)
+- ✅ Server-Settings-UI (Roles, Members, Channels-Auto-Delete, Invites-Verwaltung)
+- ✅ Permission-Resolution-Algorithmus (Frontend-Hide + Backend-Enforce)
+- ✅ Multi-Device-Code-Erweiterung: `redistributeGSKsForPeerDeviceAdded` umfasst Channel-Memberships
+- ✅ Channel Send/Receive end-to-end (Absendernamen, Unread-Badge, Live-Rename, Reaction-Toasts)
+- ✅ Channel-Auto-Delete (admin-gated via MANAGE_CHANNELS)
+- ✅ Server-Invites (Token-Link erstellen/beitreten/verwalten/widerrufen, `server_invites`-Tabelle)
+- ✅ WS-Live-Updates (server_member_joined/left, channel_*, role_*, member_role_*)
+- ✅ i18n de/en/es für alle neuen Strings
+
+**Deferred zu Phase 3A.5** (nicht beta-blockierend): Ban-System (`server_bans`),
+Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
+(channel_permission_overrides-UI), Tier-Limits (Free/Pro), Server-Name/Icon/Beschreibung-Edit.
 
 ### Phase 5-Light — Anti-AI Minimum *(Wo 5: 2026-06-16 → 2026-06-22)*
 - Captcha-Verschärfung an Server-Create + Invite-Accept
-- Rate-Limits für Server/Channel/Role-Endpoints
+- ✅ Rate-Limits für Server/Channel/Role-Endpoints (bereits mit Phase 3A geliefert — RL-Buckets in `serverRoutes.js`, inkl. inviteCreate/serverJoin)
 - ❌ Hardware-Attestation: deferred zu Phase 9 (Year 1)
 - ❌ Behavioral-Analysis: deferred zu Phase 9
 

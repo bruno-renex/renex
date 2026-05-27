@@ -439,6 +439,40 @@
         const groupName = p.get('name');
         console.log(`📞 handleDeepLink: url-arg=${url || '(cold-boot)'} location.search=${location.search} with=${dmPeer} call=${p.get('call')}`);
 
+        // Server-Invite-Link (?join-server=srv_inv_<hex>): Preview + Confirm + Join.
+        const joinToken = p.get('join-server');
+        if (joinToken && /^srv_inv_[a-f0-9]{32}$/.test(joinToken)) {
+          // Param sofort strippen, sonst re-trigger bei jedem Reload.
+          const cleaned = new URL(location.href);
+          cleaned.searchParams.delete('join-server');
+          history.replaceState(null, '', cleaned.toString());
+          void (async () => {
+            const lng = i18nStore.lang;
+            const info = await serverStore.getInviteInfo(joinToken);
+            if (!info.ok) {
+              toastStore.push(lng.inviteInvalid || 'Invite-Link ungültig oder abgelaufen', { kind: 'error' });
+              return;
+            }
+            if (info.info.alreadyMember) {
+              await serverStore.loadServers();
+              serverStore.selectServer(info.info.serverId);
+              toastStore.push(lng.inviteAlreadyMember || 'Du bist bereits Mitglied dieses Servers', { kind: 'info' });
+              return;
+            }
+            const confirmText = (lng.inviteJoinConfirm || 'Server „{name}" beitreten? ({count} Mitglieder)')
+              .replace('{name}', info.info.name)
+              .replace('{count}', String(info.info.memberCount));
+            if (!confirm(confirmText)) return;
+            const r = await serverStore.joinByToken(joinToken);
+            if (r.ok) {
+              toastStore.push(lng.inviteJoinSuccess || '✅ Server beigetreten', { kind: 'success' });
+            } else {
+              toastStore.push((lng.inviteJoinFailed || 'Beitritt fehlgeschlagen') + ': ' + r.error, { kind: 'error' });
+            }
+          })();
+          return true;
+        }
+
         // Voice-Call von Notification-Tap (?call=1): PWA war zu, voice:ring
         // WS-Event ging verloren. Backend hat das Ring-Event in KV gespeichert
         // (voice_ring:<me>) — wir holen's via /voice/active und triggern
@@ -627,8 +661,11 @@
             const sel = chatStore.selectedChat;
             const isGroupReact = !!msg.groupName;
             const chatKey = isGroupReact ? msg.convoId : msg.from;
+            // Channel vs. Group unterscheiden: gecachte Channel-Info liefert serverId
+            // (nötig für korrekte selectChat-Navigation aus dem Toast).
+            const channelInfo = isGroupReact ? serverStore.getChannelInfo(msg.convoId) : null;
             const isViewingChat = sel
-              && ((sel.type === 'group' && sel.key === chatKey)
+              && (((sel.type === 'group' || sel.type === 'channel') && sel.key === chatKey)
                   || (sel.type === 'dm' && (sel.peer === chatKey || sel.key === chatKey)));
             if (!isViewingChat) {
               const lng = i18nStore.lang;
@@ -640,7 +677,9 @@
               // ChatView's $effect picks pendingJumpTo + messages.length auf und
               // jumpt sobald das Bubble-DOM-Element verfügbar ist.
               const chatNav = isGroupReact
-                ? { type: 'group', key: msg.convoId, name: msg.groupName || 'Group' }
+                ? (channelInfo
+                    ? { type: 'channel', key: msg.convoId, name: msg.groupName || 'Channel', serverId: channelInfo.serverId }
+                    : { type: 'group', key: msg.convoId, name: msg.groupName || 'Group' })
                 : { type: 'dm',    key: msg.from,    peer: msg.from, name: `@${msg.from}` };
               toastStore.push(
                 tmpl
@@ -1236,6 +1275,28 @@
       console.log("📞 voice:cancel", msg.callId);
       void voiceStore._handlePeerEnd(msg, "cancel");
     }));
+
+    // ── Server/Channel Live-Updates (Phase 3A) ──────────────────────────
+    // Backend pusht diese Events an alle Server-Members. Wenn der betroffene
+    // Server gerade geöffnet ist, Detail (Channels/Members/Roles) neu laden.
+    // server_member_joined/left aktualisiert zusätzlich die Server-Liste
+    // (Member-Count), auch wenn der Server nicht geöffnet ist.
+    const _serverLiveEvents = [
+      "server_member_joined", "server_member_left",
+      "channel_created", "channel_renamed", "channel_deleted",
+      "role_created", "role_updated", "role_deleted",
+      "member_role_assigned", "member_role_revoked",
+    ];
+    for (const evt of _serverLiveEvents) {
+      _wsUnsubs.push(ws.on(evt, (msg) => {
+        if (msg?.serverId && msg.serverId === serverStore.selectedServerId) {
+          void serverStore.loadServerDetail(msg.serverId);
+        }
+        if (evt === "server_member_joined" || evt === "server_member_left") {
+          void serverStore.loadServers();
+        }
+      }));
+    }
 
     // E2E Inbox-Key Upload + Heartbeat — sequenziell aber non-blocking
     // (Phase 1A.6 Migration aus renex-legacy/js/e2e.js).

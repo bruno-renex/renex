@@ -5,21 +5,22 @@
   Modi:
     1. KEINE Server-Auswahl: zeigt Server-Liste + "+ Server erstellen"
     2. Server selektiert: zeigt Header (mit Back-Button) + Channel-Liste
-       (read-only — Channel-Send kommt in Phase 4b)
+       (mit Unread-Badge) + Member-Liste. Channel-Klick öffnet den Channel
+       via chatStore.selectChat({type:'channel'}).
 
-  WICHTIG: Diese Komponente ist eingebettet in InboxList als
-  activeSection === 'servers'. Sie greift NICHT auf chatStore zu — Channel-
-  Klick öffnet aktuell nur einen Info-Toast (Send/Receive noch nicht wired).
+  Eingebettet in InboxList als activeSection === 'servers'.
 -->
 <script>
   import { onMount } from 'svelte';
   import { i18nStore } from '../stores/i18n.svelte.js';
   import { serverStore } from '../stores/serverStore.svelte.js';
   import { chatStore } from '../stores/chat.svelte.js';
+  import { inboxStore } from '../stores/inbox.svelte.js';
   import { toastStore } from '../stores/toast.svelte.js';
   import { Permissions, resolvePermissions } from '../lib/permissions.js';
   import CreateServerModal from './CreateServerModal.svelte';
   import ServerSettingsModal from './ServerSettingsModal.svelte';
+  import ServerInviteModal from './ServerInviteModal.svelte';
 
   let lang = $derived(i18nStore.lang);
   let servers = $derived(serverStore.servers);
@@ -46,6 +47,41 @@
     return (eff & (Permissions.MANAGE_ROLES | Permissions.MANAGE_SERVER)) !== 0;
   });
 
+  // Hat User INVITE_MEMBERS (oder Owner)? → Invite-Button zeigen
+  let canInvite = $derived.by(() => {
+    if (!detail) return false;
+    if (detail.myMembership?.isOwner === true) return true;
+    const myRoles = detail.roles?.filter(r => detail.myMembership?.roleIds?.includes(r.id)) || [];
+    const eff = resolvePermissions({
+      isOwner:    false,
+      roles:      myRoles,
+      overrides:  [],
+      userHandle: detail.myMembership?.handle || '',
+    });
+    return (eff & Permissions.INVITE_MEMBERS) !== 0;
+  });
+
+  let busyInvite = $state(false);
+  let inviteUrl = $state(null);
+  let inviteModalOpen = $state(false);
+  async function onCreateInvite() {
+    if (!selectedId || busyInvite) return;
+    busyInvite = true;
+    // Default: 7 Tage gültig, unbegrenzte Uses. Feingranulare Optionen (maxUses,
+    // ttl, initialRole) sind Phase 3A.5.
+    const r = await serverStore.createInvite(selectedId, { ttlMin: 10080, maxUses: 0 });
+    busyInvite = false;
+    if (!r.ok) {
+      toastStore.push((lang.inviteCreateFailed || 'Invite-Erstellung fehlgeschlagen') + ': ' + r.error, { kind: 'error' });
+      return;
+    }
+    // NICHT hier auto-kopieren: navigator.clipboard.writeText scheitert auf
+    // Safari/iOS nach dem await (User-Geste abgelaufen). Stattdessen Modal mit
+    // Copy-Button (frische Geste) + Web-Share öffnen.
+    inviteUrl = r.url;
+    inviteModalOpen = true;
+  }
+
   // Beim ersten Mount: Server-Liste laden
   onMount(() => {
     if (servers.length === 0) void serverStore.loadServers();
@@ -71,16 +107,18 @@
 
   function onChannelClick(channel) {
     if (!channel?.id) return;
-    // Phase 4b: Channel öffnet ChatView. Backend leitet aus conversations.type='channel'
+    // Channel öffnet ChatView. Backend leitet aus conversations.type='channel'
     // den richtigen Recipient-Set ab (server_members statt conversation_members).
     // GSK-Pipeline funktioniert unverändert (channel-agnostisch).
     // chat.name ohne #-Prefix — ChatHeader rendert # als Avatar-Symbol separat.
     chatStore.selectChat({
-      type:     'channel',
-      key:      channel.id,
-      name:     channel.name,
-      topic:    channel.topic || null,
-      serverId: detail?.server?.id || null,
+      type:        'channel',
+      key:         channel.id,
+      name:        channel.name,
+      topic:       channel.topic || null,
+      serverId:    detail?.server?.id || null,
+      // In Phase 3A sind alle Server-Member auch Channel-Member.
+      memberCount: detail?.members?.length || 0,
     });
   }
 
@@ -179,6 +217,11 @@
           <span class="srv-owner-badge">👑</span>
         {/if}
       </div>
+      {#if canInvite}
+        <button class="srv-settings-btn" onclick={onCreateInvite} disabled={busyInvite} title={lang.inviteCreateBtn || 'Invite-Link erstellen'}>
+          {#if busyInvite}<span class="spinner-sm"></span>{:else}🔗{/if}
+        </button>
+      {/if}
       {#if canOpenSettings}
         <button class="srv-settings-btn" onclick={() => settingsModalOpen = true} title={lang.serverSettingsBtn || 'Server-Einstellungen'}>⚙</button>
       {/if}
@@ -210,6 +253,9 @@
               {#if c.kind === 'voice'}
                 <span class="srv-channel-kind">🔊</span>
               {/if}
+              {#if inboxStore.unreadFor(c.id) > 0}
+                <span class="srv-channel-badge">{inboxStore.unreadFor(c.id) > 99 ? '99+' : inboxStore.unreadFor(c.id)}</span>
+              {/if}
             </button>
             {#if c.topic}
               <div class="srv-channel-topic">{c.topic}</div>
@@ -236,16 +282,13 @@
           </li>
         {/each}
       </ul>
-
-      <p class="srv-footer-hint">
-        {lang.channelSendPhase4b || '💬 Channel-Nachrichten kommen in Phase 4b — Send/Receive-Pipeline wird noch ergänzt.'}
-      </p>
     {/if}
   </div>
 {/if}
 
 <CreateServerModal bind:isOpen={createModalOpen} />
 <ServerSettingsModal bind:isOpen={settingsModalOpen} />
+<ServerInviteModal bind:isOpen={inviteModalOpen} url={inviteUrl} />
 
 <style>
   .srv-section {
@@ -470,6 +513,22 @@
     font-size: 11px;
   }
 
+  .srv-channel-badge {
+    min-width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--accent-voice);
+    color: #07070A;
+    font-size: 10px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    line-height: 1;
+    box-sizing: border-box;
+  }
+
   .srv-channel-topic {
     padding: 0 10px 4px 24px;
     font-size: 11px;
@@ -517,16 +576,6 @@
     font-size: 10px;
     color: var(--text-muted);
     font-style: italic;
-  }
-
-  .srv-footer-hint {
-    margin: 14px;
-    padding: 10px;
-    background: var(--bg-panel-alt);
-    border-radius: 8px;
-    font-size: 11px;
-    color: var(--text-muted);
-    line-height: 1.5;
   }
 
   .btn-primary {

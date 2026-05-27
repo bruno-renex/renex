@@ -95,11 +95,24 @@ export async function handleChatRoutes(request, env, path, params) {
         // Mit-Effekt: rejoiner sehen nicht ihre frühere History (Forward Secrecy).
         let joinedAt = 0;
         if (isGroupConvo) {
-          const memberRow = await env.RENEX_DB.prepare(
-            "SELECT joined_at FROM conversation_members WHERE convo_id = ? AND member_handle = ? LIMIT 1"
-          ).bind(cid, me).first();
-          if (!memberRow) return json(request, { error: "Not a member of this group" }, 403);
-          joinedAt = Number(memberRow.joined_at) || 0;
+          // Type-aware: Channel-Members leben in server_members, klassische
+          // Group-Members in conversation_members.
+          const convoInfo = await env.RENEX_DB.prepare(
+            "SELECT type, server_id FROM conversations WHERE id = ?"
+          ).bind(cid).first();
+          if (convoInfo?.type === 'channel' && convoInfo.server_id) {
+            const sm = await env.RENEX_DB.prepare(
+              "SELECT joined_at FROM server_members WHERE server_id = ? AND user_handle = ? LIMIT 1"
+            ).bind(convoInfo.server_id, me).first();
+            if (!sm) return json(request, { error: "Not a member of this server" }, 403);
+            joinedAt = Number(sm.joined_at) || 0;
+          } else {
+            const memberRow = await env.RENEX_DB.prepare(
+              "SELECT joined_at FROM conversation_members WHERE convo_id = ? AND member_handle = ? LIMIT 1"
+            ).bind(cid, me).first();
+            if (!memberRow) return json(request, { error: "Not a member of this group" }, 403);
+            joinedAt = Number(memberRow.joined_at) || 0;
+          }
         }
 
         let sliced = [];

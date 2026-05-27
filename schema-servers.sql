@@ -148,3 +148,21 @@ CREATE INDEX IF NOT EXISTS idx_audit_target
 -- (Hier nicht inline, weil sonst der erste Apply gegen eine frische DB ohne
 -- die ALTER-Spalten failed.)
 -- ======================================================
+
+-- ── Server-Invites (Token-basierter Join-Link, Spec SERVERS.md §3.3 + §6.5) ──
+-- Eigene Tabelle (NICHT guest_sessions — Server-Joins sind registrierte User,
+-- keine Gäste). Cleanup abgelaufener Invites via Cron (cron.js).
+CREATE TABLE IF NOT EXISTS server_invites (
+  token           TEXT    PRIMARY KEY,         -- 'srv_inv_<32hex>'
+  server_id       TEXT    NOT NULL,
+  created_by      TEXT    NOT NULL,            -- Inviter-Handle
+  initial_role_id TEXT,                         -- optional: zusätzliche Role beim Join (sonst nur default)
+  max_uses        INTEGER NOT NULL DEFAULT 0,  -- 0 = unbegrenzt
+  uses            INTEGER NOT NULL DEFAULT 0,
+  expires_at      INTEGER,                      -- NULL = nie ablaufend
+  created_at      INTEGER NOT NULL,
+  FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_server_invites_server
+  ON server_invites(server_id);

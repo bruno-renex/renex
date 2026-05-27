@@ -1,5 +1,7 @@
 import { json, readJson, param, checkCsrf, isValidGroupId, insertSystemMessage } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit, pushToGroupMembers, pushToUserDO } from '../auth.js';
+import { getServerMembership, userHasPermission } from './serverRoutes.js';
+import { Permissions } from '../lib/permissions.js';
 
 // ======================================================
 // GROUP ROUTES
@@ -622,10 +624,25 @@ export async function handleGroupRoutes(request, env, path, params) {
         const groupId = url2.searchParams.get("groupId");
         if (!isValidGroupId(groupId)) return json(request, { error: "Invalid groupId" }, 400);
 
-        const membership = await env.RENEX_DB.prepare(
-          "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-        ).bind(groupId, me).first();
-        if (!membership) return json(request, { error: "Not a member" }, 403);
+        // Type-aware Membership: Channels leben in server_members, Gruppen in
+        // conversation_members.
+        const convoInfo = await env.RENEX_DB.prepare(
+          "SELECT type, server_id FROM conversations WHERE id = ?"
+        ).bind(groupId).first();
+        const isChannel = convoInfo?.type === 'channel' && !!convoInfo?.server_id;
+
+        let myRole;
+        if (isChannel) {
+          const sm = await getServerMembership(env, convoInfo.server_id, me);
+          if (!sm) return json(request, { error: "Not a member" }, 403);
+          myRole = sm.is_owner === 1 ? 'admin' : 'member';
+        } else {
+          const membership = await env.RENEX_DB.prepare(
+            "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+          ).bind(groupId, me).first();
+          if (!membership) return json(request, { error: "Not a member" }, 403);
+          myRole = membership.role;
+        }
 
         const row = await env.RENEX_DB.prepare(
           "SELECT days, status FROM auto_delete_settings WHERE convo_id = ?"
@@ -633,7 +650,7 @@ export async function handleGroupRoutes(request, env, path, params) {
 
         return json(request, {
           ...(row ?? { status: "off" }),
-          myRole: membership.role
+          myRole
         });
       }
 
@@ -644,13 +661,27 @@ export async function handleGroupRoutes(request, env, path, params) {
         const { groupId, days } = body;
         if (!isValidGroupId(groupId)) return json(request, { error: "Invalid groupId" }, 400);
 
-        // Mitglieds-Check (kein Admin-Zwang — Last-Write-Wins, jedes Mitglied
-        // darf für die eigene Privacy-Hygiene das Setting ändern. Ein Konflikt
-        // wird durch System-Bubble + ts-Ordering transparent gemacht.)
-        const membership = await env.RENEX_DB.prepare(
-          "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
-        ).bind(groupId, me).first();
-        if (!membership) return json(request, { error: "Not a member" }, 403);
+        // Type-aware Autorisierung:
+        //  - Gruppe: kein Admin-Zwang — Last-Write-Wins, jedes Mitglied darf
+        //    (Privacy-Hygiene; Konflikt via System-Bubble + ts-Ordering transparent).
+        //  - Channel: server-weite, destruktive Einstellung → nur MANAGE_CHANNELS.
+        const convoInfo = await env.RENEX_DB.prepare(
+          "SELECT type, server_id FROM conversations WHERE id = ?"
+        ).bind(groupId).first();
+        const isChannel = convoInfo?.type === 'channel' && !!convoInfo?.server_id;
+
+        if (isChannel) {
+          const sm = await getServerMembership(env, convoInfo.server_id, me);
+          if (!sm) return json(request, { error: "Not a member" }, 403);
+          if (!(await userHasPermission(env, convoInfo.server_id, groupId, me, Permissions.MANAGE_CHANNELS))) {
+            return json(request, { error: "Missing permission" }, 403);
+          }
+        } else {
+          const membership = await env.RENEX_DB.prepare(
+            "SELECT role FROM conversation_members WHERE convo_id = ? AND member_handle = ?"
+          ).bind(groupId, me).first();
+          if (!membership) return json(request, { error: "Not a member" }, 403);
+        }
 
         const ALLOWED_DAYS = new Set([1, 7, 30]);
         const now = Date.now();

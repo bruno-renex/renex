@@ -92,6 +92,16 @@ function getKnownChannels() {
   }));
 }
 
+/**
+ * Lookup für einen einzelnen Channel aus dem Cache besuchter Server-Details.
+ * @param {string} channelId
+ * @returns {{serverId: string, name: string}|null}
+ */
+function getChannelInfo(channelId) {
+  if (!channelId) return null;
+  return _knownChannels.get(channelId) || null;
+}
+
 function selectServer(id) {
   _selectedServerId = id;
   _selectedServerDetail = null; // clear stale data
@@ -219,6 +229,74 @@ async function leaveServer(serverId) {
   }
 }
 
+// ── Invites (Phase 3A — Server-Join via Token-Link) ──
+
+async function createInvite(serverId, { maxUses = 0, ttlMin = 0, initialRoleId = null } = {}) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/invites`, {
+      method: 'POST',
+      body: { maxUses, ttlMin, initialRoleId },
+    });
+    if (r.ok && r.data?.token) {
+      return { ok: true, token: r.data.token, url: r.data.url };
+    }
+    return { ok: false, error: r.error || 'invite_create_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.createInvite', extra: { serverId } });
+    return { ok: false, error: e?.message || 'invite_create_failed' };
+  }
+}
+
+async function getInviteInfo(token) {
+  try {
+    const r = await apiFetch(`/servers/join/${encodeURIComponent(token)}`);
+    if (r.ok) return { ok: true, info: r.data };
+    return { ok: false, error: r.error || 'invite_info_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.getInviteInfo' });
+    return { ok: false, error: e?.message || 'invite_info_failed' };
+  }
+}
+
+async function listInvites(serverId) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/invites`);
+    if (r.ok && Array.isArray(r.data?.invites)) return { ok: true, invites: r.data.invites };
+    return { ok: false, error: r.error || 'list_invites_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.listInvites', extra: { serverId } });
+    return { ok: false, error: e?.message || 'list_invites_failed' };
+  }
+}
+
+async function deleteInvite(serverId, token) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/invites/${encodeURIComponent(token)}`, {
+      method: 'DELETE',
+    });
+    if (r.ok) return { ok: true };
+    return { ok: false, error: r.error || 'delete_invite_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.deleteInvite', extra: { serverId, token } });
+    return { ok: false, error: e?.message || 'delete_invite_failed' };
+  }
+}
+
+async function joinByToken(token) {
+  try {
+    const r = await apiFetch(`/servers/join/${encodeURIComponent(token)}`, { method: 'POST' });
+    if (r.ok && r.data?.serverId) {
+      await loadServers();
+      selectServer(r.data.serverId);
+      return { ok: true, serverId: r.data.serverId, alreadyMember: r.data.alreadyMember === true };
+    }
+    return { ok: false, error: r.error || 'join_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.joinByToken' });
+    return { ok: false, error: e?.message || 'join_failed' };
+  }
+}
+
 function reset() {
   _servers = [];
   _selectedServerId = null;
@@ -235,6 +313,7 @@ export const serverStore = {
   get errorMsg()             { return _errorMsg; },
 
   loadServers,
+  loadServerDetail,
   selectServer,
   createServer,
   leaveServer,
@@ -244,5 +323,11 @@ export const serverStore = {
   assignRole,
   revokeRole,
   getKnownChannels,
+  getChannelInfo,
+  createInvite,
+  listInvites,
+  deleteInvite,
+  getInviteInfo,
+  joinByToken,
   reset,
 };

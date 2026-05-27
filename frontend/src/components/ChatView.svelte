@@ -89,6 +89,7 @@
 
   let lang = $derived(i18nStore.lang);
   let chat = $derived(chatStore.selectedChat);
+  let isGroupLike = $derived(chat?.type === 'group' || chat?.type === 'channel');
   let messages = $derived(chatStore.messages);
   let isLoading = $derived(chatStore.isLoading);
   let pendingJumpTo = $derived(chatStore.pendingJumpTo);
@@ -112,7 +113,7 @@
     chat?.type === 'dm' && chat?.peer ? presenceStore.isOnline(chat.peer) : false
   );
   let showCmkPendingBanner = $derived(
-    hasPendingEncrypted && (chat?.type === 'group' || (chat?.type === 'dm' && !peerIsOnline))
+    hasPendingEncrypted && (isGroupLike || (chat?.type === 'dm' && !peerIsOnline))
   );
 
   let messagesEl = $state(null);
@@ -247,14 +248,14 @@
           {:else}
             <MessageBubble
               message={item}
-              showSender={chat.type === "group"}
+              showSender={isGroupLike}
               myHandle={myHandle}
               onReply={(m) => chatStore.setReplyingTo(m)}
               onEdit={(m) => chatStore.setEditing(m)}
               onDelete={(m) => handleDelete(m)}
               onReact={(m, e) => handleReact(m, e)}
               onJumpTo={handleJumpTo}
-              onSenderClick={chat.type === "group"
+              onSenderClick={isGroupLike
                 ? (handle) => memberActionsStore.open(handle)
                 : null}
             />

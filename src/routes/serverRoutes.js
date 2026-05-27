@@ -74,6 +74,8 @@ const RL = Object.freeze({
   memberRoleDel:  { window: 60_000, max: 60 },
   memberKick:     { window: 60_000, max: 10 },
   serverLeave:    { window: 60_000, max:  5 },
+  inviteCreate:   { window: 60_000, max: 20 },
+  serverJoin:     { window: 60_000, max: 10 },
 });
 
 /**
@@ -100,7 +102,7 @@ async function checkRateLimit(env, bucket, me, request) {
  * Lade Server-Membership inkl. is_owner-Flag.
  * @returns {Promise<{user_handle, is_owner, nickname, joined_at} | null>}
  */
-async function getServerMembership(env, serverId, userHandle) {
+export async function getServerMembership(env, serverId, userHandle) {
   return await env.RENEX_DB.prepare(
     `SELECT user_handle, is_owner, nickname, joined_at
      FROM server_members
@@ -158,7 +160,7 @@ async function getEffectivePermissions(env, serverId, channelId, userHandle) {
 /**
  * Convenience: prüft ob User bestimmte Permission hat.
  */
-async function userHasPermission(env, serverId, channelId, userHandle, wantedBit) {
+export async function userHasPermission(env, serverId, channelId, userHandle, wantedBit) {
   const eff = await getEffectivePermissions(env, serverId, channelId, userHandle);
   return (eff & wantedBit) === wantedBit;
 }
@@ -255,10 +257,14 @@ async function pushToServerMembers(env, serverId, event, excludeHandle = null) {
 // Wir nutzen regex-pattern um id-Parameter zu extrahieren.
 const SERVER_ID_RE = '([a-f0-9-]{36})';   // UUID v4 lowercase
 const HANDLE_RE    = '([a-z0-9_]+)';
+const INVITE_TOKEN_RE = '(srv_inv_[a-f0-9]{32})';
 
 const ROUTES = [
   { pattern: new RegExp(`^/servers/create$`),                                           handler: 'createServer'      },
   { pattern: new RegExp(`^/servers/list$`),                                             handler: 'listServers'       },
+  { pattern: new RegExp(`^/servers/join/${INVITE_TOKEN_RE}$`),                          handler: 'joinByToken'       },
+  { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/invites$`),                          handler: 'invites'           },
+  { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/invites/${INVITE_TOKEN_RE}$`),       handler: 'inviteDetail'      },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}$`),                                  handler: 'serverDetail'      },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/leave$`),                            handler: 'leaveServer'       },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/transfer$`),                         handler: 'transferServer'    },
@@ -321,6 +327,9 @@ export async function handleServerRoutes(request, env, path, params) {
     case 'auditLog':           return await auditLogHandler(ctx, route.args[0]);
     case 'auditLogMe':         return await auditLogMeHandler(ctx, route.args[0]);
     case 'channelDetail':      return await channelDetailHandler(ctx, route.args[0], route.args[1]);
+    case 'invites':            return await invitesHandler(ctx, route.args[0]);
+    case 'inviteDetail':       return await inviteDeleteHandler(ctx, route.args[0], route.args[1]);
+    case 'joinByToken':        return await joinByTokenHandler(ctx, route.args[0]);
 
     // 🚧 Stubs — TODO Phase 3A.5+
     case 'transferServer':     return stub('transferServer', route.args);
@@ -1352,6 +1361,207 @@ async function channelDetailHandler({ request, env, me }, serverId, channelId) {
       id: crypto.randomUUID(), type: 'channel_deleted', serverId, channelId, ts: Date.now(),
     });
     return json(request, { ok: true });
+  }
+
+  return json(request, { error: 'Method not allowed' }, 405);
+}
+
+// ======================================================
+// INVITE HANDLERS (Spec SERVERS.md §3.3 + §6.5)
+// ======================================================
+
+const MAX_INVITES_PER_SERVER = 25;
+
+function genInviteToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  return `srv_inv_${hex}`;
+}
+
+/**
+ * GET  /servers/<id>/invites  — Liste aktiver Invites (INVITE_MEMBERS)
+ * POST /servers/<id>/invites  — Invite erstellen (INVITE_MEMBERS)
+ *   Body: { maxUses?: number (0=unbegrenzt), ttlMin?: number (0/null=nie), initialRoleId?: string }
+ */
+async function invitesHandler({ request, env, me }, serverId) {
+  const membership = await getServerMembership(env, serverId, me);
+  if (!membership) return json(request, { error: 'Not a member' }, 403);
+  if (!(await userHasPermission(env, serverId, null, me, Permissions.INVITE_MEMBERS))) {
+    return json(request, { error: 'forbidden_invite_members' }, 403);
+  }
+
+  if (request.method === 'GET') {
+    const r = await env.RENEX_DB.prepare(
+      `SELECT token, created_by, initial_role_id, max_uses, uses, expires_at, created_at
+       FROM server_invites WHERE server_id = ? ORDER BY created_at DESC`
+    ).bind(serverId).all();
+    return json(request, { invites: r.results || [] });
+  }
+
+  if (request.method === 'POST') {
+    const rlErr = await checkRateLimit(env, 'inviteCreate', me, request);
+    if (rlErr) return rlErr;
+
+    const body = await readJson(request) || {};
+
+    const maxUses = Number.isInteger(body.maxUses) ? body.maxUses : 0;
+    if (maxUses < 0 || maxUses > 1000) return json(request, { error: 'Invalid maxUses (0-1000)' }, 400);
+
+    let expiresAt = null;
+    if (body.ttlMin != null && body.ttlMin !== 0) {
+      const ttl = Number(body.ttlMin);
+      if (!Number.isFinite(ttl) || ttl < 5 || ttl > 43200) {
+        return json(request, { error: 'Invalid ttlMin (5-43200)' }, 400);
+      }
+      expiresAt = Date.now() + ttl * 60_000;
+    }
+
+    let initialRoleId = null;
+    if (body.initialRoleId) {
+      const role = await env.RENEX_DB.prepare(
+        `SELECT id, is_default FROM server_roles WHERE id = ? AND server_id = ?`
+      ).bind(body.initialRoleId, serverId).first();
+      if (!role) return json(request, { error: 'Invalid initialRoleId' }, 400);
+      // default-Role wird beim Join sowieso zugewiesen → nur non-default als Extra speichern
+      if (role.is_default !== 1) initialRoleId = role.id;
+    }
+
+    const cnt = await env.RENEX_DB.prepare(
+      `SELECT COUNT(*) AS c FROM server_invites WHERE server_id = ?`
+    ).bind(serverId).first();
+    if ((cnt?.c || 0) >= MAX_INVITES_PER_SERVER) {
+      return json(request, { error: 'invite_limit_reached', limit: MAX_INVITES_PER_SERVER }, 403);
+    }
+
+    const token = genInviteToken();
+    const now = Date.now();
+    await env.RENEX_DB.prepare(
+      `INSERT INTO server_invites (token, server_id, created_by, initial_role_id, max_uses, uses, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?)`
+    ).bind(token, serverId, me, initialRoleId, maxUses, expiresAt, now).run();
+
+    await audit(env, serverId, me, 'invite_create', token, { maxUses, expiresAt });
+
+    return json(request, {
+      ok: true,
+      token,
+      url: `https://app.renex.id/?join-server=${token}`,
+      maxUses, expiresAt, initialRoleId,
+    });
+  }
+
+  return json(request, { error: 'Method not allowed' }, 405);
+}
+
+/**
+ * DELETE /servers/<id>/invites/<token> — Invite widerrufen (INVITE_MEMBERS)
+ */
+async function inviteDeleteHandler({ request, env, me }, serverId, token) {
+  if (request.method !== 'DELETE') return json(request, { error: 'Method not allowed' }, 405);
+
+  const membership = await getServerMembership(env, serverId, me);
+  if (!membership) return json(request, { error: 'Not a member' }, 403);
+  if (!(await userHasPermission(env, serverId, null, me, Permissions.INVITE_MEMBERS))) {
+    return json(request, { error: 'forbidden_invite_members' }, 403);
+  }
+
+  const res = await env.RENEX_DB.prepare(
+    `DELETE FROM server_invites WHERE token = ? AND server_id = ?`
+  ).bind(token, serverId).run();
+  if ((res.meta?.changes ?? 0) === 0) return json(request, { error: 'Invite not found' }, 404);
+
+  await audit(env, serverId, me, 'invite_revoke', token, null);
+  return json(request, { ok: true });
+}
+
+/**
+ * GET  /servers/join/<token>  — Invite-Vorschau (eingeloggter User, noch kein Member)
+ * POST /servers/join/<token>  — Server beitreten: server_members + default-Role,
+ *   Use-Count++, WS server_member_joined, Audit, Recipient-Cache-Invalidate.
+ *   GSK-Distribution erfolgt pull-based via request_gsk (Spec §5) beim Channel-Open.
+ */
+async function joinByTokenHandler({ request, env, me }, token) {
+  const inv = await env.RENEX_DB.prepare(
+    `SELECT token, server_id, created_by, initial_role_id, max_uses, uses, expires_at
+     FROM server_invites WHERE token = ?`
+  ).bind(token).first();
+  if (!inv) return json(request, { error: 'invite_not_found' }, 404);
+  if (inv.expires_at != null && Date.now() > inv.expires_at) {
+    return json(request, { error: 'invite_expired' }, 410);
+  }
+  if (inv.max_uses > 0 && inv.uses >= inv.max_uses) {
+    return json(request, { error: 'invite_used_up' }, 410);
+  }
+
+  const server = await env.RENEX_DB.prepare(
+    `SELECT id, name, description, member_limit FROM servers WHERE id = ?`
+  ).bind(inv.server_id).first();
+  if (!server) return json(request, { error: 'server_gone' }, 404);
+
+  const memberCountRow = await env.RENEX_DB.prepare(
+    `SELECT COUNT(*) AS c FROM server_members WHERE server_id = ?`
+  ).bind(inv.server_id).first();
+  const memberCount = memberCountRow?.c || 0;
+  const alreadyMember = !!(await getServerMembership(env, inv.server_id, me));
+
+  if (request.method === 'GET') {
+    return json(request, {
+      serverId: server.id,
+      name: server.name,
+      description: server.description,
+      memberCount,
+      inviterHandle: inv.created_by,
+      alreadyMember,
+    });
+  }
+
+  if (request.method === 'POST') {
+    const rlErr = await checkRateLimit(env, 'serverJoin', me, request);
+    if (rlErr) return rlErr;
+
+    if (alreadyMember) {
+      return json(request, { ok: true, serverId: server.id, alreadyMember: true });
+    }
+    if (memberCount >= (server.member_limit || 1000)) {
+      return json(request, { error: 'server_full' }, 403);
+    }
+
+    const defRole = await env.RENEX_DB.prepare(
+      `SELECT id FROM server_roles WHERE server_id = ? AND is_default = 1`
+    ).bind(inv.server_id).first();
+
+    const now = Date.now();
+    const stmts = [
+      env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO server_members (server_id, user_handle, joined_at, is_owner)
+         VALUES (?, ?, ?, 0)`
+      ).bind(inv.server_id, me, now),
+    ];
+    if (defRole?.id) {
+      stmts.push(env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO role_assignments (server_id, user_handle, role_id, assigned_at)
+         VALUES (?, ?, ?, ?)`
+      ).bind(inv.server_id, me, defRole.id, now));
+    }
+    if (inv.initial_role_id) {
+      stmts.push(env.RENEX_DB.prepare(
+        `INSERT OR IGNORE INTO role_assignments (server_id, user_handle, role_id, assigned_at)
+         VALUES (?, ?, ?, ?)`
+      ).bind(inv.server_id, me, inv.initial_role_id, now));
+    }
+    stmts.push(env.RENEX_DB.prepare(
+      `UPDATE server_invites SET uses = uses + 1 WHERE token = ?`
+    ).bind(token));
+    await env.RENEX_DB.batch(stmts);
+
+    await invalidateRecipientCache(env, inv.server_id);
+    await audit(env, inv.server_id, me, 'member_join', me, { via: 'invite', token });
+    await pushToServerMembers(env, inv.server_id, {
+      id: crypto.randomUUID(), type: 'server_member_joined',
+      serverId: inv.server_id, handle: me, ts: now,
+    }, me);
+
+    return json(request, { ok: true, serverId: server.id });
   }
 
   return json(request, { error: 'Method not allowed' }, 405);

@@ -16,7 +16,7 @@
 
 set -e
 
-APP_DIR="/Users/brunohochstrasser/Library/Mobile Documents/com~apple~CloudDocs/16.03. renex Kopie/app.renex"
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST="$APP_DIR/frontend/dist"
 PUBLIC="$APP_DIR/frontend/public"  # Vite kopiert public/ automatisch in dist/ — Source-of-Truth für Static Assets
 PAGES_PROJECT="renex-static"        # Production Pages-Project

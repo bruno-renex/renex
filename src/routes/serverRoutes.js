@@ -9,6 +9,9 @@
 //   GET    /servers/<id>                                     ✅ implemented
 //   PATCH  /servers/<id>                                     ✅ implemented (Phase 3A.5)
 //   DELETE /servers/<id>                                     🚧 stub
+//   POST   /servers/<id>/icon                                ✅ implemented (Phase 3A.5)
+//   GET    /servers/<id>/icon                                ✅ implemented (Phase 3A.5)
+//   DELETE /servers/<id>/icon                                ✅ implemented (Phase 3A.5)
 //   POST   /servers/<id>/transfer                            ✅ implemented (Phase 3A.5)
 //   POST   /servers/<id>/leave                               ✅ implemented (mit Owner-Pre-Check)
 //   GET    /servers/<id>/members                             ✅ implemented
@@ -35,7 +38,7 @@
 // schon getestet werden kann, bevor Role-Editor / Permission-UI gebaut wird.
 // ======================================================
 
-import { json, readJson, checkCsrf } from '../utils.js';
+import { json, readJson, checkCsrf, corsHeaders } from '../utils.js';
 import { requireSession, rateLimit, pushToUserDO } from '../auth.js';
 import {
   Permissions,
@@ -50,10 +53,13 @@ import {
 // ── Constants ──────────────────────────────────────────
 const MAX_SERVER_NAME       = 80;
 const MAX_SERVER_DESC       = 500;
+const MAX_SERVER_ICON_BYTES = 1024 * 1024;   // 1 MB
 const MAX_CHANNEL_NAME      = 64;
 const MAX_CHANNEL_TOPIC     = 1024;
 const MAX_OWNED_SERVERS_FREE = 3;
 const MAX_OWNED_SERVERS_PRO  = 25;
+
+const ALLOWED_ICON_MIME     = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
 const VALID_VISIBILITY      = new Set(['invite', 'private']); // Phase 4+: 'public'
 const VALID_CHANNEL_KINDS   = new Set(['text']);              // Phase 8: 'voice'
@@ -66,6 +72,7 @@ const RL = Object.freeze({
   serverCreate:   { window: 60_000, max:  5 },  // bestehend
   serverUpdate:   { window: 60_000, max: 30 },  // 3A.5: PATCH /servers/<id>
   serverTransfer: { window: 60_000, max:  3 },  // 3A.5: POST /servers/<id>/transfer
+  serverIconSet:  { window: 60_000, max: 10 },  // 3A.5: POST /servers/<id>/icon
   channelCreate:  { window: 60_000, max: 30 },
   channelUpdate:  { window: 60_000, max: 60 },
   channelDelete:  { window: 60_000, max: 10 },
@@ -268,6 +275,7 @@ const ROUTES = [
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/invites$`),                          handler: 'invites'           },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/invites/${INVITE_TOKEN_RE}$`),       handler: 'inviteDetail'      },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}$`),                                  handler: 'serverDetail'      },
+  { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/icon$`),                             handler: 'serverIcon'        },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/leave$`),                            handler: 'leaveServer'       },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/transfer$`),                         handler: 'transferServer'    },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/members$`),                          handler: 'listMembers'       },
@@ -320,6 +328,12 @@ export async function handleServerRoutes(request, env, path, params) {
     case 'serverDetail': {
       if (request.method === 'GET')   return await serverDetail(ctx, route.args[0]);
       if (request.method === 'PATCH') return await updateServer(ctx, route.args[0]);
+      return json(request, { error: 'Method not allowed' }, 405);
+    }
+    case 'serverIcon': {
+      if (request.method === 'POST')   return await uploadServerIcon(ctx, route.args[0]);
+      if (request.method === 'GET')    return await serveServerIcon(ctx, route.args[0]);
+      if (request.method === 'DELETE') return await deleteServerIcon(ctx, route.args[0]);
       return json(request, { error: 'Method not allowed' }, 405);
     }
     case 'transferServer':     return await transferServer(ctx, route.args[0]);
@@ -745,6 +759,153 @@ async function updateServer({ request, env, me }, serverId) {
   });
 
   return json(request, { ok: true, changes: auditDetails });
+}
+
+/**
+ * POST /servers/<id>/icon
+ *
+ * Body: raw image bytes (arrayBuffer). Content-Type header → MIME.
+ * Permission: MANAGE_SERVER. Validation: PNG/JPEG/WebP, ≤ 1 MB.
+ * Side-effects: alter Icon-Key wird best-effort aus R2 gelöscht,
+ * neuer Key `server-icons/<serverId>/<uuid>` wird in DB persistiert,
+ * audit + WS broadcast 'server_updated' mit iconR2Key-diff.
+ */
+async function uploadServerIcon({ request, env, me }, serverId) {
+  const membership = await getServerMembership(env, serverId, me);
+  if (!membership) return json(request, { error: 'Not a member' }, 403);
+
+  if (!(await userHasPermission(env, serverId, null, me, Permissions.MANAGE_SERVER))) {
+    return json(request, { error: 'forbidden_manage_server' }, 403);
+  }
+
+  const rlErr = await checkRateLimit(env, 'serverIconSet', me, request);
+  if (rlErr) return rlErr;
+
+  if (!env.RENEX_FILES) return json(request, { error: 'R2 not configured' }, 503);
+
+  const mimeType = (request.headers.get('Content-Type') || '').toLowerCase().split(';')[0].trim();
+  if (!ALLOWED_ICON_MIME.has(mimeType)) {
+    return json(request, { error: 'invalid_mime', allowed: [...ALLOWED_ICON_MIME] }, 400);
+  }
+
+  const body = await request.arrayBuffer();
+  if (!body || body.byteLength === 0) {
+    return json(request, { error: 'empty_body' }, 400);
+  }
+  if (body.byteLength > MAX_SERVER_ICON_BYTES) {
+    return json(request, { error: 'file_too_large', maxBytes: MAX_SERVER_ICON_BYTES }, 400);
+  }
+
+  const server = await env.RENEX_DB.prepare(
+    `SELECT id, icon_r2_key FROM servers WHERE id = ?`
+  ).bind(serverId).first();
+  if (!server) return json(request, { error: 'Server not found' }, 404);
+
+  const previousKey = server.icon_r2_key;
+  const newKey      = `server-icons/${serverId}/${crypto.randomUUID()}`;
+
+  await env.RENEX_FILES.put(newKey, body, {
+    httpMetadata: { contentType: mimeType }
+  });
+
+  await env.RENEX_DB.prepare(
+    `UPDATE servers SET icon_r2_key = ? WHERE id = ?`
+  ).bind(newKey, serverId).run();
+
+  // Alten R2-Key best-effort entfernen (Fehler nicht propagieren)
+  if (previousKey && previousKey !== newKey) {
+    env.RENEX_FILES.delete(previousKey).catch(() => {});
+  }
+
+  const auditDetails = { oldIconR2Key: previousKey, newIconR2Key: newKey };
+  await audit(env, serverId, me, 'server_icon_set', null, auditDetails);
+  await pushToServerMembers(env, serverId, {
+    id:       crypto.randomUUID(),
+    type:     'server_updated',
+    serverId,
+    changes:  auditDetails,
+    ts:       Date.now(),
+  });
+
+  return json(request, { ok: true, iconR2Key: newKey });
+}
+
+/**
+ * GET /servers/<id>/icon
+ *
+ * Member-only. Streamt R2-Object zurück mit gespeicherter Content-Type.
+ * Frontend lädt typischerweise via fetch+credentials → blobURL für `<img>`.
+ */
+async function serveServerIcon({ request, env, me }, serverId) {
+  const membership = await getServerMembership(env, serverId, me);
+  if (!membership) return json(request, { error: 'Not a member' }, 403);
+
+  if (!env.RENEX_FILES) return json(request, { error: 'R2 not configured' }, 503);
+
+  const server = await env.RENEX_DB.prepare(
+    `SELECT icon_r2_key FROM servers WHERE id = ?`
+  ).bind(serverId).first();
+  if (!server) return json(request, { error: 'Server not found' }, 404);
+  if (!server.icon_r2_key) return json(request, { error: 'no_icon' }, 404);
+
+  const obj = await env.RENEX_FILES.get(server.icon_r2_key);
+  if (!obj) {
+    // R2-Object fehlt obwohl DB ihn referenziert (Drift) — als 404 melden, DB nicht hier reparieren
+    return json(request, { error: 'icon_missing_in_r2' }, 404);
+  }
+
+  const contentType = obj.httpMetadata?.contentType || 'application/octet-stream';
+  return new Response(obj.body, {
+    status: 200,
+    headers: {
+      'Content-Type':  contentType,
+      'Cache-Control': 'private, max-age=300',
+      ...corsHeaders(request),
+    }
+  });
+}
+
+/**
+ * DELETE /servers/<id>/icon
+ *
+ * Permission: MANAGE_SERVER. R2-Object wird best-effort gelöscht,
+ * `icon_r2_key`-Spalte auf NULL gesetzt, audit + WS broadcast.
+ */
+async function deleteServerIcon({ request, env, me }, serverId) {
+  const membership = await getServerMembership(env, serverId, me);
+  if (!membership) return json(request, { error: 'Not a member' }, 403);
+
+  if (!(await userHasPermission(env, serverId, null, me, Permissions.MANAGE_SERVER))) {
+    return json(request, { error: 'forbidden_manage_server' }, 403);
+  }
+
+  const server = await env.RENEX_DB.prepare(
+    `SELECT icon_r2_key FROM servers WHERE id = ?`
+  ).bind(serverId).first();
+  if (!server) return json(request, { error: 'Server not found' }, 404);
+
+  const previousKey = server.icon_r2_key;
+  if (!previousKey) return json(request, { ok: true, noChange: true });
+
+  await env.RENEX_DB.prepare(
+    `UPDATE servers SET icon_r2_key = NULL WHERE id = ?`
+  ).bind(serverId).run();
+
+  if (env.RENEX_FILES) {
+    env.RENEX_FILES.delete(previousKey).catch(() => {});
+  }
+
+  const auditDetails = { oldIconR2Key: previousKey, newIconR2Key: null };
+  await audit(env, serverId, me, 'server_icon_removed', null, auditDetails);
+  await pushToServerMembers(env, serverId, {
+    id:       crypto.randomUUID(),
+    type:     'server_updated',
+    serverId,
+    changes:  auditDetails,
+    ts:       Date.now(),
+  });
+
+  return json(request, { ok: true });
 }
 
 /**

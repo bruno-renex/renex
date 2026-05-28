@@ -146,6 +146,61 @@ async function createRole(serverId, { name, color, permissions, position, isMent
   }
 }
 
+async function updateServer(serverId, partial) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}`, {
+      method: 'PATCH',
+      body: partial,
+    });
+    if (r.ok) {
+      await loadServerDetail(serverId);
+      await loadServers();
+      return { ok: true, changes: r.data?.changes };
+    }
+    return { ok: false, error: r.error || 'update_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.updateServer', extra: { serverId } });
+    return { ok: false, error: e?.message || 'update_failed' };
+  }
+}
+
+async function uploadServerIcon(serverId, file) {
+  try {
+    const bytes = await file.arrayBuffer();
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/icon`, {
+      method: 'POST',
+      body: bytes,
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    });
+    if (r.ok) {
+      await loadServerDetail(serverId);
+      await loadServers();
+      return { ok: true, iconR2Key: r.data?.iconR2Key };
+    }
+    return { ok: false, error: r.error || 'icon_upload_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.uploadServerIcon', extra: { serverId } });
+    return { ok: false, error: e?.message || 'icon_upload_failed' };
+  }
+}
+
+async function deleteServerIcon(serverId) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/icon`, {
+      method: 'DELETE',
+    });
+    if (r.ok) {
+      await loadServerDetail(serverId);
+      await loadServers();
+      return { ok: true };
+    }
+    return { ok: false, error: r.error || 'icon_delete_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.deleteServerIcon', extra: { serverId } });
+    return { ok: false, error: e?.message || 'icon_delete_failed' };
+  }
+}
+
 async function updateRole(serverId, roleId, partial) {
   try {
     const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/roles/${encodeURIComponent(roleId)}`, {
@@ -316,6 +371,9 @@ export const serverStore = {
   loadServerDetail,
   selectServer,
   createServer,
+  updateServer,
+  uploadServerIcon,
+  deleteServerIcon,
   leaveServer,
   createRole,
   updateRole,

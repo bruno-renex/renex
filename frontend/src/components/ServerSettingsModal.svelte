@@ -2,10 +2,14 @@
   ServerSettingsModal — Tab-basierte Server-Verwaltung (Phase 3A.5)
 
   Tabs:
+   - General: Server-Icon (Upload/Remove) + Name + Beschreibung (PATCH)
    - Roles  : Liste aller Roles mit Color-Dot, Klick → RoleEditModal
    - Members: Liste mit Multi-Role-Toggles pro User
+   - Channels: pro Channel Auto-Delete-Settings
+   - Invites: Token-Link erstellen/widerrufen
 
   Permissions:
+   - General-Tab: nur sichtbar wenn MANAGE_SERVER (Owner bypassed)
    - Roles-Tab: nur sichtbar wenn MANAGE_ROLES (Owner bypassed)
    - Members-Tab: alle Members (read), Toggles nur wenn MANAGE_ROLES
 -->
@@ -199,6 +203,177 @@
     const src = (nickname || handle || '').replace(/^@/, '');
     return src.split(/[\s._-]+/).map(p => p[0]).join('').slice(0, 2).toUpperCase() || '?';
   }
+
+  // ── Phase 3A.5: General Tab — Server-Icon + Name + Description ──
+  let canManageServer = $derived(
+    detail?.myMembership?.isOwner === true ||
+    (myPerms & Permissions.MANAGE_SERVER) === Permissions.MANAGE_SERVER
+  );
+
+  const API_BASE = 'https://api.renex.id';
+  const MAX_ICON_BYTES = 1024 * 1024;
+  const ALLOWED_ICON_MIMES = ['image/png', 'image/jpeg', 'image/webp'];
+
+  let nameInput          = $state('');
+  let descInput          = $state('');
+  let didInitInputs      = $state(false);
+  let savingGeneral      = $state(false);
+  let iconFile           = $state(null);
+  let iconPreviewUrl     = $state(null);
+  let currentIconBlobUrl = $state(null);
+  let iconLoading        = $state(false);
+  let uploadingIcon      = $state(false);
+  let deletingIcon       = $state(false);
+
+  let hasCurrentIcon = $derived(!!detail?.server?.iconR2Key);
+  let isDirty = $derived(
+    !!detail?.server && (
+      nameInput.trim() !== (detail.server.name || '') ||
+      (descInput.trim() || '') !== (detail.server.description || '')
+    )
+  );
+
+  function serverInitialsFromName(name) {
+    const src = String(name || '').trim();
+    if (!src) return '?';
+    return src.split(/[\s._-]+/).filter(Boolean).map(p => p[0]).join('').slice(0, 2).toUpperCase() || '?';
+  }
+
+  // Inputs initial syncen, sobald Detail da ist
+  $effect(() => {
+    if (detail?.server && !didInitInputs) {
+      nameInput = detail.server.name || '';
+      descInput = detail.server.description || '';
+      didInitInputs = true;
+    }
+  });
+
+  // Aktuelles Icon fetchen (fetch+blob — Cross-Origin mit credentials geht nicht via <img>)
+  $effect(() => {
+    const key = detail?.server?.iconR2Key;
+    if (!serverId || !key) {
+      if (currentIconBlobUrl) {
+        URL.revokeObjectURL(currentIconBlobUrl);
+        currentIconBlobUrl = null;
+      }
+      return;
+    }
+    let cancelled = false;
+    iconLoading = true;
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/servers/${encodeURIComponent(serverId)}/icon`, {
+          credentials: 'include',
+        });
+        if (cancelled || !r.ok) return;
+        const blob = await r.blob();
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        if (currentIconBlobUrl) URL.revokeObjectURL(currentIconBlobUrl);
+        currentIconBlobUrl = url;
+      } catch { /* swallow — UI fällt auf Initials zurück */ }
+      finally { if (!cancelled) iconLoading = false; }
+    })();
+    return () => { cancelled = true; };
+  });
+
+  // Preview-URL für ausgewählte Datei (vor Auto-Upload)
+  $effect(() => {
+    if (!iconFile) {
+      if (iconPreviewUrl) {
+        URL.revokeObjectURL(iconPreviewUrl);
+        iconPreviewUrl = null;
+      }
+      return;
+    }
+    const url = URL.createObjectURL(iconFile);
+    iconPreviewUrl = url;
+    return () => URL.revokeObjectURL(url);
+  });
+
+  // Cleanup beim Modal-Close
+  $effect(() => {
+    if (!isOpen) {
+      if (currentIconBlobUrl) {
+        URL.revokeObjectURL(currentIconBlobUrl);
+        currentIconBlobUrl = null;
+      }
+      if (iconPreviewUrl) {
+        URL.revokeObjectURL(iconPreviewUrl);
+        iconPreviewUrl = null;
+      }
+      iconFile = null;
+      didInitInputs = false;
+    }
+  });
+
+  function onSelectIcon(e) {
+    const f = e?.target?.files?.[0];
+    if (!f) return;
+    if (!ALLOWED_ICON_MIMES.includes(f.type)) {
+      toastStore.push((lang.iconErrorMime || 'Nur PNG, JPEG oder WebP'), { kind: 'error' });
+      e.target.value = '';
+      return;
+    }
+    if (f.size > MAX_ICON_BYTES) {
+      toastStore.push((lang.iconErrorSize || 'Datei zu groß (max 1 MB)'), { kind: 'error' });
+      e.target.value = '';
+      return;
+    }
+    iconFile = f;
+    void uploadSelectedIcon();
+  }
+
+  async function uploadSelectedIcon() {
+    if (!iconFile || !serverId || uploadingIcon) return;
+    uploadingIcon = true;
+    const r = await serverStore.uploadServerIcon(serverId, iconFile);
+    uploadingIcon = false;
+    if (r.ok) {
+      iconFile = null;
+      toastStore.push(lang.iconUploadedToast || '✅ Server-Icon aktualisiert', { kind: 'success' });
+    } else {
+      toastStore.push((lang.iconUploadFailed || 'Icon-Upload fehlgeschlagen') + ': ' + r.error, { kind: 'error' });
+    }
+  }
+
+  async function removeIcon() {
+    if (!serverId || deletingIcon) return;
+    if (!confirm(lang.iconRemoveConfirm || 'Server-Icon wirklich entfernen?')) return;
+    deletingIcon = true;
+    const r = await serverStore.deleteServerIcon(serverId);
+    deletingIcon = false;
+    if (r.ok) {
+      toastStore.push(lang.iconRemovedToast || '🗑 Server-Icon entfernt', { kind: 'success' });
+    } else {
+      toastStore.push((lang.iconRemoveFailed || 'Entfernen fehlgeschlagen') + ': ' + r.error, { kind: 'error' });
+    }
+  }
+
+  async function saveGeneral() {
+    if (!serverId || savingGeneral || !isDirty) return;
+    const trimmedName = nameInput.trim();
+    const trimmedDesc = descInput.trim();
+    if (!trimmedName) {
+      toastStore.push(lang.nameRequired || 'Name darf nicht leer sein', { kind: 'error' });
+      return;
+    }
+    savingGeneral = true;
+    const partial = {};
+    if (trimmedName !== (detail?.server?.name || '')) partial.name = trimmedName;
+    if ((trimmedDesc || '') !== (detail?.server?.description || '')) {
+      partial.description = trimmedDesc || null;
+    }
+    const r = await serverStore.updateServer(serverId, partial);
+    savingGeneral = false;
+    if (r.ok) {
+      nameInput = detail?.server?.name || nameInput;
+      descInput = detail?.server?.description || '';
+      toastStore.push(lang.serverSavedToast || '✅ Server-Einstellungen gespeichert', { kind: 'success' });
+    } else {
+      toastStore.push((lang.error || 'Fehler') + ': ' + r.error, { kind: 'error' });
+    }
+  }
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -212,6 +387,16 @@
       </div>
 
       <nav class="ss-tabs" role="tablist">
+        {#if canManageServer}
+          <button
+            role="tab"
+            class="ss-tab"
+            class:active={activeTab === 'general'}
+            onclick={() => activeTab = 'general'}
+          >
+            ⚙ {lang.tabGeneral || 'Allgemein'}
+          </button>
+        {/if}
         <button
           role="tab"
           class="ss-tab"
@@ -247,6 +432,86 @@
           </button>
         {/if}
       </nav>
+
+      <!-- ═══════ GENERAL TAB ═══════ -->
+      {#if activeTab === 'general' && canManageServer}
+        <div class="ss-content">
+          <!-- Icon-Sektion -->
+          <div class="ss-section">
+            <h4 class="ss-section-title">{lang.iconSectionTitle || 'Server-Icon'}</h4>
+            <div class="ss-icon-row">
+              <div class="ss-icon-preview" aria-label="Server-Icon">
+                {#if iconPreviewUrl}
+                  <img src={iconPreviewUrl} alt="" />
+                {:else if currentIconBlobUrl}
+                  <img src={currentIconBlobUrl} alt="" />
+                {:else}
+                  <span class="ss-icon-fallback">{serverInitialsFromName(detail?.server?.name)}</span>
+                {/if}
+                {#if iconLoading || uploadingIcon || deletingIcon}
+                  <div class="ss-icon-overlay">⏳</div>
+                {/if}
+              </div>
+              <div class="ss-icon-controls">
+                <label class="btn-create ss-icon-pick" class:disabled={uploadingIcon || deletingIcon}>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    onchange={onSelectIcon}
+                    disabled={uploadingIcon || deletingIcon}
+                    hidden
+                  />
+                  📷 {lang.iconChooseBtn || 'Bild auswählen'}
+                </label>
+                {#if hasCurrentIcon}
+                  <button
+                    type="button"
+                    class="btn-danger"
+                    onclick={removeIcon}
+                    disabled={uploadingIcon || deletingIcon}
+                  >
+                    🗑 {lang.iconRemoveBtn || 'Entfernen'}
+                  </button>
+                {/if}
+                <div class="ss-icon-hint">{lang.iconHint || 'PNG, JPEG oder WebP — max 1 MB. Auto-Upload beim Auswählen.'}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Name + Beschreibung -->
+          <div class="ss-section">
+            <h4 class="ss-section-title">{lang.profileSectionTitle || 'Name & Beschreibung'}</h4>
+            <label class="ss-field">
+              <span>{lang.serverNameLabel || 'Name'}</span>
+              <input
+                type="text"
+                bind:value={nameInput}
+                maxlength="80"
+                disabled={savingGeneral}
+                placeholder={lang.serverNameLabel || 'Name'}
+              />
+            </label>
+            <label class="ss-field">
+              <span>{lang.serverDescLabel || 'Beschreibung'}</span>
+              <textarea
+                bind:value={descInput}
+                maxlength="500"
+                rows="3"
+                disabled={savingGeneral}
+                placeholder={lang.serverDescLabel || 'Beschreibung'}
+              ></textarea>
+            </label>
+            <button
+              type="button"
+              class="btn-create"
+              onclick={saveGeneral}
+              disabled={savingGeneral || !isDirty}
+            >
+              {savingGeneral ? (lang.saving || 'Speichern…') : (lang.save || 'Speichern')}
+            </button>
+          </div>
+        </div>
+      {/if}
 
       <!-- ═══════ ROLES TAB ═══════ -->
       {#if activeTab === 'roles'}
@@ -541,6 +806,129 @@
     align-self: flex-start;
   }
   .btn-create:hover { opacity: 0.9; }
+  .btn-create.disabled,
+  .btn-create:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-danger {
+    background: var(--status-error, #ef4444);
+    color: white;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    align-self: flex-start;
+    font-size: 13px;
+  }
+  .btn-danger:hover { opacity: 0.9; }
+  .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── General-Tab (Phase 3A.5) ── */
+  .ss-section {
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .ss-section:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+    margin-bottom: 0;
+  }
+  .ss-section-title {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .ss-icon-row {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  .ss-icon-preview {
+    width: 80px;
+    height: 80px;
+    border-radius: 16px;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    overflow: hidden;
+    flex-shrink: 0;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .ss-icon-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .ss-icon-fallback {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+  }
+  .ss-icon-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+  }
+  .ss-icon-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+  }
+  .ss-icon-pick {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    align-self: flex-start;
+  }
+  .ss-icon-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+  .ss-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .ss-field span {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  .ss-field input[type="text"],
+  .ss-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+  }
+  .ss-field input[type="text"]:focus,
+  .ss-field textarea:focus {
+    outline: none;
+    border-color: var(--accent-voice);
+  }
+  .ss-field textarea { resize: vertical; min-height: 60px; }
 
   .ss-role-list {
     list-style: none;

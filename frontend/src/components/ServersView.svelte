@@ -87,6 +87,45 @@
     if (servers.length === 0) void serverStore.loadServers();
   });
 
+  // ── Phase 3A.5: Server-Icon-Fetcher für Sidebar + Detail-Header ──
+  // Cross-Origin (app.renex.id → api.renex.id) + credentials → fetch+blobURL
+  // statt direkter <img src>. Re-Fetch wenn iconR2Key sich ändert (WS-Update).
+  const API_BASE = 'https://api.renex.id';
+  let iconBlobUrls   = $state({});  // serverId → blob URL
+  let iconLoadedKeys = $state({});  // serverId → iconR2Key currently loaded
+
+  $effect(() => {
+    for (const s of servers) {
+      const newKey    = s.iconR2Key;
+      const loadedKey = iconLoadedKeys[s.id];
+
+      if (!newKey) {
+        if (iconBlobUrls[s.id]) {
+          URL.revokeObjectURL(iconBlobUrls[s.id]);
+          delete iconBlobUrls[s.id];
+          delete iconLoadedKeys[s.id];
+        }
+        continue;
+      }
+
+      if (newKey === loadedKey) continue;
+
+      (async () => {
+        try {
+          const r = await fetch(`${API_BASE}/servers/${encodeURIComponent(s.id)}/icon`, {
+            credentials: 'include',
+          });
+          if (!r.ok) return;
+          const blob = await r.blob();
+          const url = URL.createObjectURL(blob);
+          if (iconBlobUrls[s.id]) URL.revokeObjectURL(iconBlobUrls[s.id]);
+          iconBlobUrls[s.id] = url;
+          iconLoadedKeys[s.id] = newKey;
+        } catch { /* silent — Initials-Fallback */ }
+      })();
+    }
+  });
+
   function serverInitials(name) {
     if (!name) return '?';
     return name
@@ -184,8 +223,12 @@
         {#each servers as s (s.id)}
           <li>
             <button class="srv-item" onclick={() => onSelectServer(s.id)}>
-              <div class="srv-avatar" class:owner={s.isOwner}>
-                {serverInitials(s.name)}
+              <div class="srv-avatar" class:owner={s.isOwner} class:has-icon={!!iconBlobUrls[s.id]}>
+                {#if iconBlobUrls[s.id]}
+                  <img src={iconBlobUrls[s.id]} alt="" />
+                {:else}
+                  {serverInitials(s.name)}
+                {/if}
               </div>
               <div class="srv-info">
                 <div class="srv-name">
@@ -211,6 +254,13 @@
       <button class="srv-back-btn" onclick={onBackToList} aria-label={lang.backBtn || 'Zurück'}>
         ‹
       </button>
+      <div class="srv-detail-icon" aria-hidden="true">
+        {#if iconBlobUrls[selectedId]}
+          <img src={iconBlobUrls[selectedId]} alt="" />
+        {:else}
+          <span class="srv-detail-initials">{serverInitials(detail?.server?.name || '')}</span>
+        {/if}
+      </div>
       <div class="srv-detail-title">
         {detail?.server?.name || '…'}
         {#if detail?.myMembership?.isOwner}
@@ -429,6 +479,38 @@
     color: var(--accent-voice);
     background: var(--accent-voice-dim);
     border-color: var(--accent-voice);
+  }
+  .srv-avatar.has-icon { padding: 0; overflow: hidden; }
+  .srv-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+    display: block;
+  }
+
+  .srv-detail-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 25%;
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .srv-detail-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .srv-detail-initials {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-primary);
   }
 
   .srv-info {

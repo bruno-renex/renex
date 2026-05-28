@@ -7,9 +7,9 @@
 //   POST   /servers/create                                   ✅ implemented
 //   GET    /servers/list                                     ✅ implemented
 //   GET    /servers/<id>                                     ✅ implemented
-//   PATCH  /servers/<id>                                     🚧 stub
+//   PATCH  /servers/<id>                                     ✅ implemented (Phase 3A.5)
 //   DELETE /servers/<id>                                     🚧 stub
-//   POST   /servers/<id>/transfer                            🚧 stub
+//   POST   /servers/<id>/transfer                            ✅ implemented (Phase 3A.5)
 //   POST   /servers/<id>/leave                               ✅ implemented (mit Owner-Pre-Check)
 //   GET    /servers/<id>/members                             ✅ implemented
 //   PATCH  /servers/<id>/members/me                          🚧 stub (nickname)
@@ -64,6 +64,8 @@ const VALID_CHANNEL_KINDS   = new Set(['text']);              // Phase 8: 'voice
 // nicht rate-limited — Cloudflare-Worker hat sowieso ein globales Limit.
 const RL = Object.freeze({
   serverCreate:   { window: 60_000, max:  5 },  // bestehend
+  serverUpdate:   { window: 60_000, max: 30 },  // 3A.5: PATCH /servers/<id>
+  serverTransfer: { window: 60_000, max:  3 },  // 3A.5: POST /servers/<id>/transfer
   channelCreate:  { window: 60_000, max: 30 },
   channelUpdate:  { window: 60_000, max: 60 },
   channelDelete:  { window: 60_000, max: 10 },
@@ -315,7 +317,12 @@ export async function handleServerRoutes(request, env, path, params) {
   switch (route.handler) {
     case 'createServer':       return await createServer(ctx);
     case 'listServers':        return await listServers(ctx);
-    case 'serverDetail':       return await serverDetail(ctx, route.args[0]);
+    case 'serverDetail': {
+      if (request.method === 'GET')   return await serverDetail(ctx, route.args[0]);
+      if (request.method === 'PATCH') return await updateServer(ctx, route.args[0]);
+      return json(request, { error: 'Method not allowed' }, 405);
+    }
+    case 'transferServer':     return await transferServer(ctx, route.args[0]);
     case 'leaveServer':        return await leaveServer(ctx, route.args[0]);
     case 'listMembers':        return await listMembers(ctx, route.args[0]);
     case 'channels':           return await channelsHandler(ctx, route.args[0]);
@@ -332,7 +339,6 @@ export async function handleServerRoutes(request, env, path, params) {
     case 'joinByToken':        return await joinByTokenHandler(ctx, route.args[0]);
 
     // 🚧 Stubs — TODO Phase 3A.5+
-    case 'transferServer':     return stub('transferServer', route.args);
     case 'updateOwnMember':    return stub('updateOwnMember', route.args);
     case 'banMember':          return stub('banMember', route.args);
     case 'channelPermissions': return stub('channelPermissions', route.args);
@@ -624,6 +630,121 @@ async function leaveServer({ request, env, me }, serverId) {
   });
 
   return json(request, { ok: true });
+}
+
+/**
+ * POST /servers/<id>/transfer
+ * Body: { to: <user_handle> }
+ *
+ * Owner-only — ADMINISTRATOR-Bit reicht nicht (Spec §5: Owner-only-Aktion).
+ * Target muss bereits Server-Member sein. Self-Transfer abgelehnt.
+ * Atomar via D1-batch: alter Owner → is_owner=0, neuer Owner → is_owner=1.
+ */
+async function transferServer({ request, env, me }, serverId) {
+  if (request.method !== 'POST') return json(request, { error: 'Method not allowed' }, 405);
+
+  const rlErr = await checkRateLimit(env, 'serverTransfer', me, request);
+  if (rlErr) return rlErr;
+
+  const membership = await getServerMembership(env, serverId, me);
+  if (!membership) return json(request, { error: 'Not a member' }, 403);
+  if (membership.is_owner !== 1) return json(request, { error: 'not_owner' }, 403);
+
+  const body = await readJson(request);
+  if (!body) return json(request, { error: 'Invalid JSON' }, 400);
+
+  const to = String(body.to || '').toLowerCase().trim();
+  if (!to) return json(request, { error: 'missing_target' }, 400);
+  if (to === me) return json(request, { error: 'cannot_transfer_to_self' }, 400);
+
+  const targetMembership = await getServerMembership(env, serverId, to);
+  if (!targetMembership) return json(request, { error: 'target_not_member' }, 404);
+
+  await env.RENEX_DB.batch([
+    env.RENEX_DB.prepare(
+      `UPDATE server_members SET is_owner = 0 WHERE server_id = ? AND user_handle = ?`
+    ).bind(serverId, me),
+    env.RENEX_DB.prepare(
+      `UPDATE server_members SET is_owner = 1 WHERE server_id = ? AND user_handle = ?`
+    ).bind(serverId, to),
+  ]);
+
+  await audit(env, serverId, me, 'server_transfer', to);
+  await pushToServerMembers(env, serverId, {
+    id:       crypto.randomUUID(),
+    type:     'server_owner_changed',
+    serverId,
+    from:     me,
+    to,
+    ts:       Date.now(),
+  });
+
+  return json(request, { ok: true });
+}
+
+/**
+ * PATCH /servers/<id>
+ * Body: { name?, description? } — beide optional, mindestens eines erforderlich.
+ *
+ * Permission: MANAGE_SERVER (Owner bypassed via Permission-Resolution).
+ * Validation: name 1-80 chars (gleich wie Create), description max 500.
+ */
+async function updateServer({ request, env, me }, serverId) {
+  const membership = await getServerMembership(env, serverId, me);
+  if (!membership) return json(request, { error: 'Not a member' }, 403);
+
+  if (!(await userHasPermission(env, serverId, null, me, Permissions.MANAGE_SERVER))) {
+    return json(request, { error: 'forbidden_manage_server' }, 403);
+  }
+
+  const rlErr = await checkRateLimit(env, 'serverUpdate', me, request);
+  if (rlErr) return rlErr;
+
+  const server = await env.RENEX_DB.prepare(
+    `SELECT id, name, description FROM servers WHERE id = ?`
+  ).bind(serverId).first();
+  if (!server) return json(request, { error: 'Server not found' }, 404);
+
+  const body = await readJson(request);
+  if (!body) return json(request, { error: 'Invalid JSON' }, 400);
+
+  const updates = [];
+  const params  = [];
+  const auditDetails = {};
+
+  if (typeof body.name === 'string') {
+    const name = body.name.trim();
+    if (!name || name.length > MAX_SERVER_NAME) {
+      return json(request, { error: 'Invalid server name (1-80 chars)' }, 400);
+    }
+    updates.push('name = ?'); params.push(name);
+    auditDetails.oldName = server.name; auditDetails.newName = name;
+  }
+  if ('description' in body) {
+    const description = body.description == null
+      ? null
+      : String(body.description).trim().slice(0, MAX_SERVER_DESC) || null;
+    updates.push('description = ?'); params.push(description);
+    auditDetails.oldDescription = server.description; auditDetails.newDescription = description;
+  }
+
+  if (updates.length === 0) return json(request, { ok: true, noChange: true });
+
+  params.push(serverId);
+  await env.RENEX_DB.prepare(
+    `UPDATE servers SET ${updates.join(', ')} WHERE id = ?`
+  ).bind(...params).run();
+
+  await audit(env, serverId, me, 'server_update', null, auditDetails);
+  await pushToServerMembers(env, serverId, {
+    id:       crypto.randomUUID(),
+    type:     'server_updated',
+    serverId,
+    changes:  auditDetails,
+    ts:       Date.now(),
+  });
+
+  return json(request, { ok: true, changes: auditDetails });
 }
 
 /**

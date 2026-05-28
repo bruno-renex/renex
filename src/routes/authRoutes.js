@@ -545,6 +545,30 @@ export async function handleAuthRoutes(request, env, path, params) {
         const handle = session.handle;
         const token = getToken(request);
 
+        // Pre-Check (Phase 3A.5): Owner-of-Server-with-Other-Members blockiert
+        // den Delete-Pfad. User muss aktiv transferieren oder den Server vorher
+        // auflösen. Solo-owned Servers fallen unten in 7i durch (CASCADE).
+        const blockingRows = await env.RENEX_DB.prepare(
+          `SELECT s.id, s.name,
+                  (SELECT COUNT(*) FROM server_members sm2
+                   WHERE sm2.server_id = s.id AND sm2.user_handle != ?) AS other_count
+             FROM servers s
+             JOIN server_members sm ON sm.server_id = s.id
+            WHERE sm.user_handle = ? AND sm.is_owner = 1`
+        ).bind(handle, handle).all();
+        const blocking = (blockingRows.results || []).filter(r => (r.other_count || 0) > 0);
+        if (blocking.length > 0) {
+          return json(request, {
+            error: "owner_transfer_required",
+            message: "Transfer ownership of the listed servers (or remove other members) before deleting your account.",
+            servers: blocking.map(r => ({
+              id: r.id,
+              name: r.name,
+              otherMemberCount: r.other_count,
+            })),
+          }, 409);
+        }
+
         // 1. ALLE Sessions des Users widerrufen (alle Geräte sofort ausgeloggt)
         await revokeAllSessions(env, handle);
         // Aktuelle Session zusätzlich explizit löschen (falls noch nicht im Index)
@@ -742,12 +766,13 @@ export async function handleAuthRoutes(request, env, path, params) {
            WHERE convo_id LIKE ? OR convo_id LIKE ? OR proposed_by = ?`
         ).bind(`${handle}:%`, `%:${handle}`, handle).run();
 
-        // 7i. Server-Memberships aufräumen mit Owner-Nachfolge (analog zu 7b
-        // für Gruppen). Wenn User Owner eines Servers war: ältester verbleibender
-        // Member wird neuer Owner (is_owner=1); kein Member mehr → Server löschen
-        // (CASCADE räumt server_roles, role_assignments, audit_log per FK auf).
+        // 7i. Server-Memberships aufräumen. Pre-Check oben blockiert bereits den
+        // Fall "Owner-of-Server-with-Other-Members" — Auto-Owner-Nachfolge entfällt
+        // damit (Phase 3A.5). Solo-owned Servers fallen hier durch: DELETE entfernt
+        // den einzigen Member → COUNT=0 → DELETE FROM servers → FK-CASCADE räumt
+        // server_roles, role_assignments, audit_log auf.
         const serverMemberRows = await env.RENEX_DB.prepare(
-          "SELECT server_id, is_owner FROM server_members WHERE user_handle = ?"
+          "SELECT server_id FROM server_members WHERE user_handle = ?"
         ).bind(handle).all();
         for (const row of (serverMemberRows.results || [])) {
           const serverId = row.server_id;
@@ -758,22 +783,6 @@ export async function handleAuthRoutes(request, env, path, params) {
             "DELETE FROM role_assignments WHERE server_id = ? AND user_handle = ?"
           ).bind(serverId, handle).run();
 
-          if (row.is_owner === 1) {
-            const successor = await env.RENEX_DB.prepare(
-              "SELECT user_handle FROM server_members WHERE server_id = ? ORDER BY joined_at ASC LIMIT 1"
-            ).bind(serverId).first();
-            if (successor) {
-              await env.RENEX_DB.prepare(
-                "UPDATE server_members SET is_owner = 1 WHERE server_id = ? AND user_handle = ?"
-              ).bind(serverId, successor.user_handle).run();
-              await env.RENEX_DB.prepare(
-                `INSERT INTO server_audit_log (id, server_id, actor, action, target, ts)
-                 VALUES (?, ?, ?, 'owner_transfer', ?, ?)`
-              ).bind(crypto.randomUUID(), serverId, handle, successor.user_handle, Date.now()).run();
-            }
-          }
-
-          // Wenn keine Members mehr → Server löschen (FK-CASCADE räumt Rest)
           const remaining = await env.RENEX_DB.prepare(
             "SELECT COUNT(*) as c FROM server_members WHERE server_id = ?"
           ).bind(serverId).first();

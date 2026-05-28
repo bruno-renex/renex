@@ -27,7 +27,8 @@
   let detail = $derived(serverStore.selectedServerDetail);
   let serverId = $derived(detail?.server?.id);
 
-  let activeTab = $state('roles');     // 'roles' | 'members' | 'channels'
+  let activeTab = $state('roles');     // 'general' | 'roles' | 'members' | 'channels' | 'invites'
+  let didInitTab = $state(false);      // beim ersten Open auf 'general' wenn canManageServer
   let editRole = $state(null);          // role-object → öffnet RoleEditModal in edit-mode
   let editModalOpen = $state(false);    // bindable boolean für RoleEditModal
   let createRoleOpen = $state(false);   // → öffnet RoleEditModal in create-mode
@@ -304,6 +305,16 @@
       }
       iconFile = null;
       didInitInputs = false;
+      didInitTab = false;
+    }
+  });
+
+  // Default-Tab beim ersten Open: 'general' wenn user MANAGE_SERVER hat,
+  // sonst der bisherige Default 'roles'. Respektiert User-Navigation danach.
+  $effect(() => {
+    if (isOpen && !didInitTab && detail?.myMembership) {
+      activeTab = canManageServer ? 'general' : 'roles';
+      didInitTab = true;
     }
   });
 

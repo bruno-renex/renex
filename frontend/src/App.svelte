@@ -1276,23 +1276,28 @@
       void voiceStore._handlePeerEnd(msg, "cancel");
     }));
 
-    // ── Server/Channel Live-Updates (Phase 3A) ──────────────────────────
+    // ── Server/Channel Live-Updates (Phase 3A + 3A.5) ───────────────────
     // Backend pusht diese Events an alle Server-Members. Wenn der betroffene
     // Server gerade geöffnet ist, Detail (Channels/Members/Roles) neu laden.
-    // server_member_joined/left aktualisiert zusätzlich die Server-Liste
-    // (Member-Count), auch wenn der Server nicht geöffnet ist.
+    // Sidebar-relevante Events (Member-Count, Name, Icon, Owner-Wechsel)
+    // triggern zusätzlich /servers/list, auch wenn der Server nicht geöffnet ist.
     const _serverLiveEvents = [
       "server_member_joined", "server_member_left",
+      "server_updated", "server_owner_changed",
       "channel_created", "channel_renamed", "channel_deleted",
       "role_created", "role_updated", "role_deleted",
       "member_role_assigned", "member_role_revoked",
     ];
+    const _sidebarRelevant = new Set([
+      "server_member_joined", "server_member_left",
+      "server_updated", "server_owner_changed",
+    ]);
     for (const evt of _serverLiveEvents) {
       _wsUnsubs.push(ws.on(evt, (msg) => {
         if (msg?.serverId && msg.serverId === serverStore.selectedServerId) {
           void serverStore.loadServerDetail(msg.serverId);
         }
-        if (evt === "server_member_joined" || evt === "server_member_left") {
+        if (_sidebarRelevant.has(evt)) {
           void serverStore.loadServers();
         }
       }));

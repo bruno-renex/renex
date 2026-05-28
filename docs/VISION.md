@@ -458,14 +458,14 @@ Master-Docs geschrieben (`VISION.md`).
 Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 (channel_permission_overrides-UI), Tier-Limits (Free/Pro), Server-Name/Icon/Beschreibung-Edit.
 
-### Phase 3A.5 — Server-Mutation & Moderation 🚧 *(in progress, Tag 1: 2026-05-28)*
-**3 von 7 Items live nach Tag 1** (deployed als Backend Version ID `cda0af51-...`, Frontend `2026-05-28-1`):
+### Phase 3A.5 — Server-Mutation & Moderation 🚧 *(in progress, 2026-05-28)*
+**4 von 7 Items live nach 2026-05-28** (Backend Version IDs `cda0af51-...` (morning) → `042ce373-...` (evening), Frontend `2026-05-28-3`):
 - ✅ `POST /servers/<id>/transfer` — Owner-Transfer, atomar via D1-batch, audit + WS `server_owner_changed`. RL 3/min.
 - ✅ `PATCH /servers/<id>` — Name + Beschreibung partial-update, gated by `MANAGE_SERVER`. Audit `server_update` mit diff, WS `server_updated`. RL 30/min.
 - ✅ `DELETE /account` Pre-Check — 409 `owner_transfer_required` mit Blocking-Server-Liste wenn User Owner eines Servers mit anderen Members ist. Auto-Owner-Succession entfernt (explicit transfer schlägt silent promotion).
+- ✅ Server-Icon-Edit — POST/GET/DELETE `/servers/<id>/icon`, MIME-Allowlist (PNG/JPEG/WebP), ≤1 MB, R2-Key `server-icons/<sid>/<uuid>`, alter Icon-Key best-effort cleanup. Frontend: neuer "Allgemein"-Tab in `ServerSettingsModal` (gated MANAGE_SERVER, Default beim Open für admins), fetch+blobURL für Cross-Origin-credentials-Anzeige, Sidebar + Detail-Header mit Initial-Fallback. WS-Pipeline (`server_updated`) erweitert um Sidebar-relevante Events (Live-Update ohne Reload).
 
 **Noch offen:**
-- ❌ Server-Icon-Edit (`icon_r2_key` PATCH, R2-Upload-Pfad)
 - ❌ Ban-System (`server_bans`-Tabelle + `banMember`-Endpoint, aktuell Stub in `serverRoutes.js`)
 - ❌ Private Channels (`channel_permission_overrides`-UI; Backend-Tabelle existiert seit Phase 3A)
 - ❌ Tier-Limits Free=3 / Pro=25 owned Servers (`MAX_OWNED_SERVERS_FREE`/`_PRO` Konstanten existieren, aber Tier-Lookup fehlt — aktuell hartes 3-Server-Limit für alle)

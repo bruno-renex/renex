@@ -4,6 +4,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-05-28 — Phase 3A.5 Server-Icon-Edit + WS-Polish 🖼
+
+Viertes Phase-3A.5-Item geshippt am selben Tag (Abend-Sprint nach den ersten
+drei Endpoints). Server-Owner können jetzt Icon hochladen/entfernen + Name
+und Beschreibung im neuen "Allgemein"-Tab editieren. Plus zwei Polish-Fixes
+nach Live-Smoke-Test.
+
+### ✨ Added
+- **`POST /servers/<id>/icon`** — Owner/MANAGE_SERVER-only Upload, MIME-Allowlist
+  (PNG/JPEG/WebP), ≤1 MB, R2-Key `server-icons/<sid>/<uuid>`, alter Icon-Key
+  best-effort cleanup. Audit `server_icon_set`, WS-Broadcast `server_updated`
+  mit `iconR2Key`-Diff. RL 10/min.
+- **`GET /servers/<id>/icon`** — Member-only, streamt R2-Object mit gespeichertem
+  Content-Type, `Cache-Control: private, max-age=300`.
+- **`DELETE /servers/<id>/icon`** — MANAGE_SERVER-gated, NULLt die Spalte +
+  best-effort R2-Cleanup, audit `server_icon_removed`, WS-Broadcast.
+- **"Allgemein"-Tab in ServerSettingsModal** (gated MANAGE_SERVER, erstes Tab
+  beim Open für Server-Admins) — Icon-Upload mit Auto-Upload-on-Select, Preview,
+  Remove-Button + Name/Beschreibung-Editor mit Dirty-Check.
+- **Sidebar + Detail-Header zeigen Server-Icons** — fetch+blobURL-Pattern
+  (Cross-Origin-credentials), Initials-Fallback wenn kein Icon, re-fetch wenn
+  `iconR2Key` sich via WS ändert.
+- **i18n DE/EN/ES** — 17 neue Strings für den Allgemein-Tab.
+
+### 🐛 Fixed (Polish nach Smoke-Test)
+- **WS `server_updated` + `server_owner_changed` jetzt im Frontend gehandelt** —
+  `App.svelte` ignorierte sie bisher, andere Members mussten manuell reloaden um
+  Name/Icon/Owner-Wechsel zu sehen. Sidebar-relevante Events triggern jetzt
+  `/servers/list` zusätzlich zu `/servers/<id>`.
+- **ServerSettingsModal default-Tab** — landete bisher immer auf "Roles", auch
+  wenn User die Settings öffnete um Name oder Icon zu ändern. Jetzt: erstes
+  Tab "Allgemein" wenn `MANAGE_SERVER`, sonst weiterhin "Roles".
+
+### 🚧 Phase 3A.5 — Stand 4 von 7 nach 2026-05-28
+Verbleibend: Ban-System, Private Channels, Tier-Limits (Free=3 / Pro=25).
+
+---
+
 ## 2026-05-28 — Phase 3A.5 (Tag 1) + Dependabot-Nachsorge + Roadmap-Acceleration 🛠
 
 Drei Server-Mutation-Stubs gefüllt, alle 7 Dependabot-PRs der Launch-Week aufgeräumt,

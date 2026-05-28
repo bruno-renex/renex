@@ -4,6 +4,70 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-05-28 — Phase 3A.5 (Tag 1) + Dependabot-Nachsorge + Roadmap-Acceleration 🛠
+
+Drei Server-Mutation-Stubs gefüllt, alle 7 Dependabot-PRs der Launch-Week aufgeräumt,
+komplette Beta-Roadmap um weitere ~3 Wochen vorgezogen (Beta jetzt Ende Juni 2026).
+
+### ✨ Added (Phase 3A.5 — 3 von 7 Items)
+- **`POST /servers/<id>/transfer`** — Owner-Transfer eines Servers an einen anderen
+  Member. Owner-only (ADMINISTRATOR bypassed nicht, per Spec §5), atomar via
+  D1-Batch, Audit-Aktion `server_transfer`, WS-Broadcast `server_owner_changed`.
+  RL 3/min/User. Error-Pfade: `cannot_transfer_to_self`, `target_not_member`,
+  `missing_target`, `not_owner`.
+- **`PATCH /servers/<id>`** — Name + Beschreibung partial-update, gated by
+  `MANAGE_SERVER`. Spiegelt `channelDetailHandler`-Pattern (dynamische
+  UPDATE-Klausel + auditDetails-Diff). WS-Broadcast `server_updated`. RL 30/min.
+- **`DELETE /account` Pre-Check** — returnt `409 owner_transfer_required` mit
+  Liste blockierender Server (`{id, name, otherMemberCount}`) wenn User Owner
+  eines Servers mit anderen Members ist. Solo-owned Servers fallen unverändert
+  durch zu existing CASCADE-Delete.
+
+### 🔄 Changed
+- **`DELETE /account` Auto-Owner-Succession entfernt** — Pre-Check ist ab jetzt
+  der einzige Pfad. Bewusste UX-Entscheidung: explicit Transfer schlägt silent
+  Promotion an einen Member, der das vielleicht nie wollte.
+- **`deploy.sh` APP_DIR-Auflösung**: hardcoded iCloud-Pfad ersetzt durch
+  `$(cd $(dirname $0) && pwd)`. Deploy funktioniert jetzt aus jedem Working-Tree
+  und ist nicht mehr an einen Mac/iCloud-Pfad gebunden.
+
+### 🐛 Fixed
+- **2 moderate Dependabot Security-Advisories** durch grouped major bump (PR #7)
+  automatisch aufgelöst:
+  - `esbuild` dev-server-vulnerability (Browser konnte Requests an Dev-Server
+    senden + Response lesen) → behoben mit esbuild ≥0.25.0.
+  - `vite` Path-Traversal in optimized-deps `.map`-Handling → behoben mit
+    vite ≥6.4.2 (jetzt 8.0.14).
+
+### 🔄 Dependency-Bumps (PR #7 grouped, CI grün)
+- `vite` 5.4.21 → 8.0.14
+- `vitest` 1.6.1 → 4.1.7
+- `@vitest/ui` 1.6.1 → 4.1.7
+- `@sveltejs/vite-plugin-svelte` 4.0.4 → 7.1.2
+- `esbuild` → ≥0.25.0
+- Plus: GitHub Actions `actions/setup-node` 5 → 6 (PR #1), `actions/checkout`
+  5 → 6 (PR #2). PRs #3–#6 als obsolete geschlossen nach #7-Merge.
+
+### 🚀 Roadmap-Acceleration
+- **Beta-Launch von Mitte/Ende Juli 2026 auf Ende Juni 2026 vorgezogen.** Begründung:
+  Phase 3A 3 Wo vor Plan, Phase 2 (Open Standard) parallel mitgeshipped, Phase
+  3A.5 in 1 Tag teil-shipped, Tempo hält. Phase 5-Light Wo 5 → Wo 2, Phase 6
+  Wo 7 → Wo 4, Phase 8 Aug-Nov → Juli-Okt, Phase 9 Q4-Q1 → Q3-Q4. Detail:
+  [`VISION.md`](./VISION.md) Decision Log 2026-05-28.
+
+### 🚧 Phase 3A.5 — noch offen (Tag 2+)
+Server-Icon-Edit (`icon_r2_key` PATCH), Ban-System (`server_bans`-Tabelle +
+`banMember`-Endpoint), Private Channels (`channel_permission_overrides`-UI),
+Tier-Limits (Free=3 / Pro=25 owned Servers — aktuell hartes 3-Server-Limit
+für alle).
+
+### 🐞 Follow-up
+- `/servers/list` reportete während Smoke-Tests für einen non-Owner kurzzeitig
+  `is_owner=true`, später konsistent `false`. Root-Cause unbekannt — kein
+  3A.5-Code-Pfad berührt `server_members.is_owner`. Bei Gelegenheit hinterfragen.
+
+---
+
 ## 2026-05-27 — Phase 3A: Server & Channels (live) 🧩
 
 Discord-artige Text-Server am Launch-Tag fertiggestellt + deployed (~3 Wochen vor Plan).

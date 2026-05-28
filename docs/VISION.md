@@ -4,7 +4,7 @@
 
 **Status:** Living document
 **Version:** 1.0
-**Letzte Aktualisierung:** 2026-04-27
+**Letzte Aktualisierung:** 2026-05-28
 **Autor:** Bruno Hochstrasser
 
 ---
@@ -388,7 +388,7 @@ Jedes Device entschlüsselt nur seinen eigenen Payload
 
 ## 10. Roadmap-Übersicht
 
-**Ziel: Beta-Launch Mitte/Ende Juli 2026** *(~10 Wochen ab 2026-05-13)*
+**Ziel: Beta-Launch Ende Juni 2026** *(~7 Wochen ab 2026-05-13, ~3 Wochen vor ursprünglichem Plan)*
 
 > **Roadmap-Pivot 2026-05-13:** Beta-Launch um ~3 Monate nach vorne gezogen.
 > Wesentliche Änderungen: Phase 3 → Phase 3A (Voice deferred), Phase 4 deferred,
@@ -396,6 +396,14 @@ Jedes Device entschlüsselt nur seinen eigenen Payload
 > ist exzellente Foundation (Multi-Device-Krypto stable), Voice ist eigener Tech-Stack
 > (3-4 Wochen), Markenkern „AI-Free + Passkey-Only + Text-Discord-Killer" ist auch ohne
 > Voice valid. Voice + Signal Protocol gemeinsam in Phase 8 als v2.0-Sicherheits-Update.
+
+> **Roadmap-Acceleration 2026-05-28:** Phase 3A 3 Wochen vor Plan fertig (2026-05-27),
+> Phase 2 (Open Standard) parallel mitgeshipped, Phase 3A.5 Teil-Ship am Folgetag
+> (3 von 7 Items). Damit komplette Beta-Roadmap um weitere ~3 Wochen vorgezogen:
+> Phase 5-Light Wo 5 → Wo 2, Phase 6 Wo 7 → Wo 4, Phase 7 Beta-Launch Mitte/Ende Juli
+> → Ende Juni, Phase 8 (Voice + Signal) Aug-Nov → Juli-Okt. Risiko: Phase 5-Light
+> Captcha hat externe Dependency (Cloudflare-Turnstile-Dashboard-Setup) — async-Block
+> möglich. Siehe Decision Log Eintrag 2026-05-28.
 
 **Strategie-Wahl: Option B (Pragmatisch)** — Svelte jetzt, Signal Protocol nach Beta.
 
@@ -450,7 +458,21 @@ Master-Docs geschrieben (`VISION.md`).
 Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 (channel_permission_overrides-UI), Tier-Limits (Free/Pro), Server-Name/Icon/Beschreibung-Edit.
 
-### Phase 5-Light — Anti-AI Minimum *(Wo 5: 2026-06-16 → 2026-06-22)*
+### Phase 3A.5 — Server-Mutation & Moderation 🚧 *(in progress, Tag 1: 2026-05-28)*
+**3 von 7 Items live nach Tag 1** (deployed als Backend Version ID `cda0af51-...`, Frontend `2026-05-28-1`):
+- ✅ `POST /servers/<id>/transfer` — Owner-Transfer, atomar via D1-batch, audit + WS `server_owner_changed`. RL 3/min.
+- ✅ `PATCH /servers/<id>` — Name + Beschreibung partial-update, gated by `MANAGE_SERVER`. Audit `server_update` mit diff, WS `server_updated`. RL 30/min.
+- ✅ `DELETE /account` Pre-Check — 409 `owner_transfer_required` mit Blocking-Server-Liste wenn User Owner eines Servers mit anderen Members ist. Auto-Owner-Succession entfernt (explicit transfer schlägt silent promotion).
+
+**Noch offen:**
+- ❌ Server-Icon-Edit (`icon_r2_key` PATCH, R2-Upload-Pfad)
+- ❌ Ban-System (`server_bans`-Tabelle + `banMember`-Endpoint, aktuell Stub in `serverRoutes.js`)
+- ❌ Private Channels (`channel_permission_overrides`-UI; Backend-Tabelle existiert seit Phase 3A)
+- ❌ Tier-Limits Free=3 / Pro=25 owned Servers (`MAX_OWNED_SERVERS_FREE`/`_PRO` Konstanten existieren, aber Tier-Lookup fehlt — aktuell hartes 3-Server-Limit für alle)
+
+**Follow-up Bug (aus Smoke-Test 2026-05-28):** `/servers/list` reportete für einen non-Owner kurzzeitig `is_owner=true`, später konsistent `false`. Root-Cause unbekannt — kein 3A.5-Code-Pfad berührt `server_members.is_owner`. Bei Gelegenheit hinterfragen.
+
+### Phase 5-Light — Anti-AI Minimum *(Wo 2-3: 2026-05-26 → 2026-06-01, vorgezogen von Wo 5)*
 - Captcha-Verschärfung an Server-Create + Invite-Accept
 - ✅ Rate-Limits für Server/Channel/Role-Endpoints (bereits mit Phase 3A geliefert — RL-Buckets in `serverRoutes.js`, inkl. inviteCreate/serverJoin)
 - ❌ Hardware-Attestation: deferred zu Phase 9 (Year 1)
@@ -462,7 +484,7 @@ Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 - AGPL Backend / MIT+Apache Frontend ✅ ([`LICENSE`](../LICENSE) Triple-Setup)
 - CI eingerichtet (GitHub Actions) — Tag-3 vor Launch
 
-### Phase 6 — Brand & Launch-Prep *(Wo 7: 2026-06-30 → 2026-07-06)*
+### Phase 6 — Brand & Launch-Prep *(Wo 4-5: 2026-06-09 → 2026-06-15, vorgezogen von Wo 7)*
 - Landing-Page Redesign
 - Demo-Video + GIF für PWA-Install-Onboarding
 - Press-Kit
@@ -470,14 +492,14 @@ Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 - AGB rechtssicher (Anti-AI Best-Effort-Klausel + Schweizer DSG-Auskunftsrecht via Audit-Log)
 - Manifesto öffentlich
 
-### Phase 7 — Public Beta-Launch 🚀 *(Mitte/Ende Juli 2026)*
+### Phase 7 — Public Beta-Launch 🚀 *(Ende Juni 2026, vorgezogen von Mitte/Ende Juli)*
 - Erste 50-1000 Beta-User
 - Reddit/HN/Twitter-Posts (realistisch: 1-2 viral)
 - 5 Streamer-Outreach mit Demo-Video
-- **Marketing-Story:** „Text-First Discord-Killer mit AI-Free-Garantie. Voice kommt in v2.0 (Q4 2026)."
+- **Marketing-Story:** „Text-First Discord-Killer mit AI-Free-Garantie. Voice kommt in v2.0 (Q3 2026)."
 - Geduld: 6-12 Monate Network-Effects
 
-### Post-Beta: Phase 8 — Voice + Signal Protocol *(Aug 2026 - Nov 2026)*
+### Post-Beta: Phase 8 — Voice + Signal Protocol *(Juli 2026 - Okt 2026, vorgezogen von Aug-Nov)*
 **Doppel-Pack als v2.0. Voice-Stack split nach Topologie:**
 - **1:1-Calls**: WebRTC P2P + self-hosted **coturn** (Hetzner CH/DE) → ersetzt CF TURN. Frame-Crypto via DTLS-SRTP wie bisher. Marketing-Pitch: „Direkter P2P-Pfad, Server sieht nie Plaintext."
 - **Voice-Channels (Gruppen)**: self-hosted **LiveKit SFU** (Apache-2.0) auf Hetzner CH/DE. E2E via Insertable Streams + Frame-Encryption mit Keys aus bestehendem **GSK-System** (HKDF-Derivation pro Sender+chainIndex). Push-to-Talk + Screen-Sharing nativ über LiveKit-API.
@@ -488,7 +510,7 @@ Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 - Migration-Path mit Lessons-Learned von echten Usern
 - Marketing-Spin: „v2.0 Sicherheits- + Voice-Update — Self-Hosted, Schweizer Datenschutz, Open Standard."
 
-### Post-Beta: Phase 9 — Gamer-Features + Anti-AI Stark *(Year 1 Q4 2026 - Q1 2027)*
+### Post-Beta: Phase 9 — Gamer-Features + Anti-AI Stark *(Year 1 Q3 2026 - Q4 2026, vorgezogen von Q4 2026 - Q1 2027)*
 - Steam Rich Presence
 - Custom Emojis (Pro-Limit)
 - Soundboard
@@ -519,16 +541,16 @@ Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 - ✅ Server/Channel funktioniert mit 5 Test-Servern
 - ✅ Voice-Channel mit 5 gleichzeitigen Sprechern getestet
 
-### Phase 4-6 (Juli - August)
+### Phase 4-6 (Juni - Juli)
 - ✅ Steam-Integration mit eigenem Account demonstriert
 - ✅ Anti-AI-Manifest-Page öffentlich
 - ✅ Demo-Video produziert
 
-### Phase 7 — Beta (Juli - August) *(Roadmap-Pivot 2026-05-13)*
+### Phase 7 — Beta (Ende Juni - Juli) *(Roadmap-Acceleration 2026-05-28)*
 - 🎯 **50 Beta-User** (Woche 1 nach Launch)
-- 🎯 **500 aktive User** (Monat 1, Ende August)
+- 🎯 **500 aktive User** (Monat 1, Ende Juli)
 - 🎯 **5 Founder's Passes verkauft** (Monat 1) → $125
-- 🎯 **2'000 aktive User** bis Ende September
+- 🎯 **2'000 aktive User** bis Ende August
 
 ### Year 1 (April 2026 - April 2027)
 - 🎯 **5'000 aktive User**
@@ -624,6 +646,7 @@ Wenn eine strategische Entscheidung geändert wird, hier dokumentieren:
 | 2026-05-13 | **Voice/PTT/Screen-Sharing Phase** | Phase 3 (mit Beta) | **Phase 8 (post-Beta, gemeinsam mit Signal Protocol)** | 3-4 Wochen Solo-Arbeit für WebRTC SFU + UI. Voice + Signal Protocol als „v2.0-Update" gebündelt vermarktet. Detail: [`SERVERS.md`](./SERVERS.md) Decision Log 2026-05-13. |
 | 2026-05-15 | **Voice-Infrastruktur** | „WebRTC mit Cloudflare TURN/SFU" (CF Realtime für Channels) | **Self-hosted: coturn für 1:1, LiveKit (Apache-2.0) für Voice-Channels — beide auf Hetzner CH/DE** | (1) **Privacy-Bruch CF**: CF Realtime SFU im Plaintext-Modus wäre DTLS-Endpoint, hätte technisch Zugriff auf Audio. Im Frame-Encrypted-Modus immerhin Metadata + US-Jurisdiktion (FISA 702 / NSL / CLOUD Act) — direkter Widerspruch zur „You Are The Key"-Brand-Position. Schweizer Hetzner-Hosting unterliegt nur DE-Justiz mit Transparenz-Pflicht. (2) **Open-Standard-Bruch**: CF-Lock-in im wichtigsten Layer (Voice = Discord-Killer-USP) würde verhindern dass Dritte RENEX-kompatible Server deployen können — bricht Pillar #3. LiveKit ist Apache-2.0, self-hostbar von jedem. (3) **Kosten**: bei 30k MAU Faktor 10-100× günstiger (~80€/Mo vs ~$3'000+/Mo CF). (4) **Praxis-Bestätigung 2026-05-15**: CF Realtime TURN-Allocations zeigten in Tests beidseitige Carrier-NAT-Probleme (alle relay↔relay-Pairs blieben in-progress, kein STUN-Throughput). Self-hosted coturn löst das mit eigener PERMISSIONS-Forwarding-Config. (5) **GSK-Wiederverwendung**: existierendes Group-Sender-Key-System aus Phase 1C wird via HKDF-Derivation für Frame-Encryption nachgenutzt — keine neue Krypto-Schicht. (6) **Reliability-Tradeoff**: single-Server-Setup ist Year-1-akzeptabel (99.5% Uptime), Multi-Region-Cluster ab Year 3 wenn Pro-MRR die Infra finanziert. Phase-8-Architektur-Skizze von 2026-05-15-Session (LiveKit-Token-Flow, Frame-Crypto, Hetzner-Deploy-Script) verfügbar — VOICE.md-Detail-Spec folgt zu Phase-8-Start. |
 | 2026-05-20 | **Phase 2 vorziehen** (Open-Source-Launch) | (A) Original-Plan Wo 5-6 (2026-06-16+) / (B) sofort, parallel zu Phase 3A | **B** | Phase 1 ist stabil deployed, PROTOCOL.md ist Stable v1.0, Voice 1:1 (Phase 8a) ist live. Open-Source-Repo schon vor Beta-Launch zu öffnen schafft Reddit/HN-Visibility, GitHub-Stars als Social-Proof + zieht erste Contributors an. Trade-off: Phase 3A (Server/Channels-Polish) wird public sichtbar während Work-in-Progress — akzeptabel mit „Pre-Beta"-Status-Disclaimer. 8-Tage-Sprint 2026-05-20 → 2026-05-27. |
+| 2026-05-28 | **Roadmap-Acceleration nach Phase 3A** | Beta Mitte/Ende Juli 2026 (Pivot 2026-05-13) | **Ende Juni 2026** (~3 Wo weiter vorgezogen) | Phase 3A 3 Wo vor Plan fertig (2026-05-27), Phase 2 (Open Standard) parallel mitgeshipped statt Wo 5-6, Phase 3A.5 in 1 Tag teil-shipped (3 von 7 Items: transfer, PATCH name/desc, account-delete pre-check). Tempo hält, Foundation ist solid (461/461 vitest grün, 0 vulnerabilities nach grouped Dependabot bump). Phase 5-Light Wo 5 → Wo 2, Phase 6 Wo 7 → Wo 4, Phase 7 Mitte/Ende Juli → Ende Juni, Phase 8 Aug-Nov → Juli-Okt, Phase 9 Q4 2026-Q1 2027 → Q3-Q4 2026. Trade-off: Phase 5-Light Captcha (Turnstile) hat Async-Dependency (CF-Dashboard-Setup Sitekey/Secret), könnte temporär blocken. Foundation-Lessons im Memory festgehalten: kein git in iCloud, push vor deploy, wrangler.toml braucht fresh-clones manuell. |
 
 ---
 

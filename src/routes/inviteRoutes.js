@@ -734,7 +734,9 @@ export async function handleInviteRoutes(request, env, path, params) {
       await env.RENEX_KV.put(`contacts_v:${peerHandle}`, String(convertTs));
 
       // 9. Live-Event an Partner
-      pushToUserDO(env, peerHandle, {
+      // AWAIT wichtig: CF Workers kann fire-and-forget Promise terminieren
+      // bevor das DO-fetch durchkommt — Partner-Frontend sieht sonst nichts.
+      await pushToUserDO(env, peerHandle, {
         id:        crypto.randomUUID(),
         type:      "GUEST_CONVERTED",
         oldHandle: guestHandle,
@@ -900,7 +902,9 @@ export async function handleInviteRoutes(request, env, path, params) {
       await env.RENEX_KV.put(`contacts_v:${me}`, String(joinTs));
 
       // Einlader benachrichtigen
-      pushToUserDO(env, createdBy, {
+      // AWAIT wichtig: CF Workers kann fire-and-forget Promise terminieren
+      // bevor das DO-fetch durchkommt — Einlader sieht sonst nichts.
+      await pushToUserDO(env, createdBy, {
         type: "CONTACT_UPDATE", handle: me, ts: joinTs
       }).catch(() => {});
 

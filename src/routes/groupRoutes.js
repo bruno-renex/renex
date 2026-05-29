@@ -606,7 +606,9 @@ export async function handleGroupRoutes(request, env, path, params) {
         ts:      removeTs
       };
       // 1) ex-member explizit benachrichtigen
-      pushToUserDO(env, target, removeEvent).catch(() => {});
+      // AWAIT wichtig: CF Workers kann fire-and-forget Promise terminieren
+      // bevor das DO-fetch durchkommt — Empfänger sieht sonst nichts.
+      await pushToUserDO(env, target, removeEvent).catch(() => {});
       // 2) verbleibende Members aus frischer DB (ohne ex-member)
       await pushToGroupMembers(env, env.RENEX_DB, groupId, null, removeEvent, { bypassCache: true });
 

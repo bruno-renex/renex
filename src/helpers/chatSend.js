@@ -499,7 +499,10 @@ export async function handleChatSend(request, env) {
       type !== "auto_delete_set"
     );
     if (isChatMsg) {
-      pushToUserDO(env, me, msg).catch(() => {});  // fire-and-forget, non-blocking
+      // AWAIT statt fire-and-forget: CF Workers kann den Promise terminieren
+      // bevor das DO-fetch durchkommt — andere Geräte sehen Message sonst
+      // erst nach Reload. ~10-50ms extra Latenz pro Send akzeptabel für Reliability.
+      await pushToUserDO(env, me, msg).catch(() => {});
     }
   }
 

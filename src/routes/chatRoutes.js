@@ -361,8 +361,10 @@ export async function handleChatRoutes(request, env, path, params) {
         }
         // Multi-Device-Self-Sync: eigene andere Devices ebenfalls benachrichtigen
         // (DM + Group). Tab/Device, der die Aktion ausgelöst hat, filtert sich
-        // im Frontend via msg.deviceId selbst raus. Fire-and-forget.
-        pushToUserDO(env, me, deleteEvent).catch(() => {});
+        // im Frontend via msg.deviceId selbst raus.
+        // AWAIT statt fire-and-forget: CF Workers kann den Promise terminieren
+        // bevor das DO-fetch durchkommt — andere Geräte sehen Delete sonst erst nach Reload.
+        await pushToUserDO(env, me, deleteEvent).catch(() => {});
 
         return json(request, { ok: true });
       }
@@ -436,7 +438,9 @@ export async function handleChatRoutes(request, env, path, params) {
         await pushToUserDO(env, peer, { ...editEvent, to: peer });
       }
       // Multi-Device-Self-Sync: eigene andere Devices kriegen Edit-Event auch.
-      pushToUserDO(env, me, editEvent).catch(() => {});
+      // AWAIT statt fire-and-forget: CF Workers kann den Promise terminieren
+      // bevor das DO-fetch durchkommt — andere Geräte sehen Edit sonst erst nach Reload.
+      await pushToUserDO(env, me, editEvent).catch(() => {});
 
       return json(request, { ok: true, editedAt: now });
     }
@@ -571,7 +575,9 @@ export async function handleChatRoutes(request, env, path, params) {
         await pushToUserDO(env, peer, { ...reactionEvent, to: peer });
       }
       // Multi-Device-Self-Sync: eigene andere Devices spiegeln die Reaktion.
-      pushToUserDO(env, me, reactionEvent).catch(() => {});
+      // AWAIT statt fire-and-forget: CF Workers kann den Promise terminieren
+      // bevor das DO-fetch durchkommt — andere Geräte sehen Reaktion sonst erst nach Reload.
+      await pushToUserDO(env, me, reactionEvent).catch(() => {});
       // Sender selbst (eigener Tab) bekommt auch das Event zurück
       return json(request, { ok: true, action, reactions });
     }

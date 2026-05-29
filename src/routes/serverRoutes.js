@@ -1431,8 +1431,10 @@ async function kickMemberHandler({ request, env, me }, serverId, targetHandle) {
     ts:     Date.now(),
   };
   await pushToServerMembers(env, serverId, event);
-  // Gekickter User selbst (nicht mehr im Server, also nicht via pushToServerMembers)
-  pushToUserDO(env, targetHandle, event).catch(() => {});
+  // Gekickter User selbst (nicht mehr im Server, also nicht via pushToServerMembers).
+  // AWAIT wichtig: unawaited Promises können in CF Workers terminated werden
+  // bevor das DO-fetch zur Zustellung kommt — Empfänger sieht sonst nichts.
+  await pushToUserDO(env, targetHandle, event).catch(() => {});
 
   return json(request, { ok: true });
 }
@@ -1528,8 +1530,10 @@ async function banMemberHandler({ request, env, me }, serverId, targetHandle) {
     ts:     now,
   };
   await pushToServerMembers(env, serverId, event);
-  // Gebannter User selbst (nicht mehr im Server) — bekommt Event direkt
-  pushToUserDO(env, targetHandle, event).catch(() => {});
+  // Gebannter User selbst (nicht mehr im Server) — bekommt Event direkt.
+  // AWAIT wichtig: unawaited Promises können in CF Workers terminated werden
+  // bevor das DO-fetch zur Zustellung kommt — Empfänger sieht sonst nichts.
+  await pushToUserDO(env, targetHandle, event).catch(() => {});
 
   return json(request, { ok: true });
 }

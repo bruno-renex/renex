@@ -267,6 +267,15 @@ async function revokeRole(serverId, handle, roleId) {
   }
 }
 
+// Phase 3A.5: Ban-Event-Version — wird in App.svelte hochgezählt wenn WS
+// server_member_banned/unbanned ankommt. ServerSettingsModal beobachtet
+// das, um die Banned-Liste live nachzuladen ohne Tab-Click.
+let _banEventVersion = $state(0);
+
+function incrementBanEventVersion() {
+  _banEventVersion++;
+}
+
 async function banMember(serverId, handle, reason = null) {
   try {
     const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(handle)}/ban`, {
@@ -423,6 +432,8 @@ export const serverStore = {
   banMember,
   listBans,
   unbanMember,
+  incrementBanEventVersion,
+  get banEventVersion() { return _banEventVersion; },
   leaveServer,
   createRole,
   updateRole,

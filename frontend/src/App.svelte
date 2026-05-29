@@ -1308,6 +1308,7 @@
     // Phase 3A.5: Self-ban-Behandlung — wenn ich der Gebannte bin, Server-View
     // zurücksetzen + Toast. Kommt zusätzlich zum allgemeinen Handler oben.
     _wsUnsubs.push(ws.on("server_member_banned", (msg) => {
+      serverStore.incrementBanEventVersion();
       if (msg?.handle && userStore.myUser && msg.handle === userStore.myUser) {
         if (msg.serverId === serverStore.selectedServerId) {
           serverStore.selectServer(null);
@@ -1315,6 +1316,10 @@
         const reasonSuffix = msg.reason ? ` — „${msg.reason}"` : '';
         toastStore.push(`🚫 ${(i18nStore.lang.bannedFromServerToast || 'Du wurdest vom Server gebannt')}${reasonSuffix}`, { kind: 'error' });
       }
+    }));
+    // Phase 3A.5: Unban — refresh Banned-Liste im offenen Modal
+    _wsUnsubs.push(ws.on("server_member_unbanned", () => {
+      serverStore.incrementBanEventVersion();
     }));
 
     // E2E Inbox-Key Upload + Heartbeat — sequenziell aber non-blocking

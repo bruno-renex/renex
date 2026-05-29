@@ -380,8 +380,12 @@
     if (!r.ok) toastStore.push((lang.error || 'Fehler') + ': ' + r.error, { kind: 'error' });
   }
 
+  // Bans IMMER laden wenn Modal offen + canBanMembers — nicht erst beim Tab-Click,
+  // damit Tab-Counter live korrekt ist. Reaktiv auf banEventVersion (WS hochzählt
+  // server_member_banned/unbanned).
   $effect(() => {
-    if (activeTab === 'banned' && serverId && canBanMembers) void loadBans();
+    serverStore.banEventVersion; // track für Live-Update
+    if (isOpen && serverId && canBanMembers) void loadBans();
   });
 
   async function banMemberAction(member) {

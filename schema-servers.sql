@@ -166,3 +166,20 @@ CREATE TABLE IF NOT EXISTS server_invites (
 
 CREATE INDEX IF NOT EXISTS idx_server_invites_server
   ON server_invites(server_id);
+
+-- ── Server-Bans (Phase 3A.5, Spec SERVERS.md §6.4) ────
+-- Permanent ban-list, separat von server_members (gebannte User sind KEINE
+-- Members mehr). Ban schließt Re-Join via Invite aus. Unban = DELETE row.
+-- Owner kann nicht gebannt werden (App-Layer-Check, nicht Schema-Constraint).
+CREATE TABLE IF NOT EXISTS server_bans (
+  server_id   TEXT    NOT NULL,
+  user_handle TEXT    NOT NULL,
+  banned_by   TEXT    NOT NULL,
+  reason      TEXT,                              -- optional, vom Banner gesetzt
+  ts          INTEGER NOT NULL,
+  PRIMARY KEY (server_id, user_handle),
+  FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_server_bans_handle
+  ON server_bans(user_handle);

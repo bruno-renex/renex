@@ -16,8 +16,10 @@
 //   POST   /servers/<id>/leave                               ✅ implemented (mit Owner-Pre-Check)
 //   GET    /servers/<id>/members                             ✅ implemented
 //   PATCH  /servers/<id>/members/me                          🚧 stub (nickname)
-//   POST   /servers/<id>/members/<u>/kick                    🚧 stub
-//   POST   /servers/<id>/members/<u>/ban                     🚧 stub
+//   POST   /servers/<id>/members/<u>/kick                    ✅ implemented
+//   POST   /servers/<id>/members/<u>/ban                     ✅ implemented (Phase 3A.5)
+//   GET    /servers/<id>/bans                                ✅ implemented (Phase 3A.5)
+//   DELETE /servers/<id>/bans/<u>                            ✅ implemented (Phase 3A.5)
 //   POST   /servers/<id>/members/<u>/roles                   🚧 stub
 //   DELETE /servers/<id>/members/<u>/roles/<rid>             🚧 stub
 //   POST   /servers/<id>/channels                            ✅ implemented
@@ -82,6 +84,8 @@ const RL = Object.freeze({
   memberRoleAdd:  { window: 60_000, max: 60 },  // häufig: Multi-Toggle in Members-Tab
   memberRoleDel:  { window: 60_000, max: 60 },
   memberKick:     { window: 60_000, max: 10 },
+  memberBan:      { window: 60_000, max: 10 },  // 3A.5: POST /servers/<id>/members/<u>/ban
+  memberUnban:    { window: 60_000, max: 10 },  // 3A.5: DELETE /servers/<id>/bans/<u>
   serverLeave:    { window: 60_000, max:  5 },
   inviteCreate:   { window: 60_000, max: 20 },
   serverJoin:     { window: 60_000, max: 10 },
@@ -282,6 +286,8 @@ const ROUTES = [
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/members/me$`),                       handler: 'updateOwnMember'   },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/members/${HANDLE_RE}/kick$`),        handler: 'kickMember'        },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/members/${HANDLE_RE}/ban$`),         handler: 'banMember'         },
+  { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/bans$`),                             handler: 'bansList'          },
+  { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/bans/${HANDLE_RE}$`),                handler: 'banDetail'         },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/members/${HANDLE_RE}/roles$`),       handler: 'assignRole'        },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/members/${HANDLE_RE}/roles/([a-f0-9-]{36})$`), handler: 'revokeRole' },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/channels$`),                         handler: 'channels'          },
@@ -345,6 +351,9 @@ export async function handleServerRoutes(request, env, path, params) {
     case 'assignRole':         return await assignRoleHandler(ctx, route.args[0], route.args[1]);
     case 'revokeRole':         return await revokeRoleHandler(ctx, route.args[0], route.args[1], route.args[2]);
     case 'kickMember':         return await kickMemberHandler(ctx, route.args[0], route.args[1]);
+    case 'banMember':          return await banMemberHandler(ctx, route.args[0], route.args[1]);
+    case 'bansList':           return await bansListHandler(ctx, route.args[0]);
+    case 'banDetail':          return await banDetailHandler(ctx, route.args[0], route.args[1]);
     case 'auditLog':           return await auditLogHandler(ctx, route.args[0]);
     case 'auditLogMe':         return await auditLogMeHandler(ctx, route.args[0]);
     case 'channelDetail':      return await channelDetailHandler(ctx, route.args[0], route.args[1]);
@@ -354,7 +363,6 @@ export async function handleServerRoutes(request, env, path, params) {
 
     // 🚧 Stubs — TODO Phase 3A.5+
     case 'updateOwnMember':    return stub('updateOwnMember', route.args);
-    case 'banMember':          return stub('banMember', route.args);
     case 'channelPermissions': return stub('channelPermissions', route.args);
     case 'channelMembers':     return stub('channelMembers', route.args);
   }
@@ -1429,6 +1437,178 @@ async function kickMemberHandler({ request, env, me }, serverId, targetHandle) {
   return json(request, { ok: true });
 }
 
+/**
+ * POST /servers/<id>/members/<u>/ban
+ * Body (optional): { reason?: string }
+ *
+ * Permission: BAN_MEMBERS. Owner-Bypass für Position-Check. Owner kann nicht
+ * gebannt werden (er muss vorher transferren). Self-Ban abgelehnt.
+ * Effekt: row in server_bans + CASCADE-Delete aus server_members,
+ * role_assignments, channel_permission_overrides (member), conversation_members
+ * (private Channels). Banned User kann nicht via Invite re-joinen.
+ */
+async function banMemberHandler({ request, env, me }, serverId, targetHandle) {
+  if (request.method !== 'POST') return json(request, { error: 'Method not allowed' }, 405);
+
+  const rlErr = await checkRateLimit(env, 'memberBan', me, request);
+  if (rlErr) return rlErr;
+
+  const myMembership = await getServerMembership(env, serverId, me);
+  if (!myMembership) return json(request, { error: 'Not a member' }, 403);
+
+  if (targetHandle === me) {
+    return json(request, { error: 'self_ban_not_allowed' }, 400);
+  }
+
+  if (!(await userHasPermission(env, serverId, null, me, Permissions.BAN_MEMBERS))) {
+    return json(request, { error: 'forbidden_ban_members' }, 403);
+  }
+
+  const targetMembership = await getServerMembership(env, serverId, targetHandle);
+  if (!targetMembership) return json(request, { error: 'Target not a member' }, 404);
+
+  if (targetMembership.is_owner === 1) {
+    return json(request, { error: 'cannot_ban_owner', hint: 'Owner must transfer first' }, 403);
+  }
+
+  // Position-Check: actor muss strikt höher als Target sein (Owner bypassed)
+  const [actorPos, targetPos] = await Promise.all([
+    getActorMaxRolePosition(env, serverId, me),
+    getActorMaxRolePosition(env, serverId, targetHandle),
+  ]);
+  if (!actorPos.isOwner && targetPos.position >= actorPos.position) {
+    return json(request, { error: 'forbidden_target_higher_or_equal' }, 403);
+  }
+
+  // Reason aus Body (optional, max 500 chars)
+  let reason = null;
+  if (request.headers.get('content-type')?.includes('application/json')) {
+    const body = await readJson(request);
+    if (body?.reason != null) {
+      reason = String(body.reason).trim().slice(0, 500) || null;
+    }
+  }
+
+  const now = Date.now();
+
+  // Atomic: ban-row + CASCADE-Delete in einer Batch
+  await env.RENEX_DB.batch([
+    env.RENEX_DB.prepare(
+      `INSERT OR REPLACE INTO server_bans (server_id, user_handle, banned_by, reason, ts)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(serverId, targetHandle, me, reason, now),
+    env.RENEX_DB.prepare(
+      `DELETE FROM server_members WHERE server_id = ? AND user_handle = ?`
+    ).bind(serverId, targetHandle),
+    env.RENEX_DB.prepare(
+      `DELETE FROM role_assignments WHERE server_id = ? AND user_handle = ?`
+    ).bind(serverId, targetHandle),
+    env.RENEX_DB.prepare(
+      `DELETE FROM channel_permission_overrides
+       WHERE target_kind = 'member' AND target_id = ?
+         AND channel_id IN (SELECT id FROM conversations WHERE server_id = ?)`
+    ).bind(targetHandle, serverId),
+    env.RENEX_DB.prepare(
+      `DELETE FROM conversation_members
+       WHERE member_handle = ?
+         AND convo_id IN (SELECT id FROM conversations WHERE server_id = ?)`
+    ).bind(targetHandle, serverId),
+  ]);
+
+  await invalidateRecipientCache(env, serverId);
+  await audit(env, serverId, me, 'member_ban', targetHandle, { reason });
+
+  const event = {
+    id:     crypto.randomUUID(),
+    type:   'server_member_banned',
+    serverId,
+    handle: targetHandle,
+    by:     me,
+    reason,
+    ts:     now,
+  };
+  await pushToServerMembers(env, serverId, event);
+  // Gebannter User selbst (nicht mehr im Server) — bekommt Event direkt
+  pushToUserDO(env, targetHandle, event).catch(() => {});
+
+  return json(request, { ok: true });
+}
+
+/**
+ * GET /servers/<id>/bans
+ *
+ * Permission: BAN_MEMBERS. Listet alle aktiven Bans dieses Servers.
+ */
+async function bansListHandler({ request, env, me }, serverId) {
+  if (request.method !== 'GET') return json(request, { error: 'Method not allowed' }, 405);
+
+  const myMembership = await getServerMembership(env, serverId, me);
+  if (!myMembership) return json(request, { error: 'Not a member' }, 403);
+
+  if (!(await userHasPermission(env, serverId, null, me, Permissions.BAN_MEMBERS))) {
+    return json(request, { error: 'forbidden_ban_members' }, 403);
+  }
+
+  const r = await env.RENEX_DB.prepare(
+    `SELECT user_handle, banned_by, reason, ts
+     FROM server_bans
+     WHERE server_id = ?
+     ORDER BY ts DESC`
+  ).bind(serverId).all();
+
+  const bans = (r.results || []).map(row => ({
+    handle:    row.user_handle,
+    bannedBy:  row.banned_by,
+    reason:    row.reason,
+    ts:        row.ts,
+  }));
+
+  return json(request, { bans, total: bans.length });
+}
+
+/**
+ * DELETE /servers/<id>/bans/<u>
+ *
+ * Permission: BAN_MEMBERS. Unban — danach kann User wieder via Invite joinen.
+ * (Re-Join muss aktiv passieren, kein Auto-Add zurück in server_members.)
+ */
+async function banDetailHandler({ request, env, me }, serverId, targetHandle) {
+  if (request.method !== 'DELETE') return json(request, { error: 'Method not allowed' }, 405);
+
+  const rlErr = await checkRateLimit(env, 'memberUnban', me, request);
+  if (rlErr) return rlErr;
+
+  const myMembership = await getServerMembership(env, serverId, me);
+  if (!myMembership) return json(request, { error: 'Not a member' }, 403);
+
+  if (!(await userHasPermission(env, serverId, null, me, Permissions.BAN_MEMBERS))) {
+    return json(request, { error: 'forbidden_ban_members' }, 403);
+  }
+
+  const existing = await env.RENEX_DB.prepare(
+    `SELECT user_handle FROM server_bans WHERE server_id = ? AND user_handle = ?`
+  ).bind(serverId, targetHandle).first();
+  if (!existing) return json(request, { error: 'not_banned' }, 404);
+
+  await env.RENEX_DB.prepare(
+    `DELETE FROM server_bans WHERE server_id = ? AND user_handle = ?`
+  ).bind(serverId, targetHandle).run();
+
+  await audit(env, serverId, me, 'member_unban', targetHandle, null);
+
+  // WS an verbleibende Members — Banned-Liste in UI updaten
+  await pushToServerMembers(env, serverId, {
+    id:     crypto.randomUUID(),
+    type:   'server_member_unbanned',
+    serverId,
+    handle: targetHandle,
+    by:     me,
+    ts:     Date.now(),
+  });
+
+  return json(request, { ok: true });
+}
+
 // ======================================================
 // AUDIT-LOG — Read-only Endpoints
 // ======================================================
@@ -1785,6 +1965,14 @@ async function joinByTokenHandler({ request, env, me }, token) {
   ).bind(inv.server_id).first();
   const memberCount = memberCountRow?.c || 0;
   const alreadyMember = !!(await getServerMembership(env, inv.server_id, me));
+
+  // Ban-Check (Phase 3A.5): gebannte User sehen weder Invite-Detail noch joinen
+  const ban = await env.RENEX_DB.prepare(
+    `SELECT reason FROM server_bans WHERE server_id = ? AND user_handle = ?`
+  ).bind(inv.server_id, me).first();
+  if (ban) {
+    return json(request, { error: 'user_banned', reason: ban.reason }, 403);
+  }
 
   if (request.method === 'GET') {
     return json(request, {

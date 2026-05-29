@@ -210,6 +210,10 @@
     detail?.myMembership?.isOwner === true ||
     (myPerms & Permissions.MANAGE_SERVER) === Permissions.MANAGE_SERVER
   );
+  let canBanMembers = $derived(
+    detail?.myMembership?.isOwner === true ||
+    (myPerms & Permissions.BAN_MEMBERS) === Permissions.BAN_MEMBERS
+  );
 
   const API_BASE = 'https://api.renex.id';
   const MAX_ICON_BYTES = 1024 * 1024;
@@ -361,6 +365,71 @@
     }
   }
 
+  // ── Phase 3A.5: Ban-System ──
+  let bans            = $state([]);
+  let bansLoading     = $state(false);
+  let busyBan         = $state(null);  // handle während ban
+  let busyUnban       = $state(null);  // handle während unban
+
+  async function loadBans() {
+    if (!serverId) return;
+    bansLoading = true;
+    const r = await serverStore.listBans(serverId);
+    bansLoading = false;
+    bans = r.ok ? r.bans : [];
+    if (!r.ok) toastStore.push((lang.error || 'Fehler') + ': ' + r.error, { kind: 'error' });
+  }
+
+  $effect(() => {
+    if (activeTab === 'banned' && serverId && canBanMembers) void loadBans();
+  });
+
+  async function banMemberAction(member) {
+    if (!serverId || busyBan) return;
+    if (member.isOwner) {
+      toastStore.push(lang.cannotBanOwner || 'Owner kann nicht gebannt werden', { kind: 'error' });
+      return;
+    }
+    if (member.handle === detail?.myMembership?.handle) {
+      toastStore.push(lang.cannotBanSelf || 'Du kannst dich nicht selbst bannen', { kind: 'error' });
+      return;
+    }
+    const confirmMsg = (lang.banConfirm || 'User @{handle} wirklich bannen?').replace('{handle}', member.handle);
+    if (!confirm(confirmMsg)) return;
+    const reason = prompt(lang.banReasonPrompt || 'Grund (optional, leer lassen wenn keiner):', '') || null;
+    busyBan = member.handle;
+    const r = await serverStore.banMember(serverId, member.handle, reason);
+    busyBan = null;
+    if (r.ok) {
+      toastStore.push((lang.bannedToast || '🚫 @{handle} gebannt').replace('{handle}', member.handle), { kind: 'success' });
+    } else {
+      toastStore.push((lang.banFailed || 'Bannen fehlgeschlagen') + ': ' + r.error, { kind: 'error' });
+    }
+  }
+
+  async function unbanAction(handle) {
+    if (!serverId || busyUnban) return;
+    const confirmMsg = (lang.unbanConfirm || 'Ban für @{handle} aufheben?').replace('{handle}', handle);
+    if (!confirm(confirmMsg)) return;
+    busyUnban = handle;
+    const r = await serverStore.unbanMember(serverId, handle);
+    busyUnban = null;
+    if (r.ok) {
+      toastStore.push((lang.unbannedToast || '✅ Ban für @{handle} aufgehoben').replace('{handle}', handle), { kind: 'success' });
+      // Optimistisch entfernen
+      bans = bans.filter(b => b.handle !== handle);
+    } else {
+      toastStore.push((lang.unbanFailed || 'Unban fehlgeschlagen') + ': ' + r.error, { kind: 'error' });
+    }
+  }
+
+  function banDateText(ts) {
+    if (!ts) return '';
+    return new Date(ts).toLocaleString(lang.locale || 'de-DE', {
+      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+    });
+  }
+
   async function saveGeneral() {
     if (!serverId || savingGeneral || !isDirty) return;
     const trimmedName = nameInput.trim();
@@ -440,6 +509,16 @@
             onclick={() => activeTab = 'invites'}
           >
             🔗 {lang.tabInvites || 'Invites'}
+          </button>
+        {/if}
+        {#if canBanMembers}
+          <button
+            role="tab"
+            class="ss-tab"
+            class:active={activeTab === 'banned'}
+            onclick={() => activeTab = 'banned'}
+          >
+            🚫 {lang.tabBanned || 'Gebannt'} ({bans.length})
           </button>
         {/if}
       </nav>
@@ -604,6 +683,20 @@
                     </button>
                   {/each}
                 </div>
+
+                {#if canBanMembers && !m.isOwner && m.handle !== detail?.myMembership?.handle}
+                  <div class="ss-member-actions">
+                    <button
+                      type="button"
+                      class="btn-danger btn-sm"
+                      onclick={() => banMemberAction(m)}
+                      disabled={busyBan === m.handle}
+                      title={lang.banBtn || 'Bannen'}
+                    >
+                      {#if busyBan === m.handle}<span class="spinner-sm"></span>{:else}🚫{/if} {lang.banBtn || 'Bannen'}
+                    </button>
+                  </div>
+                {/if}
               </li>
             {/each}
           </ul>
@@ -646,6 +739,50 @@
               </li>
             {/each}
           </ul>
+        </div>
+      {/if}
+
+      <!-- ═══════ BANNED TAB ═══════ -->
+      {#if activeTab === 'banned' && canBanMembers}
+        <div class="ss-content">
+          {#if bansLoading}
+            <div class="ss-info-banner">{lang.loading || 'Lädt…'}</div>
+          {:else if bans.length === 0}
+            <div class="ss-info-banner">{lang.bansEmpty || 'Keine aktiven Bans auf diesem Server.'}</div>
+          {:else}
+            <div class="ss-info-banner">
+              {(lang.bansHint || 'Gebannte User können nicht via Invite re-joinen. Unban hebt das auf.')}
+            </div>
+            <ul class="ss-ban-list">
+              {#each bans as b (b.handle)}
+                <li class="ss-ban-item">
+                  <div class="ss-ban-head">
+                    <div class="ss-member-avatar">{memberInitials(b.handle, null)}</div>
+                    <div class="ss-ban-info">
+                      <div class="ss-ban-handle">@{b.handle}</div>
+                      <div class="ss-ban-meta">
+                        {(lang.bannedByLabel || 'Gebannt von')} <strong>@{b.bannedBy}</strong>
+                        {#if b.ts}
+                          · {banDateText(b.ts)}
+                        {/if}
+                      </div>
+                      {#if b.reason}
+                        <div class="ss-ban-reason">„{b.reason}"</div>
+                      {/if}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn-create btn-sm"
+                    onclick={() => unbanAction(b.handle)}
+                    disabled={busyUnban === b.handle}
+                  >
+                    {#if busyUnban === b.handle}<span class="spinner-sm"></span>{:else}✅{/if} {lang.unbanBtn || 'Unban'}
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         </div>
       {/if}
 
@@ -940,6 +1077,63 @@
     border-color: var(--accent-voice);
   }
   .ss-field textarea { resize: vertical; min-height: 60px; }
+
+  /* ── Ban-System (Phase 3A.5) ── */
+  .btn-sm { padding: 6px 10px; font-size: 12px; }
+
+  .ss-member-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-subtle);
+  }
+
+  .ss-ban-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ss-ban-item {
+    background: var(--bg-panel-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .ss-ban-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .ss-ban-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .ss-ban-handle {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .ss-ban-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .ss-ban-reason {
+    font-size: 12px;
+    color: var(--text-primary);
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: var(--bg-panel);
+    border-radius: 4px;
+    border-left: 3px solid var(--status-error, #ef4444);
+  }
 
   .ss-role-list {
     list-style: none;

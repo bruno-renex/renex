@@ -1283,6 +1283,7 @@
     // triggern zusätzlich /servers/list, auch wenn der Server nicht geöffnet ist.
     const _serverLiveEvents = [
       "server_member_joined", "server_member_left",
+      "server_member_banned", "server_member_unbanned",
       "server_updated", "server_owner_changed",
       "channel_created", "channel_renamed", "channel_deleted",
       "role_created", "role_updated", "role_deleted",
@@ -1290,6 +1291,7 @@
     ];
     const _sidebarRelevant = new Set([
       "server_member_joined", "server_member_left",
+      "server_member_banned", "server_member_unbanned",
       "server_updated", "server_owner_changed",
     ]);
     for (const evt of _serverLiveEvents) {
@@ -1302,6 +1304,18 @@
         }
       }));
     }
+
+    // Phase 3A.5: Self-ban-Behandlung — wenn ich der Gebannte bin, Server-View
+    // zurücksetzen + Toast. Kommt zusätzlich zum allgemeinen Handler oben.
+    _wsUnsubs.push(ws.on("server_member_banned", (msg) => {
+      if (msg?.handle && userStore.myUser && msg.handle === userStore.myUser) {
+        if (msg.serverId === serverStore.selectedServerId) {
+          serverStore.selectServer(null);
+        }
+        const reasonSuffix = msg.reason ? ` — „${msg.reason}"` : '';
+        toastStore.push(`🚫 ${(i18nStore.lang.bannedFromServerToast || 'Du wurdest vom Server gebannt')}${reasonSuffix}`, { kind: 'error' });
+      }
+    }));
 
     // E2E Inbox-Key Upload + Heartbeat — sequenziell aber non-blocking
     // (Phase 1A.6 Migration aus renex-legacy/js/e2e.js).

@@ -267,6 +267,52 @@ async function revokeRole(serverId, handle, roleId) {
   }
 }
 
+async function banMember(serverId, handle, reason = null) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(handle)}/ban`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
+    });
+    if (r.ok) {
+      await loadServerDetail(serverId);
+      await loadServers();
+      return { ok: true };
+    }
+    return { ok: false, error: r.error || 'ban_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.banMember', extra: { serverId, handle } });
+    return { ok: false, error: e?.message || 'ban_failed' };
+  }
+}
+
+async function listBans(serverId) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/bans`);
+    if (r.ok && Array.isArray(r.data?.bans)) {
+      return { ok: true, bans: r.data.bans };
+    }
+    return { ok: false, error: r.error || 'list_bans_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.listBans', extra: { serverId } });
+    return { ok: false, error: e?.message || 'list_bans_failed' };
+  }
+}
+
+async function unbanMember(serverId, handle) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/bans/${encodeURIComponent(handle)}`, {
+      method: 'DELETE',
+    });
+    if (r.ok) {
+      return { ok: true };
+    }
+    return { ok: false, error: r.error || 'unban_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.unbanMember', extra: { serverId, handle } });
+    return { ok: false, error: e?.message || 'unban_failed' };
+  }
+}
+
 async function leaveServer(serverId) {
   try {
     const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/leave`, {
@@ -374,6 +420,9 @@ export const serverStore = {
   updateServer,
   uploadServerIcon,
   deleteServerIcon,
+  banMember,
+  listBans,
+  unbanMember,
   leaveServer,
   createRole,
   updateRole,

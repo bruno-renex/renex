@@ -4,7 +4,7 @@
 
 **Status:** Living document
 **Version:** 1.0
-**Letzte Aktualisierung:** 2026-05-28
+**Letzte Aktualisierung:** 2026-05-29
 **Autor:** Bruno Hochstrasser
 
 ---
@@ -458,15 +458,15 @@ Master-Docs geschrieben (`VISION.md`).
 Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 (channel_permission_overrides-UI), Tier-Limits (Free/Pro), Server-Name/Icon/Beschreibung-Edit.
 
-### Phase 3A.5 — Server-Mutation & Moderation 🚧 *(in progress, 2026-05-28)*
-**4 von 7 Items live nach 2026-05-28** (Backend Version IDs `cda0af51-...` (morning) → `042ce373-...` (evening), Frontend `2026-05-28-3`):
+### Phase 3A.5 — Server-Mutation & Moderation 🚧 *(in progress, 2026-05-28 + 2026-05-29)*
+**5 von 7 Items live nach 2026-05-29** (Frontend `2026-05-29-2`, Schema-Migration `server_bans` deployed):
 - ✅ `POST /servers/<id>/transfer` — Owner-Transfer, atomar via D1-batch, audit + WS `server_owner_changed`. RL 3/min.
 - ✅ `PATCH /servers/<id>` — Name + Beschreibung partial-update, gated by `MANAGE_SERVER`. Audit `server_update` mit diff, WS `server_updated`. RL 30/min.
 - ✅ `DELETE /account` Pre-Check — 409 `owner_transfer_required` mit Blocking-Server-Liste wenn User Owner eines Servers mit anderen Members ist. Auto-Owner-Succession entfernt (explicit transfer schlägt silent promotion).
 - ✅ Server-Icon-Edit — POST/GET/DELETE `/servers/<id>/icon`, MIME-Allowlist (PNG/JPEG/WebP), ≤1 MB, R2-Key `server-icons/<sid>/<uuid>`, alter Icon-Key best-effort cleanup. Frontend: neuer "Allgemein"-Tab in `ServerSettingsModal` (gated MANAGE_SERVER, Default beim Open für admins), fetch+blobURL für Cross-Origin-credentials-Anzeige, Sidebar + Detail-Header mit Initial-Fallback. WS-Pipeline (`server_updated`) erweitert um Sidebar-relevante Events (Live-Update ohne Reload).
+- ✅ Ban-System — neue Tabelle `server_bans` (PK composite, FK CASCADE), `POST /servers/<id>/members/<u>/ban` (BAN_MEMBERS gated, position-check strikt-höher, Owner nicht bannbar, Self-ban blockt, optional `{reason}` ≤500 chars, D1-batch ban-row + CASCADE delete aus members/role_assignments/channel_overrides/conversation_members). `GET /servers/<id>/bans` + `DELETE /servers/<id>/bans/<u>` für list + unban. `joinByTokenHandler` checkt Bans → 403 `user_banned` auf GET + POST. Frontend: Ban-Button per Member im Settings-Modal + neuer "Gebannt"-Tab mit Live-Counter via `serverStore.banEventVersion`, Self-Ban-Toast + auto-deselect im App.svelte WS-Handler. **Wichtiger fix:** `pushToUserDO` muss awaited werden (sonst kann CF Workers den fire-and-forget-Call terminieren, bevor das DO-fetch zur Zustellung kommt — Empfänger sieht nichts).
 
 **Noch offen:**
-- ❌ Ban-System (`server_bans`-Tabelle + `banMember`-Endpoint, aktuell Stub in `serverRoutes.js`)
 - ❌ Private Channels (`channel_permission_overrides`-UI; Backend-Tabelle existiert seit Phase 3A)
 - ❌ Tier-Limits Free=3 / Pro=25 owned Servers (`MAX_OWNED_SERVERS_FREE`/`_PRO` Konstanten existieren, aber Tier-Lookup fehlt — aktuell hartes 3-Server-Limit für alle)
 

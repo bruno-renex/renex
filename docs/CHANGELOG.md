@@ -4,6 +4,55 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-05-29 — Phase 3A.5 Ban-System 🚫
+
+Fünftes Phase-3A.5-Item geshippt. Server-Admins mit `BAN_MEMBERS` (Owner via
+Bypass) können jetzt Members permanent bannen mit optionalem Reason,
+Banned-Liste anzeigen und Unbans aussprechen. Gebannte User können nicht
+mehr via Invite re-joinen.
+
+### ✨ Added
+- **Schema (`schema-servers.sql`)**: Tabelle `server_bans` (`server_id`,
+  `user_handle`, `banned_by`, `reason`, `ts`; PK composite, FK CASCADE zu
+  `servers`). Index `idx_server_bans_handle` für cross-server lookups.
+- **`POST /servers/<id>/members/<u>/ban`** — Permission `BAN_MEMBERS`,
+  Position-Check strikt-höher (Owner bypassed), Owner nicht bannbar
+  (Transfer first), Self-Ban blockt. Body: `{reason?: string}` ≤500 chars.
+  D1-Batch: ban-row INSERT + CASCADE-Delete aus `server_members`,
+  `role_assignments`, `channel_permission_overrides` (member), `conversation_members`
+  (private Channels). Audit `member_ban`. WS-Broadcast `server_member_banned`
+  an verbleibende Members + direkt an gebannten User. RL 10/min.
+- **`GET /servers/<id>/bans`** — listet Bans sortiert nach `ts DESC`.
+- **`DELETE /servers/<id>/bans/<u>`** — Unban (Re-Join danach möglich, aber
+  nicht automatisch). WS `server_member_unbanned`. RL 10/min.
+- **`joinByTokenHandler` Ban-Check**: 403 `user_banned` mit Reason auf GET
+  + POST. Gebannte User sehen keine Invite-Landing.
+- **Frontend `ServerSettingsModal`**: 🚫 Ban-Button per Member (gated
+  `BAN_MEMBERS`, hidden für self + Owner), neuer "Gebannt"-Tab mit
+  Handle/Banner/Timestamp/Reason + Unban-Button.
+- **`serverStore`** helpers `banMember`, `listBans`, `unbanMember`.
+- **`App.svelte`** WS-Dispatcher kennt `server_member_banned/unbanned`
+  (sidebar reload). Self-Ban Special-Handler — wenn ich der gebannte User
+  bin, deselect Server + Toast.
+- **i18n DE/EN/ES**: 17 neue Strings.
+
+### 🐛 Fixed (Polish nach Smoke-Test)
+- **`pushToUserDO` jetzt awaited** in `banMemberHandler` + `kickMemberHandler`.
+  Vorher Fire-and-Forget — Cloudflare Workers konnte den Promise terminieren
+  bevor das DO-fetch zur Zustellung kam. Gebannte/gekickte User sahen weder
+  Toast noch Sidebar-Update bis manuellem Reload. Klassischer CF-Workers-Bug
+  beim Pattern `pushToUserDO(...).catch(...)`.
+- **Banned-Tab Counter live**: `bans` wurde nur beim Tab-Click geladen, also
+  zeigte der Tab-Badge stale `(0)` nach einem Ban. Jetzt: `serverStore.banEventVersion`
+  zählt bei jedem WS-Event hoch, Modal-Effect tracked das + lädt immer wenn
+  Modal offen + `canBanMembers` (entkoppelt vom aktiven Tab).
+
+### 🚧 Phase 3A.5 — Stand 5 von 7 nach 2026-05-29
+Verbleibend: Private Channels (`channel_permission_overrides`-UI), Tier-Limits
+Free=3 / Pro=25.
+
+---
+
 ## 2026-05-28 — Phase 3A.5 Server-Icon-Edit + WS-Polish 🖼
 
 Viertes Phase-3A.5-Item geshippt am selben Tag (Abend-Sprint nach den ersten

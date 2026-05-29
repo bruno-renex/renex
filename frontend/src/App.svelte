@@ -1286,6 +1286,7 @@
       "server_member_banned", "server_member_unbanned",
       "server_updated", "server_owner_changed",
       "channel_created", "channel_renamed", "channel_deleted",
+      "channel_permissions_updated",
       "role_created", "role_updated", "role_deleted",
       "member_role_assigned", "member_role_revoked",
     ];

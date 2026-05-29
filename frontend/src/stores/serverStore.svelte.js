@@ -276,6 +276,71 @@ function incrementBanEventVersion() {
   _banEventVersion++;
 }
 
+// ── Phase 3A.5: Channel general edit (name + topic) ──
+async function updateChannel(serverId, channelId, patch) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}`, {
+      method: 'PATCH',
+      body: patch,
+    });
+    if (r.ok) {
+      await loadServerDetail(serverId);
+      return { ok: true };
+    }
+    return { ok: false, error: r.error || 'update_channel_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.updateChannel', extra: { serverId, channelId } });
+    return { ok: false, error: e?.message || 'update_channel_failed' };
+  }
+}
+
+// ── Phase 3A.5: Private Channels — channel permission overrides ──
+async function listChannelPermissions(serverId, channelId) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`);
+    if (r.ok && Array.isArray(r.data?.overrides)) {
+      return { ok: true, overrides: r.data.overrides };
+    }
+    return { ok: false, error: r.error || 'list_perms_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.listChannelPermissions', extra: { serverId, channelId } });
+    return { ok: false, error: e?.message || 'list_perms_failed' };
+  }
+}
+
+async function setChannelPermission(serverId, channelId, targetKind, targetId, allowBits, denyBits) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions`, {
+      method: 'POST',
+      body: { targetKind, targetId, allowBits, denyBits },
+    });
+    if (r.ok) {
+      await loadServerDetail(serverId);
+      return { ok: true };
+    }
+    return { ok: false, error: r.error || 'set_perm_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.setChannelPermission', extra: { serverId, channelId, targetKind, targetId } });
+    return { ok: false, error: e?.message || 'set_perm_failed' };
+  }
+}
+
+async function deleteChannelPermission(serverId, channelId, targetKind, targetId) {
+  try {
+    const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(channelId)}/permissions/${encodeURIComponent(targetKind)}/${encodeURIComponent(targetId)}`, {
+      method: 'DELETE',
+    });
+    if (r.ok) {
+      await loadServerDetail(serverId);
+      return { ok: true };
+    }
+    return { ok: false, error: r.error || 'delete_perm_failed' };
+  } catch (e) {
+    captureException(e, { context: 'serverStore.deleteChannelPermission', extra: { serverId, channelId, targetKind, targetId } });
+    return { ok: false, error: e?.message || 'delete_perm_failed' };
+  }
+}
+
 async function banMember(serverId, handle, reason = null) {
   try {
     const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(handle)}/ban`, {
@@ -434,6 +499,10 @@ export const serverStore = {
   unbanMember,
   incrementBanEventVersion,
   get banEventVersion() { return _banEventVersion; },
+  updateChannel,
+  listChannelPermissions,
+  setChannelPermission,
+  deleteChannelPermission,
   leaveServer,
   createRole,
   updateRole,

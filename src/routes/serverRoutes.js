@@ -26,8 +26,10 @@
 //   GET    /servers/<id>/channels                            ✅ implemented (Sidebar-Source)
 //   PATCH  /servers/<id>/channels/<cid>                      🚧 stub
 //   DELETE /servers/<id>/channels/<cid>                      🚧 stub
-//   POST   /servers/<id>/channels/<cid>/permissions          🚧 stub
-//   POST   /servers/<id>/channels/<cid>/members              🚧 stub (private channels)
+//   GET    /servers/<id>/channels/<cid>/permissions          ✅ implemented (Phase 3A.5)
+//   POST   /servers/<id>/channels/<cid>/permissions          ✅ implemented (Phase 3A.5)
+//   DELETE /servers/<id>/channels/<cid>/permissions/<kind>/<id>  ✅ implemented (Phase 3A.5)
+//   POST   /servers/<id>/channels/<cid>/members              🚧 stub (Phase 3A.5+: explicit roster, optional addition zu override-based access)
 //   DELETE /servers/<id>/channels/<cid>/members/<u>          🚧 stub
 //   POST   /servers/<id>/roles                               🚧 stub
 //   PATCH  /servers/<id>/roles/<rid>                         🚧 stub
@@ -86,6 +88,8 @@ const RL = Object.freeze({
   memberKick:     { window: 60_000, max: 10 },
   memberBan:      { window: 60_000, max: 10 },  // 3A.5: POST /servers/<id>/members/<u>/ban
   memberUnban:    { window: 60_000, max: 10 },  // 3A.5: DELETE /servers/<id>/bans/<u>
+  channelPermSet: { window: 60_000, max: 60 },  // 3A.5: POST channel permission override
+  channelPermDel: { window: 60_000, max: 30 },  // 3A.5: DELETE channel permission override
   serverLeave:    { window: 60_000, max:  5 },
   inviteCreate:   { window: 60_000, max: 20 },
   serverJoin:     { window: 60_000, max: 10 },
@@ -176,6 +180,79 @@ async function getEffectivePermissions(env, serverId, channelId, userHandle) {
 export async function userHasPermission(env, serverId, channelId, userHandle, wantedBit) {
   const eff = await getEffectivePermissions(env, serverId, channelId, userHandle);
   return (eff & wantedBit) === wantedBit;
+}
+
+/**
+ * Phase 3A.5: Welche Channels eines Servers darf dieser User VIEW?
+ * Wird sowohl in serverDetail als auch in channelsHandler-GET genutzt um
+ * Private Channels aus der Liste zu filtern.
+ *
+ * Performance: Single-Query Pre-fetch aller Channels + Overrides via LEFT JOIN,
+ * dann in-memory Resolution. N+1 vermieden.
+ *
+ * Owner + ADMINISTRATOR-Bit short-circuit alles ⇒ alle Channels sichtbar.
+ */
+async function getVisibleChannelIds(env, serverId, userHandle) {
+  const membership = await getServerMembership(env, serverId, userHandle);
+  if (!membership) return new Set();
+
+  // Owner-Short-Circuit
+  if (membership.is_owner === 1) {
+    const r = await env.RENEX_DB.prepare(
+      `SELECT id FROM conversations WHERE server_id = ? AND type = 'channel'`
+    ).bind(serverId).all();
+    return new Set((r.results || []).map(c => c.id));
+  }
+
+  const myRoles = await getUserRoles(env, serverId, userHandle);
+
+  // ADMINISTRATOR-Bit short-circuit (Owner-Bypass-Äquivalent für Admins)
+  const baseBits = myRoles.reduce((a, r) => a | (r.permissions | 0), 0);
+  if (baseBits & Permissions.ADMINISTRATOR) {
+    const r = await env.RENEX_DB.prepare(
+      `SELECT id FROM conversations WHERE server_id = ? AND type = 'channel'`
+    ).bind(serverId).all();
+    return new Set((r.results || []).map(c => c.id));
+  }
+
+  // All Channels + Overrides in einem Query
+  const rows = await env.RENEX_DB.prepare(
+    `SELECT c.id AS channel_id, o.target_kind, o.target_id, o.allow_bits, o.deny_bits
+     FROM conversations c
+     LEFT JOIN channel_permission_overrides o ON o.channel_id = c.id
+     WHERE c.server_id = ? AND c.type = 'channel'`
+  ).bind(serverId).all();
+
+  // Group overrides by channel
+  const overridesByChannel = new Map();
+  for (const row of (rows.results || [])) {
+    if (!overridesByChannel.has(row.channel_id)) {
+      overridesByChannel.set(row.channel_id, []);
+    }
+    if (row.target_kind) {  // null wenn LEFT JOIN no match
+      overridesByChannel.get(row.channel_id).push({
+        target_kind: row.target_kind,
+        target_id:   row.target_id,
+        allow_bits:  row.allow_bits | 0,
+        deny_bits:   row.deny_bits  | 0,
+      });
+    }
+  }
+
+  // Per Channel: effective perms ausrechnen, bei VIEW_CHANNEL inkludieren
+  const visible = new Set();
+  for (const [channelId, overrides] of overridesByChannel.entries()) {
+    const eff = resolvePermissions({
+      isOwner:    false,
+      roles:      myRoles,
+      overrides,
+      userHandle,
+    });
+    if ((eff & Permissions.VIEW_CHANNEL) === Permissions.VIEW_CHANNEL) {
+      visible.add(channelId);
+    }
+  }
+  return visible;
 }
 
 /**
@@ -293,6 +370,7 @@ const ROUTES = [
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/channels$`),                         handler: 'channels'          },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/channels/([a-f0-9-]{36})$`),         handler: 'channelDetail'     },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/channels/([a-f0-9-]{36})/permissions$`), handler: 'channelPermissions' },
+  { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/channels/([a-f0-9-]{36})/permissions/(role|member)/([a-zA-Z0-9_-]+)$`), handler: 'channelPermissionDetail' },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/channels/([a-f0-9-]{36})/members$`), handler: 'channelMembers'    },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/roles$`),                            handler: 'roles'             },
   { pattern: new RegExp(`^/servers/${SERVER_ID_RE}/roles/([a-f0-9-]{36})$`),            handler: 'roleDetail'        },
@@ -357,13 +435,15 @@ export async function handleServerRoutes(request, env, path, params) {
     case 'auditLog':           return await auditLogHandler(ctx, route.args[0]);
     case 'auditLogMe':         return await auditLogMeHandler(ctx, route.args[0]);
     case 'channelDetail':      return await channelDetailHandler(ctx, route.args[0], route.args[1]);
+    case 'channelPermissions': return await channelPermissionsHandler(ctx, route.args[0], route.args[1]);
+    case 'channelPermissionDetail':
+                               return await channelPermissionDetailHandler(ctx, route.args[0], route.args[1], route.args[2], route.args[3]);
     case 'invites':            return await invitesHandler(ctx, route.args[0]);
     case 'inviteDetail':       return await inviteDeleteHandler(ctx, route.args[0], route.args[1]);
     case 'joinByToken':        return await joinByTokenHandler(ctx, route.args[0]);
 
     // 🚧 Stubs — TODO Phase 3A.5+
     case 'updateOwnMember':    return stub('updateOwnMember', route.args);
-    case 'channelPermissions': return stub('channelPermissions', route.args);
     case 'channelMembers':     return stub('channelMembers', route.args);
   }
 
@@ -509,7 +589,7 @@ async function serverDetail({ request, env, me }, serverId) {
   ).bind(serverId).first();
   if (!server) return json(request, { error: 'Server not found' }, 404);
 
-  const [channels, roles, members, myRoles] = await Promise.all([
+  const [channels, roles, members, myRoles, visibleChannels] = await Promise.all([
     env.RENEX_DB.prepare(
       `SELECT id, name, channel_kind, position, topic
        FROM conversations
@@ -530,6 +610,7 @@ async function serverDetail({ request, env, me }, serverId) {
     ).bind(serverId).all(),
 
     getUserRoles(env, serverId, me),
+    getVisibleChannelIds(env, serverId, me),  // Phase 3A.5: Private-Channel-Filter
   ]);
 
   // My-Permissions auf Server-Ebene (ohne Channel-Override).
@@ -553,13 +634,15 @@ async function serverDetail({ request, env, me }, serverId) {
       createdBy:   server.created_by,
       memberLimit: server.member_limit,
     },
-    channels: (channels.results || []).map(c => ({
-      id:       c.id,
-      name:     c.name,
-      kind:     c.channel_kind,
-      position: c.position,
-      topic:    c.topic,
-    })),
+    channels: (channels.results || [])
+      .filter(c => visibleChannels.has(c.id))
+      .map(c => ({
+        id:       c.id,
+        name:     c.name,
+        kind:     c.channel_kind,
+        position: c.position,
+        topic:    c.topic,
+      })),
     roles: (roles.results || []).map(r => ({
       id:            r.id,
       name:          r.name,
@@ -957,21 +1040,26 @@ async function channelsHandler({ request, env, me }, serverId) {
     const membership = await getServerMembership(env, serverId, me);
     if (!membership) return json(request, { error: 'Not a member' }, 403);
 
-    const r = await env.RENEX_DB.prepare(
-      `SELECT id, name, channel_kind, position, topic
-       FROM conversations
-       WHERE server_id = ? AND type = 'channel'
-       ORDER BY position ASC`
-    ).bind(serverId).all();
+    const [r, visible] = await Promise.all([
+      env.RENEX_DB.prepare(
+        `SELECT id, name, channel_kind, position, topic
+         FROM conversations
+         WHERE server_id = ? AND type = 'channel'
+         ORDER BY position ASC`
+      ).bind(serverId).all(),
+      getVisibleChannelIds(env, serverId, me),  // Phase 3A.5: Private-Channel-Filter
+    ]);
 
     return json(request, {
-      channels: (r.results || []).map(c => ({
-        id:       c.id,
-        name:     c.name,
-        kind:     c.channel_kind,
-        position: c.position,
-        topic:    c.topic,
-      })),
+      channels: (r.results || [])
+        .filter(c => visible.has(c.id))
+        .map(c => ({
+          id:       c.id,
+          name:     c.name,
+          kind:     c.channel_kind,
+          position: c.position,
+          topic:    c.topic,
+        })),
     });
   }
 
@@ -1830,6 +1918,196 @@ async function channelDetailHandler({ request, env, me }, serverId, channelId) {
   }
 
   return json(request, { error: 'Method not allowed' }, 405);
+}
+
+// ======================================================
+// CHANNEL-PERMISSIONS — Private Channels (Phase 3A.5)
+// Spec SERVERS.md §5 (resolution) + §6.2 (overrides table).
+// ======================================================
+//
+// Datenmodell: `channel_permission_overrides` (composite PK channel_id+target_kind+target_id).
+// target_kind: 'role' oder 'member'. allow_bits + deny_bits sind Bitfields aus permissions.js.
+// Resolution-Reihenfolge (siehe resolvePermissions): role-deny, role-allow, member-deny, member-allow.
+//
+// Privater Channel = everyone-Role-Override mit deny_bits = VIEW_CHANNEL. Access dann via
+// explizite Role-Allows oder Member-Allows. Owner + ADMINISTRATOR-Bit short-circuiten alles
+// (sehen IMMER alle Channels — siehe getVisibleChannelIds).
+
+/**
+ * GET  /servers/<sid>/channels/<cid>/permissions  — alle Overrides für diesen Channel.
+ *   Permission: MANAGE_ROLES (Channel-Privacy-Settings sind Mod-Wissen, kein "View").
+ * POST /servers/<sid>/channels/<cid>/permissions  — Upsert eines Overrides.
+ *   Body: { targetKind: 'role'|'member', targetId, allowBits, denyBits }
+ *   Permission: MANAGE_ROLES + Position-Check (für Role-Target: actor.maxPos > target.pos).
+ *   Validation: bits in ALL_PERMISSIONS, no overlap allow & deny, target existiert.
+ *   Sentinel: allowBits=0 UND denyBits=0 ⇒ Row entfernen (idempotent DELETE).
+ */
+async function channelPermissionsHandler({ request, env, me }, serverId, channelId) {
+  const membership = await getServerMembership(env, serverId, me);
+  if (!membership) return json(request, { error: 'Not a member' }, 403);
+
+  // Channel-Existence + Server-Zugehörigkeit
+  const channel = await env.RENEX_DB.prepare(
+    `SELECT id, server_id, type FROM conversations WHERE id = ?`
+  ).bind(channelId).first();
+  if (!channel || channel.server_id !== serverId || channel.type !== 'channel') {
+    return json(request, { error: 'Channel not found' }, 404);
+  }
+
+  if (!(await userHasPermission(env, serverId, channelId, me, Permissions.MANAGE_ROLES))) {
+    return json(request, { error: 'forbidden_manage_roles' }, 403);
+  }
+
+  if (request.method === 'GET') {
+    const r = await env.RENEX_DB.prepare(
+      `SELECT target_kind, target_id, allow_bits, deny_bits
+       FROM channel_permission_overrides
+       WHERE channel_id = ?`
+    ).bind(channelId).all();
+    return json(request, {
+      overrides: (r.results || []).map(o => ({
+        targetKind: o.target_kind,
+        targetId:   o.target_id,
+        allowBits:  o.allow_bits | 0,
+        denyBits:   o.deny_bits  | 0,
+      })),
+    });
+  }
+
+  if (request.method !== 'POST') return json(request, { error: 'Method not allowed' }, 405);
+
+  const rlErr = await checkRateLimit(env, 'channelPermSet', me, request);
+  if (rlErr) return rlErr;
+
+  const body = await readJson(request);
+  if (!body) return json(request, { error: 'Invalid JSON' }, 400);
+
+  const targetKind = String(body.targetKind || '').toLowerCase();
+  const targetId   = String(body.targetId   || '').trim();
+  if (!['role', 'member'].includes(targetKind)) {
+    return json(request, { error: 'invalid_target_kind' }, 400);
+  }
+  if (!targetId) return json(request, { error: 'missing_target_id' }, 400);
+
+  const allowBits = sanitizeBits(body.allowBits);
+  const denyBits  = sanitizeBits(body.denyBits);
+  if ((allowBits & denyBits) !== 0) {
+    return json(request, { error: 'allow_deny_overlap' }, 400);
+  }
+
+  // Target-Existence + Position-Check
+  if (targetKind === 'role') {
+    const role = await env.RENEX_DB.prepare(
+      `SELECT id, position FROM server_roles WHERE id = ? AND server_id = ?`
+    ).bind(targetId, serverId).first();
+    if (!role) return json(request, { error: 'target_role_not_found' }, 404);
+
+    const actorPos = await getActorMaxRolePosition(env, serverId, me);
+    if (!canManageRoleAtPosition(actorPos.position, role.position, actorPos.isOwner)) {
+      return json(request, { error: 'forbidden_role_position' }, 403);
+    }
+  } else {
+    // member-target: targetId muss server_members-Row sein
+    const target = await getServerMembership(env, serverId, targetId.toLowerCase());
+    if (!target) return json(request, { error: 'target_not_member' }, 404);
+  }
+
+  // Sentinel: alles 0 → Row löschen statt "no-op"-Override speichern
+  if (allowBits === 0 && denyBits === 0) {
+    await env.RENEX_DB.prepare(
+      `DELETE FROM channel_permission_overrides
+       WHERE channel_id = ? AND target_kind = ? AND target_id = ?`
+    ).bind(channelId, targetKind, targetId).run();
+  } else {
+    await env.RENEX_DB.prepare(
+      `INSERT OR REPLACE INTO channel_permission_overrides
+         (channel_id, target_kind, target_id, allow_bits, deny_bits)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(channelId, targetKind, targetId, allowBits, denyBits).run();
+  }
+
+  await invalidateRecipientCache(env, serverId, channelId);
+  await audit(env, serverId, me, 'channel_permissions_updated', channelId, {
+    targetKind, targetId, allowBits, denyBits,
+  });
+  await pushToServerMembers(env, serverId, {
+    id:        crypto.randomUUID(),
+    type:      'channel_permissions_updated',
+    serverId,
+    channelId,
+    targetKind,
+    targetId,
+    allowBits,
+    denyBits,
+    ts:        Date.now(),
+  });
+
+  return json(request, { ok: true, allowBits, denyBits });
+}
+
+/**
+ * DELETE /servers/<sid>/channels/<cid>/permissions/<kind>/<id>  — Override entfernen.
+ * Permission: MANAGE_ROLES + Position-Check für role-targets.
+ */
+async function channelPermissionDetailHandler({ request, env, me }, serverId, channelId, targetKind, targetId) {
+  if (request.method !== 'DELETE') return json(request, { error: 'Method not allowed' }, 405);
+
+  const rlErr = await checkRateLimit(env, 'channelPermDel', me, request);
+  if (rlErr) return rlErr;
+
+  const membership = await getServerMembership(env, serverId, me);
+  if (!membership) return json(request, { error: 'Not a member' }, 403);
+
+  const channel = await env.RENEX_DB.prepare(
+    `SELECT id, server_id, type FROM conversations WHERE id = ?`
+  ).bind(channelId).first();
+  if (!channel || channel.server_id !== serverId || channel.type !== 'channel') {
+    return json(request, { error: 'Channel not found' }, 404);
+  }
+
+  if (!(await userHasPermission(env, serverId, channelId, me, Permissions.MANAGE_ROLES))) {
+    return json(request, { error: 'forbidden_manage_roles' }, 403);
+  }
+
+  if (targetKind === 'role') {
+    const role = await env.RENEX_DB.prepare(
+      `SELECT position FROM server_roles WHERE id = ? AND server_id = ?`
+    ).bind(targetId, serverId).first();
+    if (role) {
+      const actorPos = await getActorMaxRolePosition(env, serverId, me);
+      if (!canManageRoleAtPosition(actorPos.position, role.position, actorPos.isOwner)) {
+        return json(request, { error: 'forbidden_role_position' }, 403);
+      }
+    }
+  }
+
+  const existing = await env.RENEX_DB.prepare(
+    `SELECT 1 FROM channel_permission_overrides
+     WHERE channel_id = ? AND target_kind = ? AND target_id = ?`
+  ).bind(channelId, targetKind, targetId).first();
+  if (!existing) return json(request, { error: 'override_not_found' }, 404);
+
+  await env.RENEX_DB.prepare(
+    `DELETE FROM channel_permission_overrides
+     WHERE channel_id = ? AND target_kind = ? AND target_id = ?`
+  ).bind(channelId, targetKind, targetId).run();
+
+  await invalidateRecipientCache(env, serverId, channelId);
+  await audit(env, serverId, me, 'channel_permissions_updated', channelId, {
+    targetKind, targetId, removed: true,
+  });
+  await pushToServerMembers(env, serverId, {
+    id:         crypto.randomUUID(),
+    type:       'channel_permissions_updated',
+    serverId,
+    channelId,
+    targetKind,
+    targetId,
+    removed:    true,
+    ts:         Date.now(),
+  });
+
+  return json(request, { ok: true });
 }
 
 // ======================================================

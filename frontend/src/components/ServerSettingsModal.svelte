@@ -19,6 +19,7 @@
   import { toastStore } from '../stores/toast.svelte.js';
   import { Permissions, resolvePermissions } from '../lib/permissions.js';
   import RoleEditModal from './RoleEditModal.svelte';
+  import ChannelEditModal from './ChannelEditModal.svelte';
   import { autoDeleteStore, autoDeleteLabel, ALLOWED_DAYS } from '../stores/autoDelete.svelte.js';
 
   let { isOpen = $bindable(false) } = $props();
@@ -27,8 +28,19 @@
   let detail = $derived(serverStore.selectedServerDetail);
   let serverId = $derived(detail?.server?.id);
 
-  let activeTab = $state('roles');     // 'general' | 'roles' | 'members' | 'channels' | 'invites'
+  let activeTab = $state('roles');     // 'general' | 'roles' | 'members' | 'channels' | 'invites' | 'banned'
   let didInitTab = $state(false);      // beim ersten Open auf 'general' wenn canManageServer
+
+  // ── Phase 3A.5: Channel-Edit-Modal (Private Channels) ──
+  let editChannelOpen = $state(false);
+  let editChannelId   = $state(null);
+  function openChannelEdit(c) {
+    editChannelId = c.id;
+    editChannelOpen = true;
+  }
+  $effect(() => {
+    if (!editChannelOpen && editChannelId) editChannelId = null;
+  });
   let editRole = $state(null);          // role-object → öffnet RoleEditModal in edit-mode
   let editModalOpen = $state(false);    // bindable boolean für RoleEditModal
   let createRoleOpen = $state(false);   // → öffnet RoleEditModal in create-mode
@@ -724,10 +736,16 @@
             {#each (detail.channels || []) as c (c.id)}
               {@const ad = autoDeleteStore.getFor({ type: 'channel', key: c.id })}
               <li class="ss-channel-row">
-                <div class="ss-channel-label">
+                <button
+                  class="ss-channel-label ss-channel-label-btn"
+                  type="button"
+                  onclick={() => openChannelEdit(c)}
+                  title={lang.channelEditHint || 'Klicken zum Editieren (Name, Topic, Berechtigungen)'}
+                >
                   <span class="ss-channel-hash">#</span>
                   <span class="ss-channel-nm">{c.name}</span>
-                </div>
+                  <span class="ss-channel-edit-hint">✏️</span>
+                </button>
                 <div class="ss-ad-options">
                   {#each ALLOWED_DAYS as days}
                     <button
@@ -846,6 +864,12 @@
     {serverId}
     {isOwner}
     {actorMaxPosition}
+  />
+
+  <!-- Channel-Edit-Modal (Phase 3A.5: name/topic + Private Channels) -->
+  <ChannelEditModal
+    bind:isOpen={editChannelOpen}
+    channelId={editChannelId}
   />
 {/if}
 
@@ -1081,6 +1105,28 @@
     border-color: var(--accent-voice);
   }
   .ss-field textarea { resize: vertical; min-height: 60px; }
+
+  /* ── Phase 3A.5: Klickbarer Channel-Name (öffnet ChannelEditModal) ── */
+  .ss-channel-label-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary, #f4f4f5);
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    transition: background 0.15s;
+  }
+  .ss-channel-label-btn:hover { background: var(--bg-panel-alt, #27272a); }
+  .ss-channel-edit-hint {
+    opacity: 0;
+    font-size: 11px;
+    transition: opacity 0.15s;
+  }
+  .ss-channel-label-btn:hover .ss-channel-edit-hint { opacity: 0.7; }
 
   /* ── Ban-System (Phase 3A.5) ── */
   .btn-sm { padding: 6px 10px; font-size: 12px; }

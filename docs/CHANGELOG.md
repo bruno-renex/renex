@@ -4,6 +4,51 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-01 — Phase 3A.5 Tier-Limits — COMPLETE 🏁
+
+Letztes 3A.5-Item geshippt. **Phase 3A.5 ist 7/7 vollständig** — alle
+deferred-Items aus Phase 3A sind geschlossen.
+
+### ✨ Added
+- **`getUserTier(env, handle)`** in `src/auth.js` — KV-basiertes Tier-System
+  (`user:tier:<handle>` = `"free"` (default, fehlende Row) | `"pro"`).
+  Whitelist-Validation, fail-silent bei KV-Errors. Standalone (kein
+  Session-Lookup nötig).
+- **Tier-aware Server-Limit** in `createServer`: parallele Tier+Count-Auflösung,
+  Free=3 / Pro=25 (`MAX_OWNED_SERVERS_FREE`/`_PRO` Konstanten). 403-Response
+  enthält jetzt `{error, limit, tier, upgradeAvailable: {proLimit} | null}`.
+- **`GET /users/me`** ergänzt um `tier` im Response-Body.
+- **Frontend `CreateServerModal`**: tier-aware Error-Message bei
+  `server_limit_reached`. Free-User: "Upgrade auf Pro für 25". Pro-User:
+  Pro-Limit (kein weiterer Upgrade-Pfad).
+- **`DELETE /account`**: zusätzlicher Cleanup von `user:tier:<handle>`
+  in KV-Cleanup-Phase (DSGVO).
+- **i18n DE/EN/ES**: 2 neue Strings (createServerLimitReachedFree + Pro).
+
+### Tier-Setup für Operations/Testing
+```bash
+# Tier setzen
+npx wrangler kv key put --binding=RENEX_KV \
+  "user:tier:<handle>" "pro" --remote
+
+# Tier zurücksetzen (löscht Key → default 'free')
+npx wrangler kv key delete --binding=RENEX_KV \
+  "user:tier:<handle>" --remote
+```
+
+Ab Phase 6 wird das KV-Setzen durch den Founder's-Pass/Stripe-Webhook
+übernommen.
+
+### 🏁 Phase 3A.5 — 7 von 7 COMPLETE nach 2026-06-01
+Alle deferred-Items aus Phase 3A sind geschlossen: Owner-Transfer, PATCH
+name/desc, Account-Delete Pre-Check, Server-Icon, Ban-System, Private
+Channels, Tier-Limits. ~5 Kalendertage von 2026-05-28 (3/7) bis 2026-06-01
+(7/7).
+
+vitest 461/461 grün; vite build clean. Keine Schema-Migration (KV).
+
+---
+
 ## 2026-05-29 — Phase 3A.5 Private Channels + pushToUserDO Audit 🔒
 
 Sechstes 3A.5-Item geshippt (Private Channels via permission overrides) plus

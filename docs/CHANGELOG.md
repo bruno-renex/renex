@@ -4,6 +4,65 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-05-29 — Phase 3A.5 Private Channels + pushToUserDO Audit 🔒
+
+Sechstes 3A.5-Item geshippt (Private Channels via permission overrides) plus
+codebase-weiter Audit der `pushToUserDO`-Fire-and-Forget-Calls — 7 weitere
+Stellen mit dem gleichen CF-Workers-Bug gefixt.
+
+### ✨ Added — Private Channels (Phase 3A.5 Item 6/7)
+- **`POST /servers/<sid>/channels/<cid>/permissions`** — Upsert Override.
+  Body: `{targetKind: 'role'|'member', targetId, allowBits, denyBits}`.
+  Permission: MANAGE_ROLES auf Channel-Ebene. Position-Check für Role-Targets.
+  Sentinel `allow=0+deny=0` ⇒ Row entfernen. Audit `channel_permissions_updated`,
+  WS broadcast gleicher Name. RL 60/min.
+- **`GET /servers/<sid>/channels/<cid>/permissions`** — Override-Liste.
+- **`DELETE /servers/<sid>/channels/<cid>/permissions/<kind>/<id>`** — Override
+  löschen. Permission + Position-Check. RL 30/min.
+- **Server-seitiges Channel-Filtering** via neuem `getVisibleChannelIds()`:
+  single-Query LEFT JOIN von conversations + channel_permission_overrides,
+  in-memory `resolvePermissions()`. Owner + ADMINISTRATOR-Bit short-circuit
+  (sehen IMMER alle Channels). `serverDetail` und `channelsHandler` GET
+  filtern jetzt — User sehen private Channels gar nicht erst.
+- **Frontend `ChannelEditModal`**: Allgemein-Tab (name/topic edit) +
+  Berechtigungen-Tab (Privacy-Toggle manipuliert everyone-Role deny_bits
+  VIEW_CHANNEL, Access-Liste mit Role + Member adds via Dropdown,
+  Remove-Buttons). Klickbarer Channel-Name in ServerSettingsModal's
+  Channels-Tab öffnet das Modal (Hover-Icon ✏️).
+- **WS `channel_permissions_updated`** in App.svelte _serverLiveEvents
+  registriert (triggers serverDetail re-fetch + /servers/list reload).
+- **i18n DE/EN/ES**: 16 neue Strings.
+
+### 🐛 Fixed — pushToUserDO codebase-wide audit
+Nach dem Ban-System-Smoke-Test (siehe `fix(servers): ban WS delivery`):
+38 `pushToUserDO`-Aufrufe in `src/` analysiert. 31 bereits korrekt awaited
+oder in `await Promise.allSettled(...)`-Wrappern (sicher). **7 echte
+Fire-and-Forget-Bugs gefixt** durch `await` hinzufügen:
+
+User-zu-User (kritisch):
+- `groupRoutes.js:609` — group_member_removed → ex-Member (gleicher Bug
+  wie Ban, exakt gleicher Fix).
+- `inviteRoutes.js:737` — GUEST_CONVERTED → Peer (Gast wurde Account, Peer
+  sieht's jetzt live in Inbox).
+- `inviteRoutes.js:903` — CONTACT_UPDATE → Inviter (DM-Invite-Acceptance
+  triggert Kontaktliste-Update beim Einlader live).
+
+Multi-Device-Self-Sync (eigene Geräte sehen Aktion live):
+- `chatRoutes.js:365` — message delete
+- `chatRoutes.js:439` — message edit
+- `chatRoutes.js:574` — reaction
+- `helpers/chatSend.js:502` — chat send (~10-50ms extra Latenz pro Send,
+  akzeptabel für Multi-Device-Reliability)
+
+vitest 461/461 grün; vite build clean. Schema unverändert (channel_permission_overrides
+existiert seit Phase 3A).
+
+### 🚧 Phase 3A.5 — Stand 6 von 7 nach 2026-05-29
+Verbleibend: Tier-Limits Free=3 / Pro=25 (Konstanten existieren, Tier-Lookup
+fehlt — aktuell hartes 3-Server-Limit für alle Users).
+
+---
+
 ## 2026-05-29 — Phase 3A.5 Ban-System 🚫
 
 Fünftes Phase-3A.5-Item geshippt. Server-Admins mit `BAN_MEMBERS` (Owner via

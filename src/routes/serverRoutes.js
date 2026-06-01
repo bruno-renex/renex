@@ -43,7 +43,7 @@
 // ======================================================
 
 import { json, readJson, checkCsrf, corsHeaders } from '../utils.js';
-import { requireSession, rateLimit, pushToUserDO } from '../auth.js';
+import { requireSession, rateLimit, pushToUserDO, getUserTier } from '../auth.js';
 import {
   Permissions,
   ALL_PERMISSIONS,
@@ -487,13 +487,22 @@ async function createServer({ request, env, me }) {
     ? String(body.description).trim().slice(0, MAX_SERVER_DESC)
     : null;
 
-  // TODO Phase 3.5: users.tier-Lookup + Limit-Check (Free=3, Pro=25)
-  // Provisorisch: hartes Free-Limit für alle bis Tier-Feld da ist.
-  const ownedCount = await env.RENEX_DB.prepare(
-    `SELECT COUNT(*) AS c FROM server_members WHERE user_handle = ? AND is_owner = 1`
-  ).bind(me).first();
-  if ((ownedCount?.c || 0) >= MAX_OWNED_SERVERS_FREE) {
-    return json(request, { error: 'server_limit_reached', limit: MAX_OWNED_SERVERS_FREE }, 403);
+  // Phase 3A.5: Tier-aware Server-Limit (Free=3, Pro=25).
+  // Storage: KV `user:tier:<handle>` via getUserTier (default 'free').
+  const [ownedCount, tier] = await Promise.all([
+    env.RENEX_DB.prepare(
+      `SELECT COUNT(*) AS c FROM server_members WHERE user_handle = ? AND is_owner = 1`
+    ).bind(me).first(),
+    getUserTier(env, me),
+  ]);
+  const limit = tier === 'pro' ? MAX_OWNED_SERVERS_PRO : MAX_OWNED_SERVERS_FREE;
+  if ((ownedCount?.c || 0) >= limit) {
+    return json(request, {
+      error: 'server_limit_reached',
+      limit,
+      tier,
+      upgradeAvailable: tier === 'free' ? { proLimit: MAX_OWNED_SERVERS_PRO } : null,
+    }, 403);
   }
 
   const serverId      = crypto.randomUUID();

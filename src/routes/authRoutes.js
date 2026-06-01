@@ -1,5 +1,5 @@
 import { json, readJson, base64url, base64urlToString, base64urlToArrayBuffer, decodeCBOR, corsHeaders } from '../utils.js';
-import { requireSession, requireAnySession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions, verifyTurnstile, pushToGroupMembers } from '../auth.js';
+import { requireSession, requireAnySession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions, verifyTurnstile, pushToGroupMembers, getUserTier } from '../auth.js';
 import { handleLoginFinish } from '../helpers/loginFinish.js';
 import { readCredentials, writeCredentials, MAX_PASSKEYS } from '../helpers/credentials.js';
 
@@ -442,8 +442,12 @@ export async function handleAuthRoutes(request, env, path, params) {
       if (!session) return json(request, { error: "Not authenticated" }, 401);
 
       if (request.method === "GET") {
-        const profile = await readProfile(env, session.handle);
-        return json(request, profile);
+        // Phase 3A.5: tier ergänzt aus KV (default 'free').
+        const [profile, tier] = await Promise.all([
+          readProfile(env, session.handle),
+          getUserTier(env, session.handle),
+        ]);
+        return json(request, { ...profile, tier });
       }
 
       if (request.method === "PATCH") {
@@ -643,6 +647,9 @@ export async function handleAuthRoutes(request, env, path, params) {
 
         // 6c. Profil (Display Name) löschen
         await env.RENEX_KV.delete(`profile:${handle}`);
+
+        // 6c-bis. Tier-Eintrag löschen (Phase 3A.5)
+        await env.RENEX_KV.delete(`user:tier:${handle}`);
 
         // 6d. Recovery-Bundle + Salt + Meta löschen (Spec: docs/RECOVERY.md §10.3)
         await env.RENEX_KV.delete(`user:recovery:${handle}`);

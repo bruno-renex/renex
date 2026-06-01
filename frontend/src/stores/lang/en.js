@@ -698,6 +698,9 @@ export default {
   remove:                   "Remove",
   add:                      "Add",
   loading:                  "Loading…",
+  // ── Phase 3A.5: Tier-Limits ───────────────────────────
+  createServerLimitReachedFree: "Server limit reached (max {limit} as Free-tier owner). Upgrade to Pro for {proLimit}.",
+  createServerLimitReachedPro:  "Server limit reached (max {limit} as Pro owner).",
   roleCreateBtn:            "Create role",
   roleCreateTitle:          "Create role",
   roleEditTitle:            "Edit role",

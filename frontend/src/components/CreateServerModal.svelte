@@ -56,7 +56,19 @@
     } else {
       // Backend-Fehler übersetzen
       if (r.error === 'server_limit_reached') {
-        errorMsg = lang.createServerLimitReached || 'Server-Limit erreicht (max 3 als Owner). Upgrade auf Pro für 25.';
+        // Tier-aware Message (Phase 3A.5): Backend liefert {limit, tier, upgradeAvailable}
+        const tier = r.tier || 'free';
+        const limit = r.limit ?? 3;
+        if (tier === 'pro') {
+          errorMsg = (lang.createServerLimitReachedPro || 'Server-Limit erreicht (max {limit} als Pro-Owner).')
+            .replace('{limit}', String(limit));
+        } else if (r.upgradeAvailable) {
+          errorMsg = (lang.createServerLimitReachedFree || 'Server-Limit erreicht (max {limit} als Owner im Free-Tier). Upgrade auf Pro für {proLimit}.')
+            .replace('{limit}', String(limit))
+            .replace('{proLimit}', String(r.upgradeAvailable.proLimit));
+        } else {
+          errorMsg = lang.createServerLimitReached || 'Server-Limit erreicht.';
+        }
       } else if (r.error === 'Too many requests') {
         errorMsg = lang.tooManyRequests || 'Zu viele Anfragen — bitte kurz warten.';
       } else {

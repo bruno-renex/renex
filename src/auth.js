@@ -287,6 +287,23 @@ export async function revokeAllSessions(env, handle, options = {}) {
   }
 }
 
+// ──────────────────────────────────────────────────────
+// Phase 3A.5: User-Tier (Free / Pro)
+// Storage: KV `user:tier:<handle>` = "free" | "pro" (missing ⇒ "free").
+// Set via wrangler kv (oder ab Phase 6 via Founder's-Pass-Flow / Stripe-Webhook).
+// ──────────────────────────────────────────────────────
+const VALID_TIERS = new Set(['free', 'pro']);
+
+export async function getUserTier(env, handle) {
+  try {
+    const raw = await env.RENEX_KV.get(`user:tier:${String(handle).toLowerCase()}`);
+    const t = (raw || 'free').toLowerCase();
+    return VALID_TIERS.has(t) ? t : 'free';
+  } catch {
+    return 'free';
+  }
+}
+
 // ── Event via DO an einzelnen User pushen ────────────
 // Gibt die Anzahl zugestellter WebSocket-Verbindungen zurück (0 = offline).
 // Fail-silent: User offline → return 0.

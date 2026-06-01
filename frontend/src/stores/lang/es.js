@@ -698,6 +698,9 @@ export default {
   remove:                   "Eliminar",
   add:                      "Añadir",
   loading:                  "Cargando…",
+  // ── Phase 3A.5: Límites por nivel ─────────────────────
+  createServerLimitReachedFree: "Límite de servidores alcanzado (máx {limit} como propietario Free). Actualiza a Pro para {proLimit}.",
+  createServerLimitReachedPro:  "Límite de servidores alcanzado (máx {limit} como propietario Pro).",
   roleCreateBtn:            "Crear rol",
   roleCreateTitle:          "Crear rol",
   roleEditTitle:            "Editar rol",

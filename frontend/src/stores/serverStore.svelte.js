@@ -120,7 +120,14 @@ async function createServer({ name, description }) {
       selectServer(r.data.serverId);
       return { ok: true, serverId: r.data.serverId };
     }
-    return { ok: false, error: r.error || 'create_failed' };
+    // Phase 3A.5: bei server_limit_reached liefert Backend tier + limit + upgradeAvailable
+    return {
+      ok: false,
+      error: r.error || 'create_failed',
+      limit: r.data?.limit,
+      tier: r.data?.tier,
+      upgradeAvailable: r.data?.upgradeAvailable,
+    };
   } catch (e) {
     captureException(e, { context: 'serverStore.createServer' });
     return { ok: false, error: e?.message || 'create_failed' };

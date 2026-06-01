@@ -472,8 +472,8 @@ Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 
 **Follow-up Bug (aus Smoke-Test 2026-05-28):** `/servers/list` reportete für einen non-Owner kurzzeitig `is_owner=true`, später konsistent `false`. Root-Cause unbekannt — kein 3A.5-Code-Pfad berührt `server_members.is_owner`. Bei Gelegenheit hinterfragen.
 
-### Phase 5-Light — Anti-AI Minimum *(Wo 2-3: 2026-05-26 → 2026-06-01, vorgezogen von Wo 5)*
-- Captcha-Verschärfung an Server-Create + Invite-Accept
+### Phase 5-Light — Anti-AI Minimum ✅ *(fertig 2026-06-01, on-time per Roadmap)*
+- ✅ **Captcha-Verschärfung an Server-Create + Invite-Accept** — Cloudflare Turnstile auf POST `/servers/create` + POST `/servers/join/<token>` (Backend `verifyTurnstile` Check via `TURNSTILE_SECRET`, Skip+Warn wenn nicht konfiguriert für Dev). Frontend: Turnstile-Widget in `CreateServerModal` + neuer **`ServerJoinModal`** der den vorherigen native `confirm()`-Dialog für `?join-server=...` Deep-Links ersetzt (Server-Card mit Name/Beschreibung/Member-Count/Inviter + Widget + Join/Cancel-Buttons). i18n DE/EN/ES für 9 neue Strings. Pattern aus Phase-1A-Register-Flow (LoginModal + authRoutes) wiederverwendet — keine neue Infra, keine Dashboard-Änderung. Anti-AI-Brand-Story: "Cloudflare Turnstile auf allen Community-Joining-Pfaden" ist jetzt unter app.renex.id live demonstrierbar.
 - ✅ Rate-Limits für Server/Channel/Role-Endpoints (bereits mit Phase 3A geliefert — RL-Buckets in `serverRoutes.js`, inkl. inviteCreate/serverJoin)
 - ❌ Hardware-Attestation: deferred zu Phase 9 (Year 1)
 - ❌ Behavioral-Analysis: deferred zu Phase 9

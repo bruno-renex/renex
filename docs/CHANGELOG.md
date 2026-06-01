@@ -4,6 +4,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-01 — Phase 5-Light Turnstile Captcha 🛡
+
+Anti-AI-Brand-Move umgesetzt. Cloudflare Turnstile auf Server-Erstellung
+und Invite-Beitritt, plus echtes UX-Modal für Server-Joins (statt native
+`confirm()`).
+
+### ✨ Added
+- **Backend Turnstile-Check in `createServer`** — `verifyTurnstile(token, ip, env)`
+  via `TURNSTILE_SECRET` Worker-Secret. 400 `captcha_required` ohne Token,
+  403 `captcha_failed` bei Verify-Fail. Skip+Warn wenn nicht konfiguriert (Dev).
+- **Backend Turnstile-Check in `joinByTokenHandler` POST** — gleicher Pattern.
+  Skip für `alreadyMember`-Pfad (idempotent). GET (Preview) unverändert ohne
+  Check (rein informativ).
+- **`CreateServerModal`** — Turnstile-Widget gerendert via existing
+  `renderTurnstile` + `preloadTurnstileScript` Helpers (Pattern aus LoginModal).
+  Token in serverStore.createServer-Body durchgereicht.
+- **`ServerJoinModal.svelte` NEU** — ersetzt den bisherigen native `confirm()`-
+  Dialog für `?join-server=srv_inv_<hex>` Deep-Links. Zeigt Server-Card mit
+  Name/Beschreibung/Member-Count/Inviter + Turnstile-Widget + Beitreten/
+  Abbrechen-Buttons. Echtes UX-Upgrade plus Captcha-Ready in einem Schritt.
+- **`App.svelte`** — Deep-Link-Handler für `?join-server` öffnet jetzt
+  ServerJoinModal statt direkt `confirm()` + `joinByToken()`.
+- **i18n DE/EN/ES** — 9 neue Strings (joining, inviteJoinTitle/Btn, inviteFrom,
+  inviteMemberCount, inviteUserBanned, inviteServerFull, inviteExpired,
+  inviteUsedUp). captchaFailed war bereits da.
+
+### 🔧 Reused (no new infra)
+- `verifyTurnstile` Helper in `src/auth.js` (existierte seit Phase 1A für Register-Flow)
+- `lib/turnstile.js` Frontend-Helpers `renderTurnstile`/`preloadTurnstileScript` (LoginModal)
+- `TURNSTILE_SECRET` Worker-Secret + Turnstile-Sitekey im Frontend-Code
+- Keine CF-Dashboard-Änderung nötig (Sitekey/Secret schon konfiguriert seit Phase 1A)
+
+vitest 461/461 grün; vite build clean. Keine Schema-Migration.
+
+### 📋 Phase 5-Light Status
+Damit Captcha-Verschärfung ✅ — alle eigentlich-geplanten 5-Light-Items sind
+durch (Rate-Limits kamen schon mit Phase 3A). Hardware-Attestation + Behavioral-
+Analysis sind weiterhin deferred zu Phase 9 (Year 1) per ursprünglichem Decision-Log.
+
+---
+
 ## 2026-06-01 — Phase 3A.5 Tier-Limits — COMPLETE 🏁
 
 Letztes 3A.5-Item geshippt. **Phase 3A.5 ist 7/7 vollständig** — alle

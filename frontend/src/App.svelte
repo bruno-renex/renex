@@ -55,6 +55,18 @@
   import DeviceLimitModal from './components/DeviceLimitModal.svelte';
   import MemberActionsModal from './components/MemberActionsModal.svelte';
   import LinkWarningModal from './components/LinkWarningModal.svelte';
+  import ServerJoinModal from './components/ServerJoinModal.svelte';
+
+  // Phase 5-Light: ServerJoinModal state (opens auf ?join-server=srv_inv_<hex>)
+  let joinModalOpen = $state(false);
+  let joinModalToken = $state(null);
+  let joinModalInfo  = $state(null);
+  $effect(() => {
+    if (!joinModalOpen && joinModalToken) {
+      joinModalToken = null;
+      joinModalInfo  = null;
+    }
+  });
   import PwaInstallBanner from './components/PwaInstallBanner.svelte';
   import ToastContainer from './components/ToastContainer.svelte';
   import { bumpLoginCount } from './lib/pwaInstall.js';
@@ -439,7 +451,7 @@
         const groupName = p.get('name');
         console.log(`📞 handleDeepLink: url-arg=${url || '(cold-boot)'} location.search=${location.search} with=${dmPeer} call=${p.get('call')}`);
 
-        // Server-Invite-Link (?join-server=srv_inv_<hex>): Preview + Confirm + Join.
+        // Server-Invite-Link (?join-server=srv_inv_<hex>): Modal mit Turnstile (Phase 5-Light).
         const joinToken = p.get('join-server');
         if (joinToken && /^srv_inv_[a-f0-9]{32}$/.test(joinToken)) {
           // Param sofort strippen, sonst re-trigger bei jedem Reload.
@@ -459,16 +471,10 @@
               toastStore.push(lng.inviteAlreadyMember || 'Du bist bereits Mitglied dieses Servers', { kind: 'info' });
               return;
             }
-            const confirmText = (lng.inviteJoinConfirm || 'Server „{name}" beitreten? ({count} Mitglieder)')
-              .replace('{name}', info.info.name)
-              .replace('{count}', String(info.info.memberCount));
-            if (!confirm(confirmText)) return;
-            const r = await serverStore.joinByToken(joinToken);
-            if (r.ok) {
-              toastStore.push(lng.inviteJoinSuccess || '✅ Server beigetreten', { kind: 'success' });
-            } else {
-              toastStore.push((lng.inviteJoinFailed || 'Beitritt fehlgeschlagen') + ': ' + r.error, { kind: 'error' });
-            }
+            // Phase 5-Light: ServerJoinModal mit Turnstile öffnen statt native confirm()
+            joinModalToken = joinToken;
+            joinModalInfo  = info.info;
+            joinModalOpen  = true;
           })();
           return true;
         }
@@ -1460,6 +1466,7 @@
 <!-- Member-Actions-Modal: globaler Action-Sheet bei Klick auf Group-Sender / Group-Member -->
 <MemberActionsModal />
 <LinkWarningModal />
+<ServerJoinModal bind:isOpen={joinModalOpen} token={joinModalToken} info={joinModalInfo} />
 
 <!-- PWA-Install-Banner: Smart Banner + iOS/Safari-Anleitung. Trigger via Profile-Menü. -->
 <PwaInstallBanner />

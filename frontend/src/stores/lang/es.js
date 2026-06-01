@@ -701,6 +701,16 @@ export default {
   // ── Phase 3A.5: Límites por nivel ─────────────────────
   createServerLimitReachedFree: "Límite de servidores alcanzado (máx {limit} como propietario Free). Actualiza a Pro para {proLimit}.",
   createServerLimitReachedPro:  "Límite de servidores alcanzado (máx {limit} como propietario Pro).",
+  // ── Phase 5-Light: Turnstile + ServerJoinModal ────────
+  joining:                  "Uniéndose…",
+  inviteJoinTitle:          "Invitación de servidor",
+  inviteJoinBtn:            "Unirse",
+  inviteFrom:               "de @{handle}",
+  inviteMemberCount:        "{count} miembros",
+  inviteUserBanned:         "Has sido baneado de este servidor y no puedes unirte.",
+  inviteServerFull:         "Servidor lleno.",
+  inviteExpired:            "Enlace de invitación caducado.",
+  inviteUsedUp:             "Enlace de invitación ya utilizado.",
   roleCreateBtn:            "Crear rol",
   roleCreateTitle:          "Crear rol",
   roleEditTitle:            "Editar rol",

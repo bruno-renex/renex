@@ -14,6 +14,9 @@
   import { i18nStore } from '../stores/i18n.svelte.js';
   import { serverStore } from '../stores/serverStore.svelte.js';
   import { toastStore } from '../stores/toast.svelte.js';
+  import { renderTurnstile, preloadTurnstileScript } from '../lib/turnstile.js';
+  import { captureException } from '../lib/sentry.js';
+  import { onMount } from 'svelte';
 
   let { isOpen = $bindable(false) } = $props();
 
@@ -24,6 +27,17 @@
   let busy = $state(false);
   let errorMsg = $state('');
 
+  // Phase 5-Light: Turnstile-Captcha
+  let turnstileEl = $state(null);
+  let cfTurnstileToken = $state(null);
+  let _turnstileHandle = null;
+
+  onMount(() => {
+    void preloadTurnstileScript().catch((e) => {
+      captureException(e, { context: 'turnstile.preload.createServer' });
+    });
+  });
+
   // Reset bei Open
   $effect(() => {
     if (isOpen) {
@@ -31,7 +45,33 @@
       description = '';
       busy = false;
       errorMsg = '';
+      cfTurnstileToken = null;
     }
+  });
+
+  // Turnstile rendern wenn Modal offen — Pattern aus LoginModal übernommen.
+  $effect(() => {
+    if (!turnstileEl || !isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const h = await renderTurnstile(turnstileEl, {
+          onToken: (t) => { if (!cancelled) cfTurnstileToken = t; },
+          onExpired: () => { if (!cancelled) cfTurnstileToken = null; },
+          onError: () => { if (!cancelled) cfTurnstileToken = null; },
+          theme: 'dark',
+        });
+        if (cancelled) { h.dispose(); return; }
+        _turnstileHandle = h;
+      } catch (e) {
+        captureException(e, { context: 'turnstile.load.createServer' });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      cfTurnstileToken = null;
+      if (_turnstileHandle) { _turnstileHandle.dispose(); _turnstileHandle = null; }
+    };
   });
 
   async function onSubmit(e) {
@@ -48,7 +88,7 @@
     }
     busy = true;
     errorMsg = '';
-    const r = await serverStore.createServer({ name: trimmed, description });
+    const r = await serverStore.createServer({ name: trimmed, description, cfTurnstileToken });
     busy = false;
     if (r.ok) {
       toastStore.push(lang.createServerSuccess || '✅ Server erstellt', { kind: 'success' });
@@ -71,6 +111,9 @@
         }
       } else if (r.error === 'Too many requests') {
         errorMsg = lang.tooManyRequests || 'Zu viele Anfragen — bitte kurz warten.';
+      } else if (r.error === 'Captcha required' || r.error === 'Captcha verification failed') {
+        errorMsg = lang.captchaFailed || 'Captcha-Verifikation fehlgeschlagen. Bitte Widget erneut bestätigen.';
+        cfTurnstileToken = null;
       } else {
         errorMsg = (lang.createServerFailed || 'Erstellen fehlgeschlagen') + ': ' + r.error;
       }
@@ -127,6 +170,9 @@
           disabled={busy}
         ></textarea>
       </label>
+
+      <!-- Phase 5-Light: Turnstile-Widget -->
+      <div bind:this={turnstileEl} class="cs-turnstile"></div>
 
       {#if errorMsg}
         <div class="cs-error">{errorMsg}</div>
@@ -252,6 +298,12 @@
     border-radius: 8px;
     color: var(--status-error);
     font-size: 12px;
+  }
+
+  .cs-turnstile {
+    display: flex;
+    justify-content: center;
+    min-height: 65px;
   }
 
   .cs-actions {

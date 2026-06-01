@@ -43,7 +43,7 @@
 // ======================================================
 
 import { json, readJson, checkCsrf, corsHeaders } from '../utils.js';
-import { requireSession, rateLimit, pushToUserDO, getUserTier } from '../auth.js';
+import { requireSession, rateLimit, pushToUserDO, getUserTier, verifyTurnstile } from '../auth.js';
 import {
   Permissions,
   ALL_PERMISSIONS,
@@ -478,6 +478,21 @@ async function createServer({ request, env, me }) {
 
   const body = await readJson(request);
   if (!body) return json(request, { error: 'Invalid JSON' }, 400);
+
+  // Phase 5-Light: Turnstile-Captcha. Skip wenn TURNSTILE_SECRET fehlt (Dev).
+  if (env.TURNSTILE_SECRET) {
+    const cfTurnstileToken = body.cfTurnstileToken;
+    if (!cfTurnstileToken || typeof cfTurnstileToken !== 'string') {
+      return json(request, { error: 'Captcha required', code: 'captcha_required' }, 400);
+    }
+    const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+    const turnstileOk = await verifyTurnstile(cfTurnstileToken, ip, env);
+    if (!turnstileOk) {
+      return json(request, { error: 'Captcha verification failed', code: 'captcha_failed' }, 403);
+    }
+  } else {
+    console.warn('⚠️  TURNSTILE_SECRET not configured — skipping captcha for server-create');
+  }
 
   const name = String(body.name || '').trim();
   if (!name || name.length > MAX_SERVER_NAME) {
@@ -2279,6 +2294,23 @@ async function joinByTokenHandler({ request, env, me }, token) {
   if (request.method === 'POST') {
     const rlErr = await checkRateLimit(env, 'serverJoin', me, request);
     if (rlErr) return rlErr;
+
+    // Phase 5-Light: Turnstile-Captcha auch beim Join. Skip wenn TURNSTILE_SECRET
+    // fehlt (Dev). alreadyMember-Pfad braucht's nicht (idempotent, kein Side-Effect).
+    if (env.TURNSTILE_SECRET && !alreadyMember) {
+      const body = await readJson(request).catch(() => null);
+      const cfTurnstileToken = body?.cfTurnstileToken;
+      if (!cfTurnstileToken || typeof cfTurnstileToken !== 'string') {
+        return json(request, { error: 'Captcha required', code: 'captcha_required' }, 400);
+      }
+      const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+      const turnstileOk = await verifyTurnstile(cfTurnstileToken, ip, env);
+      if (!turnstileOk) {
+        return json(request, { error: 'Captcha verification failed', code: 'captcha_failed' }, 403);
+      }
+    } else if (!env.TURNSTILE_SECRET) {
+      console.warn('⚠️  TURNSTILE_SECRET not configured — skipping captcha for server-join');
+    }
 
     if (alreadyMember) {
       return json(request, { ok: true, serverId: server.id, alreadyMember: true });

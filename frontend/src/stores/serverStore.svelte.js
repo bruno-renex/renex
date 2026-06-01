@@ -108,12 +108,16 @@ function selectServer(id) {
   if (id) void loadServerDetail(id);
 }
 
-async function createServer({ name, description }) {
+async function createServer({ name, description, cfTurnstileToken = null }) {
   if (!name?.trim()) return { ok: false, error: 'name_required' };
   try {
     const r = await apiFetch('/servers/create', {
       method: 'POST',
-      body: { name: name.trim(), description: description?.trim() || null },
+      body: {
+        name: name.trim(),
+        description: description?.trim() || null,
+        cfTurnstileToken,  // Phase 5-Light: Turnstile-Token (backend skipt wenn TURNSTILE_SECRET fehlt)
+      },
     });
     if (r.ok && r.data?.serverId) {
       await loadServers();
@@ -464,9 +468,12 @@ async function deleteInvite(serverId, token) {
   }
 }
 
-async function joinByToken(token) {
+async function joinByToken(token, cfTurnstileToken = null) {
   try {
-    const r = await apiFetch(`/servers/join/${encodeURIComponent(token)}`, { method: 'POST' });
+    const r = await apiFetch(`/servers/join/${encodeURIComponent(token)}`, {
+      method: 'POST',
+      body: { cfTurnstileToken },  // Phase 5-Light: Turnstile-Token
+    });
     if (r.ok && r.data?.serverId) {
       await loadServers();
       selectServer(r.data.serverId);

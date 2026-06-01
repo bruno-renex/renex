@@ -702,6 +702,16 @@ export default {
   // ── Phase 3A.5: Tier-Limits ───────────────────────────
   createServerLimitReachedFree: "Server-Limit erreicht (max {limit} als Owner im Free-Tier). Upgrade auf Pro für {proLimit}.",
   createServerLimitReachedPro:  "Server-Limit erreicht (max {limit} als Pro-Owner).",
+  // ── Phase 5-Light: Turnstile + ServerJoinModal ────────
+  joining:                  "Beitrete…",
+  inviteJoinTitle:          "Server-Einladung",
+  inviteJoinBtn:            "Beitreten",
+  inviteFrom:               "von @{handle}",
+  inviteMemberCount:        "{count} Mitglieder",
+  inviteUserBanned:         "Du wurdest von diesem Server gebannt und kannst nicht beitreten.",
+  inviteServerFull:         "Server ist voll.",
+  inviteExpired:            "Invite-Link ist abgelaufen.",
+  inviteUsedUp:             "Invite-Link wurde schon aufgebraucht.",
   roleCreateBtn:            "Role erstellen",
   roleCreateTitle:          "Role erstellen",
   roleEditTitle:            "Role bearbeiten",

@@ -2,9 +2,10 @@
 
 > **PASSKEY-ONLY. HUMAN-FIRST. OPEN-STANDARD.**
 
-**Version:** 1.3
-**Last updated:** 2026-05-23
+**Version:** 1.4
+**Last updated:** 2026-06-02
 **License:** CC BY 4.0 — you may quote this manifesto with attribution.
+**Translations:** [Deutsch](./MANIFESTO_DE.md)
 
 ---
 
@@ -113,6 +114,45 @@ This is not a marketing list. These are hard architectural decisions. If an inve
 
 ---
 
+## How we resist (transparently)
+
+We do not promise an AI-free service. We promise to fight for one.
+
+Here is exactly what we do, today.
+
+**At the gate (account creation):**
+
+- **Passkey only.** No email. No phone. No password. The most common bot-onboarding vectors — leaked email lists, SIM farms, credential stuffing — don't apply to RENEX. You cannot bulk-register accounts from a script.
+- **Cloudflare Turnstile** on every signup attempt. Privacy-respecting (no tracking cookies), a cryptographic challenge that requires browser-state proof-of-work.
+
+**At the surface (joining communities):**
+
+- **Turnstile again** on every server creation and every invite acceptance. Discord lets anyone with an HTTP client join 100 servers in 60 seconds. We don't.
+- **Per-action rate limits** on every sensitive endpoint. A bot trying to brute-force invite tokens, mass-create channels, or flood role assignments hits the wall fast.
+
+**In the structure (architecture decisions):**
+
+- **No webhooks. No bot APIs. No "developer portal" for autonomous agents.** RENEX has no integration layer for AI systems to plug into. None. This is not "we haven't built it yet". This is "we will not build it".
+- **No AI-driven server features.** No sentiment analysis. No conversation summarization. No automatic moderation by ML models. No nudges, no suggestions, no "Here's what people are talking about today" feeds.
+
+**For the moderator (community defense):**
+
+- **Server-level bans** with optional reasons. **Audit logs** for every kick, role change, permission edit, ban, and unban. Community moderators can see what happened and hold each other accountable.
+- **Per-channel permission overrides.** A moderator can lock a channel down to specific roles or members in seconds. No bot army can spam a channel they cannot view.
+- **No anonymous mass-reports.** RENEX will not let a coordinated AI swarm flag a human into oblivion. Reports are linked to accounts and reviewed individually.
+
+**What we don't promise:**
+
+We do not promise 100% AI-free communication. We can't. New jailbreaks appear weekly. Voice cloning is now a desktop application. We will lose some battles.
+
+What we promise is that we keep fighting. Every layer we add — every captcha, every rate limit, every "we just won't build that" decision — is recorded in this manifesto, in our changelog, and in our code.
+
+If you find a way humans can verify other humans without violating their privacy: **tell us**. We will ship it.
+
+Until then: this is a forever arms race. We have chosen our side.
+
+---
+
 ## What we admit
 
 We don't lie. Three honest points:
@@ -129,7 +169,9 @@ Passkey-only is vision-consistent, but WebAuthn is not pain-free everywhere in 2
 
 ### 3. Anti-AI is best-effort
 
-We can't guarantee that no bot ever slips through. We can guarantee we do everything for it: hardware attestation, behavioral analysis, captcha hardening, immediate ban on violation. The Terms are explicit. Whoever runs AI on RENEX anyway is banned — without prior warning.
+See "How we resist (transparently)" above for the active defenses we ship. This admission emphasizes the limitation: even with those defenses, we cannot guarantee zero AI on the platform. New techniques appear faster than we ship counter-mechanisms. We will not pretend otherwise.
+
+The Terms are explicit. Whoever runs AI on RENEX anyway is banned — without prior warning. That is policy, not detection. We catch the ones we catch. We don't catch all.
 
 ---
 
@@ -211,12 +253,12 @@ We can keep the promise because we have nothing to protect except the promise.
 
 Not fully. Nobody can. We raise the **cost per fake identity**:
 
-- Turnstile captcha → ~$0.001/solve (low barrier)
-- Passkey registration → real device + biometric setup, ~5 min of human work per account
-- Rate limits + behavioral signals → doesn't scale for farms
-- Hardware attestation (roadmap Phase 9) → bypass costs ~$200/device
+- **Turnstile captcha on every signup, every server creation, every invite acceptance.** Live as of 2026-06-01. ~$0.001/solve as a baseline, but compounding across three gates a bot must cross.
+- **Passkey registration** → real device + biometric setup, ~5 min of human work per account. Cannot be batch-automated without thousands of physical devices.
+- **Per-endpoint rate limits + audit logs** → bot farms cannot scale operations silently. Every mass action leaves a trace.
+- **Hardware attestation (roadmap Phase 9)** → bypass costs ~$200/device, brings account cost to roughly the same as a Discord Nitro yearly subscription. At that point, why bot us?
 
-Realistically: we push account cost from ~$0 (email signup elsewhere) to ~$5–50 today, with Phase 9 to ~$200. That makes spam economically unattractive. Enough for a community platform.
+Realistically: account cost goes from ~$0 (email signup elsewhere) to ~$5–50 today, with Phase 9 toward ~$200. That makes spam economically unattractive. Enough for a community platform.
 
 "Sybil-resistant" would be a lie. "Sybil-expensive" is the truth.
 
@@ -225,10 +267,11 @@ Realistically: we push account cost from ~$0 (email signup elsewhere) to ~$5–5
 We don't. We make automation expensive.
 
 - **Architecturally:** no public API, no webhooks, no bot tokens. RENEX is not scriptable without reverse engineering plus a captcha farm.
-- **Technically:** passkey + hardware attestation + captcha + rate limits → high setup cost per fake.
-- **Socially:** explicit Terms, immediate ban, "Pure Human Verified" badge as a community signal.
+- **Technically:** passkey + hardware attestation (Phase 9) + Turnstile on three gates + rate limits → high setup cost per fake.
+- **Socially:** explicit Terms, immediate ban, audit-log accountability for moderators.
+- **Experientially (Phase 6.5 onwards):** Pulse. An ambient presence layer that makes the human on the other side visible — through micro-motion, typing energy, device shake. Not authentication. A *belief layer*. Bots have no pulse. See [`PULSE.md`](./PULSE.md).
 
-We don't prove humanity — we make automation uneconomical. That's intellectually honest. Any stronger statement would be marketing, and marketing promises break in court and on Reddit.
+We don't prove humanity — we make automation uneconomical and human presence sensorially apparent. That's intellectually honest. Any stronger statement would be marketing, and marketing promises break in court and on Reddit.
 
 ### 4. Why would communities switch from Discord?
 

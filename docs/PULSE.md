@@ -712,6 +712,140 @@ Wenn neue offene Punkte beim Phase-6.5-Sprint auftauchen, hier dokumentieren —
 
 ---
 
+## 19. Manifesto-Integration — "Why Pulse" Pre-Draft (publishes after Phase 6.5 Ship)
+
+**Status:** Vorgelagerter Brand-Statement-Text, NICHT in MANIFESTO.md publiziert bis Pulse live ist. Vermeidet Vaporware-PR. Sobald Phase 6.5 deployed + smoke-tested ist, wird dieser Text als neue Top-Level-Sektion in MANIFESTO.md eingefügt — Position: zwischen "How we resist (transparently)" und "What we admit" (vor §6.3).
+
+### Pre-Draft EN — "Why Pulse"
+
+> Discord shows typing dots. iMessage shows three pulsing bubbles. Slack turns your
+> avatar into a green circle. These are signals from 2008.
+>
+> RENEX shows your *pulse*.
+>
+> When you chat with someone on RENEX, you can see them. Not their words — the
+> *energy* with which they're sending those words. Are they typing slowly,
+> thinking? Are they fast and excited? Did they just put their phone down? Are
+> they nervous, hesitating, about to send something hard?
+>
+> You see it. In ambient particles, in soft pulses, in foam when they shake their
+> phone in mock-frustration. You feel that there's a human breathing on the other
+> side.
+>
+> This is not a typing indicator. This is not "presence" in the Microsoft Teams
+> sense. This is *embodied digital presence* — the first time text chat has tried
+> to communicate that the other side is *alive*.
+>
+> **Why we built this:**
+>
+> Because AI-generated text is now indistinguishable from human-generated text.
+> The Turing test is over. ChatGPT won. We can't fight this on the content layer.
+>
+> So we moved the fight to the *body* layer. Bots type. Humans tremble. Humans
+> drum fingers. Humans hold their breath before sending something vulnerable.
+> Humans shake their phone in joy.
+>
+> We can't (yet) prove cryptographically that a Pulse-stream comes from a human.
+> We're not trying to. Pulse is not authentication. It's *belief*.
+>
+> And belief, in the end, is what holds communities together.
+>
+> **What we promise:**
+>
+> - Your pulse never leaves your device as raw data.
+> - Only an abstracted scalar (0.0 to 1.0) crosses the wire, end-to-end-encrypted.
+> - We don't store pulse history. Ever. Each session begins from zero.
+> - We don't profile your pulse patterns. Ever.
+> - You can turn Pulse off, per-conversation, in two clicks.
+>
+> **What we don't promise:**
+>
+> We don't promise that a bot can't fake a pulse. Sophisticated motion-modeling
+> will eventually fake it convincingly. We promise that the engineering cost of
+> doing so makes commodity bot-spam economically irrational on RENEX.
+>
+> For the rare attacker who builds a human-movement-modeled bot army to spam us:
+> you are now spending more compute on bot-spam than legitimate humans spend on
+> RENEX. We have already won that fight, even though we lost the arrest.
+>
+> Pulse is brand-statement, brand-experience, and brand-defense in one. And as
+> far as we can tell, no other messenger on the planet has it.
+>
+> We're not waiting for someone else to make this real. We're shipping it.
+
+### Pre-Draft DE — „Warum Pulse"
+
+> Discord zeigt Tipp-Punkte. iMessage zeigt drei pulsierende Bubbles. Slack
+> macht deinen Avatar zu einem grünen Kreis. Das sind Signale aus 2008.
+>
+> RENEX zeigt deinen *Pulse*.
+>
+> Wenn du auf RENEX mit jemandem chattest, siehst du ihn. Nicht seine Worte — die
+> *Energie*, mit der er diese Worte sendet. Tippt er langsam, nachdenkend? Ist er
+> schnell und aufgeregt? Hat er gerade das Phone weggelegt? Ist er nervös, zögert,
+> kurz davor etwas Schweres zu schicken?
+>
+> Du siehst es. In ambient Partikeln, in sanften Pulsen, in Schaum, wenn er sein
+> Phone in mock-Frust schüttelt. Du spürst, dass auf der anderen Seite ein Mensch
+> atmet.
+>
+> Das ist kein Tipp-Indikator. Das ist nicht „Presence" im Microsoft-Teams-Sinn.
+> Das ist *embodied digital presence* — das erste Mal, dass Text-Chat versucht zu
+> kommunizieren, dass die andere Seite *lebt*.
+>
+> **Warum wir das gebaut haben:**
+>
+> Weil KI-generierter Text mittlerweile von menschlich-generiertem Text nicht mehr
+> zu unterscheiden ist. Der Turing-Test ist vorbei. ChatGPT hat gewonnen. Wir
+> können diesen Kampf auf der Content-Schicht nicht gewinnen.
+>
+> Also haben wir den Kampf auf die *Körper*-Schicht verlegt. Bots tippen. Menschen
+> zittern. Menschen trommeln Finger. Menschen halten den Atem an, bevor sie etwas
+> Verletzliches schicken. Menschen schütteln ihr Phone vor Freude.
+>
+> Wir können (noch) nicht kryptographisch beweisen, dass ein Pulse-Stream von
+> einem Menschen kommt. Wir versuchen es nicht. Pulse ist keine Authentifizierung.
+> Es ist *Belief*.
+>
+> Und Belief ist am Ende das, was Communities zusammenhält.
+>
+> **Was wir versprechen:**
+>
+> - Dein Pulse verlässt dein Gerät niemals als Rohdaten.
+> - Nur ein abstrahierter Skalar (0.0 bis 1.0) geht über die Leitung, end-to-end-verschlüsselt.
+> - Wir speichern keine Pulse-Historie. Niemals. Jede Session beginnt bei null.
+> - Wir profilieren deine Pulse-Patterns nicht. Niemals.
+> - Du kannst Pulse pro Konversation in zwei Klicks ausschalten.
+>
+> **Was wir nicht versprechen:**
+>
+> Wir versprechen nicht, dass ein Bot keinen Pulse faken kann. Sophistizierte
+> Motion-Modelling wird ihn irgendwann überzeugend faken. Wir versprechen, dass
+> die Engineering-Kosten dafür Commodity-Bot-Spam auf RENEX ökonomisch irrational
+> machen.
+>
+> Für den seltenen Angreifer, der eine human-movement-modellierte Bot-Armee baut,
+> um uns zu spammen: du gibst jetzt mehr Compute für Bot-Spam aus, als legitime
+> Menschen für RENEX ausgeben. Wir haben diesen Kampf schon gewonnen, auch wenn
+> wir die Festnahme verloren haben.
+>
+> Pulse ist Brand-Statement, Brand-Erlebnis und Brand-Verteidigung in einem. Und
+> soweit wir wissen, hat kein anderer Messenger auf dem Planeten das.
+>
+> Wir warten nicht, dass jemand anderes das Realität macht. Wir shippen es.
+
+### Trigger für Manifesto-Einfügung
+
+| Bedingung | Action |
+|---|---|
+| Pulse Phase 6.5 deployed + smoke-tested grün | EN-Block in MANIFESTO.md einfügen zwischen „How we resist" und „What we admit" |
+| Gleichzeitig: DE-Block in MANIFESTO_DE.md spiegeln (gleiche Position) | |
+| Manifesto Version bump v1.4 → v1.5, Last-Updated-Datum auf Ship-Date | |
+| Cross-Reference von PULSE.md zu MANIFESTO §X "Why Pulse" hinzufügen | |
+| Decision-Log-Eintrag hier (PULSE.md §15) mit Datum der Manifesto-Integration | |
+
+---
+
 ## 17. Glossary
 
 - **Pulse:** Der abstrahierte Skalar `0.0–1.0` der die aktuelle Bewegungs-Energie eines Users repräsentiert.

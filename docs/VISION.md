@@ -4,7 +4,7 @@
 
 **Status:** Living document
 **Version:** 1.0
-**Letzte Aktualisierung:** 2026-06-01
+**Letzte Aktualisierung:** 2026-06-02
 **Autor:** Bruno Hochstrasser
 
 ---
@@ -485,12 +485,46 @@ Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 - CI eingerichtet (GitHub Actions) — Tag-3 vor Launch
 
 ### Phase 6 — Brand & Launch-Prep *(Wo 4-5: 2026-06-09 → 2026-06-15, vorgezogen von Wo 7)*
+
+> Hinweis: zwischen Phase 6 und Phase 7 ist [Phase 6.5 Pulse](#phase-65--pulse-presence-layer) eingeschoben.
+> Falls Phase 6 länger braucht: Phase 7 um 1 Woche schieben, Pulse darf nicht skippen.
 - Landing-Page Redesign
 - Demo-Video + GIF für PWA-Install-Onboarding
 - Press-Kit
 - Founder's Pass-System (Stripe)
 - AGB rechtssicher (Anti-AI Best-Effort-Klausel + Schweizer DSG-Auskunftsrecht via Audit-Log)
 - Manifesto öffentlich
+
+### Phase 6.5 — Pulse (Presence Layer) ✨ *(Wo 6: 2026-06-16 → 2026-06-22, neu eingeschoben 2026-06-02)*
+**Brand-defining ambient sensorische Schicht über 1:1-DM.** Mikro-Bewegungen (Maus, Touch, Acceleromter, Tippgeschwindigkeit) → abstrakte „Pulse"-Energie `0.0–1.0` → Canvas-2D-Partikel-Visualisierung. Sender + Empfänger sehen visualisiertes Lebenszeichen des Gegenübers.
+
+**Strategische Positionierung:**
+- KEIN Captcha-Replacement, KEIN Anti-Bot-Gate — sondern **Belief-Layer**. „Wenn du mit jemandem chattest, siehst du dass er atmet. Bots haben keinen Pulse."
+- Macht RENEX's „For Humans. By Humans." von Slogan zu fühlbarer Erfahrung.
+- TikTok-viral-ready (3 Demo-Clip-Konzepte geplant).
+- Anti-AI-Story bekommt visceral Demo-Material — niemand sonst hat das.
+
+**MVP-Scope (Wo 6, 1 Woche):**
+- 1:1-DM only (Group-Pulse + Voice-Sync deferred Phase 8)
+- PWA-only (PC + iOS-PWA + Android-PWA)
+- Desktop-Inputs (Maus, Wheel, Tippen) + Mobile-Inputs (Touch, Acceleromter mit iOS-Permission-Flow)
+- 4 Emotion-States (calm/active/excited/foam) mit Hysterese-FSM
+- Cross-Device-Sync via existing Session-CMK Pipeline (kein neues Crypto, E2E intakt)
+- Per-Chat Opt-In (`localStorage` per Peer, niemals KV-Sync)
+- Battery-Mitigations (pause auf `document.hidden`, auto-reduce <20% Akku, `prefers-reduced-motion` Fallback)
+
+**Hardrules (im Spec festgenagelt):**
+- Pulse-Abwesenheit ist NIE Bot-Indikator (Accessibility — EU-Accessibility-Act, ADA)
+- Kein DB-Write (transient WS-only)
+- NUR `{ energy: float, mode: enum }` über die Leitung — niemals Raw-Inputs (Privacy)
+- Pulse hat KEINEN Authority-Status für Auth-Pfade
+
+**Trade-off mit Phase 7:** Wenn Phase 6 nicht in 2 Wo fertig wird → Phase 7 um 1 Wo schieben (Ende Juni → Anfang Juli). Pulse darf nicht skippen, weil:
+1. Beta-Launch-Marketing-Story (HN/Reddit/TikTok) braucht visuellen Differenziator
+2. Phase 8 erweitert es eh (Voice-Sync, Group), MVP muss vorher live sein
+3. Anti-AI-Brand-Pitch ohne Pulse ist nur „wir haben Captcha", was Discord/Slack auch haben
+
+**Detail-Spec:** [`PULSE.md`](./PULSE.md) Stable v0.1, mit Decision-Log + Threat-Model-Update + 5 Open Questions für nächste Brainstorm-Runde.
 
 ### Phase 7 — Public Beta-Launch 🚀 *(Ende Juni 2026, vorgezogen von Mitte/Ende Juli)*
 - Erste 50-1000 Beta-User
@@ -648,6 +682,8 @@ Wenn eine strategische Entscheidung geändert wird, hier dokumentieren:
 | 2026-05-20 | **Phase 2 vorziehen** (Open-Source-Launch) | (A) Original-Plan Wo 5-6 (2026-06-16+) / (B) sofort, parallel zu Phase 3A | **B** | Phase 1 ist stabil deployed, PROTOCOL.md ist Stable v1.0, Voice 1:1 (Phase 8a) ist live. Open-Source-Repo schon vor Beta-Launch zu öffnen schafft Reddit/HN-Visibility, GitHub-Stars als Social-Proof + zieht erste Contributors an. Trade-off: Phase 3A (Server/Channels-Polish) wird public sichtbar während Work-in-Progress — akzeptabel mit „Pre-Beta"-Status-Disclaimer. 8-Tage-Sprint 2026-05-20 → 2026-05-27. |
 | 2026-05-28 | **Roadmap-Acceleration nach Phase 3A** | Beta Mitte/Ende Juli 2026 (Pivot 2026-05-13) | **Ende Juni 2026** (~3 Wo weiter vorgezogen) | Phase 3A 3 Wo vor Plan fertig (2026-05-27), Phase 2 (Open Standard) parallel mitgeshipped statt Wo 5-6, Phase 3A.5 in 1 Tag teil-shipped (3 von 7 Items: transfer, PATCH name/desc, account-delete pre-check). Tempo hält, Foundation ist solid (461/461 vitest grün, 0 vulnerabilities nach grouped Dependabot bump). Phase 5-Light Wo 5 → Wo 2, Phase 6 Wo 7 → Wo 4, Phase 7 Mitte/Ende Juli → Ende Juni, Phase 8 Aug-Nov → Juli-Okt, Phase 9 Q4 2026-Q1 2027 → Q3-Q4 2026. Trade-off: Phase 5-Light Captcha (Turnstile) hat Async-Dependency (CF-Dashboard-Setup Sitekey/Secret), könnte temporär blocken. Foundation-Lessons im Memory festgehalten: kein git in iCloud, push vor deploy, wrangler.toml braucht fresh-clones manuell. |
 | 2026-06-01 | **Phase 3A.5 COMPLETE — 7/7** | Phase 3A.5 5/7 (nach Ban-System 2026-05-29) | **7/7 — komplettes deferred-Set aus Phase 3A geschlossen** | Sechstes Item Private Channels in 1 Session shipped (backend permission-override CRUD + getVisibleChannelIds server-side filter + ChannelEditModal frontend), siebtes Item Tier-Limits in 30min shipped (KV `user:tier:<handle>`, getUserTier helper, tier-aware createServer limit). Codebase-weiter pushToUserDO-Audit fixierte 7 weitere fire-and-forget Bugs (Multi-Device-Sync). 461/461 vitest stable, vite build clean nach jeder Deploy. ~5 Kalendertage von 3/7 (2026-05-28) bis 7/7 (2026-06-01). Roadmap-Status: Phase 3A.5 vollständig abgehakt — nächstes: Phase 5-Light Captcha (geplant Wo 2-3 = 2026-05-26 → 2026-06-01, also DEUTLICH overdue per Roadmap, sollte als nächstes geschoben werden) ODER Phase 6 Prep (Brand & Launch). Phase 3A.5 hat 4 dauerhafte CF-Workers-Memory-Lessons hinzugefügt: iCloud + git, push-vor-deploy, wrangler.toml not in repo, pushToUserDO await sub-requests. |
+| 2026-06-01 | **Phase 5-Light Captcha LIVE** | Phase 5-Light geplant Wo 2-3 (overdue) | **Shipped on-time per pivot, Roadmap on-track** | Cloudflare Turnstile auf POST `/servers/create` + POST `/servers/join/<token>`. Wiederverwendung der existing verifyTurnstile-Infrastruktur aus Phase 1A (Register-Flow) — keine CF-Dashboard-Änderung nötig. Neuer ServerJoinModal ersetzt nativen `confirm()`-Dialog (UX-Win plus Captcha-Ready in einem Schritt). 9 i18n Strings DE/EN/ES. Hardware-Attestation + Behavioral-Analysis bleiben weiterhin Phase 9 per ursprünglichem Decision. |
+| 2026-06-02 | **Phase 6.5 Pulse eingeschoben** | Phase 6 → Phase 7 direkt | **Phase 6 → Phase 6.5 Pulse → Phase 7** | Brand-Brainstorm mit Bruno: ambient sensorische Visualisierungs-Schicht über 1:1-DM (Pulse-Energy aus Maus/Touch/Acceleromter/Tippen → Canvas-2D-Partikel). Brand-defining für „For Humans. By Humans." Anti-AI-Story bekommt visuelles Demo-Material für TikTok/HN-Launch. KEIN Captcha-Replacement (Belief-Layer, kein Auth-Gate). MVP 1 Wo (Wo 6 = 2026-06-16 → 2026-06-22) zwischen Phase 6 Brand-Prep und Phase 7 Beta-Launch. Trade-off: falls Phase 6 nicht in 2 Wo fertig → Phase 7 um 1 Wo schieben (Ende Juni → Anfang Juli), Pulse darf nicht skippen weil ohne ihn Beta-Launch-Story ohne visuellen Differenziator. Detail-Spec: [`PULSE.md`](./PULSE.md) v0.1 mit 13 Decisions + 5 Open Questions. |
 
 ---
 

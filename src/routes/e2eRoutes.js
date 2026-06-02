@@ -473,7 +473,7 @@ export async function handleE2eRoutes(request, env, path, params) {
         return json(request, {
           challenge: r.challenge,
           allowCredentials: r.allowCredentials,
-          rpId: 'app.renex.id',
+          rpId: 'renex.id',
         });
       }
       break;

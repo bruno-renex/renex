@@ -78,7 +78,7 @@ export async function handleLoginFinish(request, env) {
     return json(request, { error: "Invalid WebAuthn type" }, 400);
   }
 
-  if (clientData.origin !== "https://app.renex.id") {
+  if (!["https://renex.id", "https://app.renex.id"].includes(clientData.origin)) {
     await env.RENEX_KV.delete(`challenge:login:${handle}`);
     return json(request, { error: "Invalid origin" }, 400);
   }
@@ -119,7 +119,7 @@ export async function handleLoginFinish(request, env) {
   // RP ID Hash
   const rpIdHash = authData.slice(0, 32);
   const expectedHash = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode("app.renex.id"))
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode("renex.id"))
   );
 
   for (let i = 0; i < 32; i++) {

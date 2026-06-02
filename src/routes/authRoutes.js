@@ -140,7 +140,8 @@ export async function handleAuthRoutes(request, env, path, params) {
 
             rp: {
               name: "RENEX",
-              id: "app.renex.id"
+              // Apex renex.id deckt renex.id + app.renex.id ab (Brand-Apex-Migration 2026-06).
+              id: "renex.id"
             },
 
             user: {
@@ -208,7 +209,7 @@ export async function handleAuthRoutes(request, env, path, params) {
           return json(request, { error: "Invalid WebAuthn type" }, 400);
         }
 
-        if (clientData.origin !== "https://app.renex.id") {
+        if (!["https://renex.id", "https://app.renex.id"].includes(clientData.origin)) {
           await env.RENEX_KV.delete(`challenge:register:${handle}`);
           return json(request, { error: "Invalid origin" }, 400);
         }
@@ -388,7 +389,7 @@ export async function handleAuthRoutes(request, env, path, params) {
         return json(request, {
           publicKey: {
             challenge: challengeB64,
-            rpId: "app.renex.id",
+            rpId: "renex.id",
 
             allowCredentials: credentials.map(c => ({
               type: "public-key",

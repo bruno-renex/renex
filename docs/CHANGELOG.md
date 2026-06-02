@@ -4,6 +4,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-02 — Brand-Apex `renex.id` + WebAuthn RP-ID-Migration 🌐
+
+`renex.id` (Apex) wird als Brand-Host auf das `renex-static` Pages-Projekt
+gelegt. Da die Landing zugleich die Login-Seite ist und Passkeys host-gebunden
+waren, wird die WebAuthn RP-ID auf den Apex migriert — solange das Pre-Beta-
+Fenster es noch billig macht.
+
+### ⚠️ Breaking
+- **Bestehende `app.renex.id`-Passkeys verifizieren nicht mehr.** RP-ID ist
+  jetzt `renex.id`. Migration: eingeloggt bleiben → unter „Add passkey" einen
+  neuen Passkey registrieren (gilt dann auf beiden Hosts), alter wird tot.
+
+### ✏️ Changed
+- **WebAuthn RP-ID `app.renex.id` → `renex.id`** (registrierbarer Apex, deckt
+  `renex.id` + `app.renex.id` ab): `authRoutes.js` (rp.id + assertion rpId),
+  `e2eRoutes.js` (re-auth rpId), `webauthnVerify.js` (RP_ID + rpIdHash),
+  `loginFinish.js` (rpIdHash-Digest).
+- **Origin-Checks → Allowlist beider Hosts** (`https://renex.id` +
+  `https://app.renex.id`) in `webauthnVerify.js`, `loginFinish.js`,
+  `authRoutes.js`.
+- **CORS-Allowlist** (`utils.js`): `https://renex.id` ergänzt — sonst würden
+  API-Calls vom Apex an `api.renex.id` geblockt.
+
+### ✨ Added (SEO-Grundlagen für renex.id)
+- `frontend/index.html`: `rel=canonical https://renex.id/`, meta description,
+  `robots index,follow`, OG-/Twitter-Card-Tags (Fallback-Image `icon-512.png`).
+- `robots.txt` + `sitemap.xml` (/, /manifesto, /manifest-de mit hreflang).
+
+### 📋 Deferred
+- Invite/Join-Deep-Links (`inviteRoutes.js`, `serverRoutes.js`, `chatSend.js`)
+  zeigen noch auf `app.renex.id` — funktional ok, Brand-Konsistenz später.
+
+---
+
 ## 2026-06-02 — Manifesto v1.6 — Privacy-Honesty-Pass 🔒
 
 Datenschutz-Audit (Bruno) deckte zwei Manifesto↔Code-Widersprüche auf:

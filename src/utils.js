@@ -2,7 +2,8 @@
 // CORS / Origin-Allowlist
 // =========================
 // Single Source of Truth für Allowed-Origins.
-// - app.renex.id          → Production Vanilla
+// - renex.id              → Brand-Apex (Phase 6, deckt auch Login/App via RP-ID renex.id)
+// - app.renex.id          → Production App-Host
 // - renex-static.pages.dev → Pages-Project alt (Vanilla)
 // - renex-svelte.pages.dev → Pages-Project Svelte (Phase 1A.6 Migration)
 // - <hash>.renex-svelte.pages.dev → per-Deploy Preview-URLs (Cloudflare Pages)
@@ -11,6 +12,7 @@ const PAGES_DEPLOY_RE = /^https:\/\/[a-z0-9-]+\.renex-svelte\.pages\.dev$/;
 
 function isAllowedOrigin(origin) {
   if (!origin) return false;
+  if (origin === "https://renex.id") return true;
   if (origin === "https://app.renex.id") return true;
   if (origin === "https://renex-static.pages.dev") return true;
   if (origin === "https://renex-svelte.pages.dev") return true;

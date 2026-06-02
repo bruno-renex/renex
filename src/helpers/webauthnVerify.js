@@ -14,8 +14,10 @@
 import { base64url, base64urlToString, base64urlToArrayBuffer, derToRawECDSA } from '../utils.js';
 import { readCredentials } from './credentials.js';
 
-const RP_ID = 'app.renex.id';
-const EXPECTED_ORIGIN = 'https://app.renex.id';
+// RP-ID = registrierbarer Apex renex.id → deckt renex.id UND app.renex.id ab,
+// damit Passkeys auf beiden Hosts gelten (Brand-Apex-Migration 2026-06).
+const RP_ID = 'renex.id';
+const ALLOWED_ORIGINS = ['https://renex.id', 'https://app.renex.id'];
 const CHALLENGE_MAX_AGE_MS = 5 * 60 * 1000;  // 5 min
 
 /**
@@ -64,7 +66,7 @@ export async function verifyWebAuthnAssertion(env, { challengeKey, handle, asser
   if (clientData.type !== 'webauthn.get') {
     return { ok: false, error: 'Invalid WebAuthn type' };
   }
-  if (clientData.origin !== EXPECTED_ORIGIN) {
+  if (!ALLOWED_ORIGINS.includes(clientData.origin)) {
     return { ok: false, error: 'Invalid origin' };
   }
   if (clientData.challenge !== challengeObj.challenge) {

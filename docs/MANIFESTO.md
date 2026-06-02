@@ -2,7 +2,7 @@
 
 > **PASSKEY-ONLY. HUMAN-FIRST. OPEN-STANDARD.**
 
-**Version:** 1.5
+**Version:** 1.6
 **Last updated:** 2026-06-02
 **License:** CC BY 4.0 — you may quote this manifesto with attribution.
 **Translations:** [Deutsch](./MANIFESTO_DE.md)
@@ -79,12 +79,12 @@ Anyone may build a RENEX-compatible server. Anyone may build a client. Lock-in i
 The server learns the absolute minimum.
 
 - E2E encryption is not optional. Not in groups. Not in voice.
-- Contact lists live on your device, not in a cloud index.
+- Contacts are tied to your account, not to a phone number or email.
 - No ads. No trackers. No "analytics because we need them".
 - Swiss data-protection standard (DSG + GDPR).
 - Logs are not retained beyond the technically necessary.
 
-If law enforcement knocks: we have nothing they want. That's architecture, not politics.
+If law enforcement knocks: we can't hand over message or call content — it's E2E-encrypted. Metadata — who talks to whom, and when — is visible server-side today; we don't hide that (see [`THREAT_MODEL.md`](./THREAT_MODEL.md)), and we're working to minimize it.
 
 ### 5. Built for humans, not enterprise
 
@@ -152,7 +152,7 @@ Until then: this is a forever arms race. We have chosen our side.
 
 ## What we admit
 
-We don't lie. Three honest points:
+We don't lie. Four honest points:
 
 ### 1. Cloudflare lock-in (today)
 
@@ -169,6 +169,12 @@ Passkey-only is vision-consistent, but WebAuthn is not pain-free everywhere in 2
 See "How we resist (transparently)" above for the active defenses we ship. This admission emphasizes the limitation: even with those defenses, we cannot guarantee zero AI on the platform. New techniques appear faster than we ship counter-mechanisms. We will not pretend otherwise.
 
 The Terms are explicit. Whoever runs AI on RENEX anyway is banned — without prior warning. That is policy, not detection. We catch the ones we catch. We don't catch all.
+
+### 4. Metadata is visible server-side today
+
+Content is safe: messages and calls are E2E-encrypted, the server cannot read them. But the *metadata* — who talks to whom, when, group memberships, the contact graph — is visible server-side in D1 today. Our own [`THREAT_MODEL.md`](./THREAT_MODEL.md) rates this honestly; we will not pretend otherwise, and we are weaker here than Signal's sealed-sender model.
+
+This is the next frontier, not a solved problem. On the roadmap: **sealed-sender** (the server stops learning who sent what), **delete-after-delivery** for message envelopes, and **client-side-encrypted contact lists**. Until those ship, assume the server can correlate metadata. We'd rather tell you that than market a guarantee we can't keep.
 
 ---
 

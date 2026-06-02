@@ -269,7 +269,7 @@ details.faq[open] summary::before{content:"−"}
     <ol><li><a href="#warum-jetzt">Warum jetzt</a></li><li><a href="#was-wir-bauen">Was wir bauen</a></li><li><a href="#warum">Warum</a></li><li><a href="#die-5-prinzipien">Die 5 Prinzipien</a></li><li><a href="#was-wir-niemals-tun-werden">Was wir niemals tun werden</a></li><li><a href="#wie-wir-uns-wehren-transparent">Wie wir uns wehren (transparent)</a></li><li><a href="#was-wir-zugeben">Was wir zugeben</a></li><li><a href="#was-renex-ist-was-es-nicht-ist">Was RENEX ist, was es nicht ist</a></li><li><a href="#an-verbundete">An Verbündete</a></li><li><a href="#an-die-andere-seite">An die andere Seite</a></li><li><a href="#an-die-zukunft">An die Zukunft</a></li><li><a href="#anhang-a-skeptiker-faq">Anhang A: Skeptiker-FAQ</a></li></ol>
   </aside>
   <main id="content">
-<div class="meta-line"><strong>Version:</strong> 1.5 · <strong>Letzte Aktualisierung:</strong> 2026-06-02 · <strong>Lizenz:</strong> CC BY 4.0 — du darfst dieses Manifest mit Quellenangabe zitieren.</div>
+<div class="meta-line"><strong>Version:</strong> 1.6 · <strong>Letzte Aktualisierung:</strong> 2026-06-02 · <strong>Lizenz:</strong> CC BY 4.0 — du darfst dieses Manifest mit Quellenangabe zitieren.</div>
 <section class="ms" id="warum-jetzt"><h2>Warum jetzt</h2><p>RENEX ist nicht „noch ein Messenger&quot;. RENEX ist eine philosophische Antwort auf ein zunehmend KI-generiertes Internet.</p>
 <p>Wir bauen nicht <em>gegen</em> KI. Wir bauen <em>für</em> Menschen, in einer Zeit, in der die Unterscheidung zwischen beiden verschwimmt. Wenn du in fünf Jahren mit jemandem auf RENEX sprichst, sollst du wissen: auf der anderen Seite sitzt ein Mensch.</p>
 <p><strong>Wir beweisen Menschsein nicht — wir machen Automatisierung teuer.</strong> Das ist der ehrliche Kern von allem, was folgt. Keine Garantie, dass jeder Account ein Mensch ist, sondern eine Plattform, die so gebaut ist, dass sich Fälschen selten lohnt. Lies den Rest mit diesem Rahmen: jede Aussage hier ist ein Kampf, den wir führen, kein Versprechen, das wir längst gewonnen hätten.</p>
@@ -303,12 +303,12 @@ details.faq[open] summary::before{content:"−"}
 </div><div class="principle-card"><h3>4. Datenschutz by default</h3><p>Der Server erfährt das absolute Minimum.</p>
 <ul>
 <li>E2E-Verschlüsselung ist nicht optional. Nicht in Gruppen. Nicht im Voice.</li>
-<li>Kontaktlisten leben auf deinem Gerät, nicht in einem Cloud-Index.</li>
+<li>Kontakte sind an deinen Account gebunden, nicht an Telefonnummer oder E-Mail.</li>
 <li>Keine Werbung. Keine Tracker. Keine „Analytics, weil wir sie brauchen&quot;.</li>
 <li>Schweizer Datenschutzstandard (DSG + DSGVO).</li>
 <li>Logs werden nicht über das technisch Notwendige hinaus aufbewahrt.</li>
 </ul>
-<p>Wenn die Strafverfolgung anklopft: wir haben nichts, was sie wollen. Das ist Architektur, keine Politik.</p>
+<p>Wenn die Strafverfolgung anklopft: Nachrichten- und Anrufinhalte können wir nicht herausgeben — sie sind E2E-verschlüsselt. Metadaten — wer wann mit wem — sind heute server-seitig sichtbar; wir verstecken das nicht (siehe <a href="https://github.com/bruno-renex/renex/blob/main/docs/THREAT_MODEL.md"><code>THREAT_MODEL.md</code></a>) und arbeiten daran, sie zu minimieren.</p>
 </div><div class="principle-card"><h3>5. Für Menschen gebaut, nicht für Enterprise</h3><p>Wir bauen keinen Enterprise-Compliance-Messenger. Wir bauen für Communities aus Menschen, die abhängen wollen, nicht Tickets abarbeiten.</p>
 <p>Das macht Performance zum Feature, nicht zum Luxus: niedrige Latenz, Voice mit Drop-in, Push-to-Talk, Screen-Sharing — das, worin Echtzeit-Communities tatsächlich leben. Keine aufgeblähte native App; eine schnelle PWA respektiert dein Gerät und deine Zeit.</p>
 <p>Performance &gt; Schnickschnack. Geschwindigkeit ist, wie wir den Menschen auf der anderen Seite respektieren.</p>
@@ -339,12 +339,14 @@ details.faq[open] summary::before{content:"−"}
 <p>Wenn du einen Weg findest, mit dem Menschen andere Menschen verifizieren können, ohne deren Privatsphäre zu verletzen: <strong>sag&#39;s uns</strong>. Wir shippen es.</p>
 <p>Bis dahin: das ist ein ewiger Wettkampf. Wir haben unsere Seite gewählt.</p>
 </section>
-<section class="ms" id="was-wir-zugeben"><h2>Was wir zugeben</h2><p>Wir lügen nicht. Drei ehrliche Punkte:</p>
+<section class="ms" id="was-wir-zugeben"><h2>Was wir zugeben</h2><p>Wir lügen nicht. Vier ehrliche Punkte:</p>
 <h3>1. Cloudflare-Lock-in (heute)</h3><p>Der Reference-Server läuft auf Cloudflare Workers, D1, KV, R2, Durable Objects. Das ist <strong>Lock-in für die Reference-Implementierung</strong>, nicht für das Protokoll. Jeder kann einen RENEX-kompatiblen Server auf eigener Infra bauen — die Spec schreibt nicht vor, wo sie läuft.</p>
 <p>Wenn Cloudflare uns morgen droppt: das Protokoll überlebt. User-Daten sind E2E-verschlüsselt und portierbar.</p>
 <h3>2. WebAuthn-Coverage</h3><p>Passkey-only ist vision-konsistent, aber WebAuthn ist 2026 nicht überall schmerzfrei. Cross-Device-Passkeys via Bluetooth/QR sind manchmal wackelig, manche Browser haben raue Kanten. Wir akzeptieren das, weil die Alternative (E-Mail-Auth) den Brand-Kern komplett bricht.</p>
 <h3>3. Anti-KI ist Best-Effort</h3><p>Siehe „Wie wir uns wehren (transparent)&quot; oben für die aktiven Verteidigungen, die wir shippen. Diese Admission betont die Limitierung: selbst mit diesen Verteidigungen können wir nicht Null-KI auf der Plattform garantieren. Neue Techniken erscheinen schneller, als wir Counter-Mechanismen shippen. Wir tun nicht so.</p>
 <p>Die AGB sind explizit. Wer trotzdem KI auf RENEX laufen lässt, wird gesperrt — ohne Vorwarnung. Das ist Policy, keine Detektion. Wir kriegen die, die wir kriegen. Wir kriegen nicht alle.</p>
+<h3>4. Metadaten sind heute server-seitig sichtbar</h3><p>Der Inhalt ist sicher: Nachrichten und Anrufe sind E2E-verschlüsselt, der Server kann sie nicht lesen. Aber die <em>Metadaten</em> — wer wann mit wem, Gruppen-Mitgliedschaften, der Kontaktgraph — sind heute server-seitig in D1 sichtbar. Unser eigenes <a href="https://github.com/bruno-renex/renex/blob/main/docs/THREAT_MODEL.md"><code>THREAT_MODEL.md</code></a> bewertet das ehrlich; wir tun nicht so, als wäre es anders, und wir sind hier schwächer als Signals Sealed-Sender-Modell.</p>
+<p>Das ist die nächste Front, kein gelöstes Problem. Auf der Roadmap: <strong>Sealed-Sender</strong> (der Server erfährt nicht mehr, wer was gesendet hat), <strong>Delete-after-Delivery</strong> für Nachrichten-Envelopes und <strong>client-seitig verschlüsselte Kontaktlisten</strong>. Bis das ausgeliefert ist: nimm an, dass der Server Metadaten korrelieren kann. Das sagen wir dir lieber, als eine Garantie zu vermarkten, die wir nicht halten können.</p>
 </section>
 <section class="ms" id="was-renex-ist-was-es-nicht-ist"><h2>Was RENEX ist, was es nicht ist</h2><div class="table-wrap"><table><thead><tr><th>RENEX <strong>ist</strong>…</th><th>RENEX ist <strong>nicht</strong>…</th></tr></thead><tbody><tr><td data-label="RENEX ist…">Ein Messenger</td><td data-label="RENEX ist nicht…">Ein Social Network mit Feed</td></tr><tr><td data-label="RENEX ist…">Open Source</td><td data-label="RENEX ist nicht…">Eine Krypto/Web3-Wallet</td></tr><tr><td data-label="RENEX ist…">Schweizer Hosting</td><td data-label="RENEX ist nicht…">Eine anonyme Plattform</td></tr><tr><td data-label="RENEX ist…">Community-finanziert (heute)</td><td data-label="RENEX ist nicht…">VC-finanziert</td></tr><tr><td data-label="RENEX ist…">Brand-aligned mit Privacy-first</td><td data-label="RENEX ist nicht…">Ein Discord-Clone</td></tr><tr><td data-label="RENEX ist…">Eine Gegenbewegung</td><td data-label="RENEX ist nicht…">Eine Compliance-Suite</td></tr></tbody></table></div></section>
 <section class="ms" id="an-verbundete"><h2>An Verbündete</h2><p>Wir suchen Menschen, die:</p>

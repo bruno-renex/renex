@@ -4,6 +4,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-02 — Manifesto v1.6 — Privacy-Honesty-Pass 🔒
+
+Datenschutz-Audit (Bruno) deckte zwei Manifesto↔Code-Widersprüche auf:
+Kontakte werden server-seitig gespeichert, und D1 hält den vollen Metadaten-
+Graph plaintext (Inhalte sind E2E, Metadaten nicht). Korrektur auf die
+Wahrheit des eigenen [`THREAT_MODEL.md`](./THREAT_MODEL.md) — EN-Original + DE
+gespiegelt.
+
+### ✏️ Changed (MANIFESTO.md + MANIFESTO_DE.md)
+- **Kontakt-Aussage korrigiert:** „Kontaktlisten leben auf deinem Gerät, nicht
+  in einem Cloud-Index" → „Kontakte sind an deinen Account gebunden, nicht an
+  Telefonnummer oder E-Mail." Ehrlich (Kontakte liegen server-seitig in der
+  `contacts`-Tabelle), bleibt aber ein realer Vorteil.
+- **Law-Enforcement-Zeile korrigiert:** „wir haben nichts, was sie wollen" →
+  ehrlich wie das Threat-Model: Nachrichten-/Anrufinhalte nicht herausgebbar
+  (E2E), aber Metadaten (wer wann mit wem) heute server-seitig sichtbar; mit
+  Verweis auf `THREAT_MODEL.md` und „wir arbeiten daran, sie zu minimieren".
+
+### ✨ Added (MANIFESTO.md + MANIFESTO_DE.md)
+- **Neuer Admit-Punkt #4 „Metadaten sind heute server-seitig sichtbar"** in
+  der Ehrlichkeits-Sektion („Drei" → „Vier ehrliche Punkte"). Benennt die
+  Schwäche offen (schwächer als Signals Sealed-Sender) und framed die Lösung
+  als Roadmap: **Sealed-Sender**, **Delete-after-Delivery**, **client-seitig
+  verschlüsselte Kontaktlisten** — im „daran arbeiten wir"-Stil statt einer
+  Garantie, die wir nicht halten können.
+- Version 1.5 → **1.6**.
+
+### 📋 Dokumentiert
+- `VISION.md` Entscheidungs-Log: Metadaten-Minimierung als ehrliches Roadmap-
+  Item (Entscheidung A Wording jetzt / B Architektur später) festgehalten.
+
+---
+
 ## 2026-06-02 — Manifesto v1.5 — Honesty/Tone-Pass 📝
 
 Inhaltliches Review (Bruno) umgesetzt — EN-Original + DE gespiegelt. Schärft

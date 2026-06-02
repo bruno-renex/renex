@@ -2,7 +2,7 @@
 
 > **PASSKEY-ONLY. HUMAN-FIRST. OPEN-STANDARD.**
 
-**Version:** 1.5
+**Version:** 1.6
 **Letzte Aktualisierung:** 2026-06-02
 **Lizenz:** CC BY 4.0 — du darfst dieses Manifest mit Quellenangabe zitieren.
 **Übersetzungen:** [English](./MANIFESTO.md) (Original)
@@ -79,12 +79,12 @@ Jeder darf einen RENEX-kompatiblen Server bauen. Jeder darf einen Client bauen. 
 Der Server erfährt das absolute Minimum.
 
 - E2E-Verschlüsselung ist nicht optional. Nicht in Gruppen. Nicht im Voice.
-- Kontaktlisten leben auf deinem Gerät, nicht in einem Cloud-Index.
+- Kontakte sind an deinen Account gebunden, nicht an Telefonnummer oder E-Mail.
 - Keine Werbung. Keine Tracker. Keine „Analytics, weil wir sie brauchen".
 - Schweizer Datenschutzstandard (DSG + DSGVO).
 - Logs werden nicht über das technisch Notwendige hinaus aufbewahrt.
 
-Wenn die Strafverfolgung anklopft: wir haben nichts, was sie wollen. Das ist Architektur, keine Politik.
+Wenn die Strafverfolgung anklopft: Nachrichten- und Anrufinhalte können wir nicht herausgeben — sie sind E2E-verschlüsselt. Metadaten — wer wann mit wem — sind heute server-seitig sichtbar; wir verstecken das nicht (siehe [`THREAT_MODEL.md`](./THREAT_MODEL.md)) und arbeiten daran, sie zu minimieren.
 
 ### 5. Für Menschen gebaut, nicht für Enterprise
 
@@ -152,7 +152,7 @@ Bis dahin: das ist ein ewiger Wettkampf. Wir haben unsere Seite gewählt.
 
 ## Was wir zugeben
 
-Wir lügen nicht. Drei ehrliche Punkte:
+Wir lügen nicht. Vier ehrliche Punkte:
 
 ### 1. Cloudflare-Lock-in (heute)
 
@@ -169,6 +169,12 @@ Passkey-only ist vision-konsistent, aber WebAuthn ist 2026 nicht überall schmer
 Siehe „Wie wir uns wehren (transparent)" oben für die aktiven Verteidigungen, die wir shippen. Diese Admission betont die Limitierung: selbst mit diesen Verteidigungen können wir nicht Null-KI auf der Plattform garantieren. Neue Techniken erscheinen schneller, als wir Counter-Mechanismen shippen. Wir tun nicht so.
 
 Die AGB sind explizit. Wer trotzdem KI auf RENEX laufen lässt, wird gesperrt — ohne Vorwarnung. Das ist Policy, keine Detektion. Wir kriegen die, die wir kriegen. Wir kriegen nicht alle.
+
+### 4. Metadaten sind heute server-seitig sichtbar
+
+Der Inhalt ist sicher: Nachrichten und Anrufe sind E2E-verschlüsselt, der Server kann sie nicht lesen. Aber die *Metadaten* — wer wann mit wem, Gruppen-Mitgliedschaften, der Kontaktgraph — sind heute server-seitig in D1 sichtbar. Unser eigenes [`THREAT_MODEL.md`](./THREAT_MODEL.md) bewertet das ehrlich; wir tun nicht so, als wäre es anders, und wir sind hier schwächer als Signals Sealed-Sender-Modell.
+
+Das ist die nächste Front, kein gelöstes Problem. Auf der Roadmap: **Sealed-Sender** (der Server erfährt nicht mehr, wer was gesendet hat), **Delete-after-Delivery** für Nachrichten-Envelopes und **client-seitig verschlüsselte Kontaktlisten**. Bis das ausgeliefert ist: nimm an, dass der Server Metadaten korrelieren kann. Das sagen wir dir lieber, als eine Garantie zu vermarkten, die wir nicht halten können.
 
 ---
 

@@ -23,6 +23,14 @@ PAGES_PROJECT="renex-static"        # Production Pages-Project
 
 cd "$APP_DIR"
 
+# ── 0. Manifesto Static-Site generieren ───────────
+# Rendert docs/MANIFESTO.md → frontend/public/manifesto/index.html (EN)
+# und docs/MANIFESTO_DE.md → frontend/public/manifest-de/index.html (DE).
+# Muss VOR `vite build` laufen, weil Vite frontend/public/ in dist/ kopiert.
+# Idempotent — kann mehrfach laufen.
+echo "▶ Building Manifesto static-site (Markdown → HTML)…"
+node scripts/build-manifesto.js || { echo "❌ Manifesto-Build fehlgeschlagen — Deploy abgebrochen"; exit 1; }
+
 # ── 1. Tests laufen (außer --skip-tests) ──────────
 if [ "$1" != "--skip-tests" ]; then
   echo "▶ Running tests…"

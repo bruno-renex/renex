@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07070A">
+<title>The RENEX Manifesto — Passkey-Only Privacy Messenger</title>
+<meta name="description" content="The RENEX Manifesto: a passkey-only, human-first, open-standard messenger built as a counter-movement to the AI-generated internet. No bots, no email, no ads.">
+<meta name="robots" content="index, follow">
+<meta name="author" content="Bruno Hochstrasser">
+<link rel="canonical" href="https://renex.id/manifesto">
+<link rel="alternate" hreflang="en" href="https://renex.id/manifesto">
+<link rel="alternate" hreflang="de" href="https://renex.id/manifest-de">
+<link rel="alternate" hreflang="x-default" href="https://renex.id/manifesto">
+<meta property="og:title" content="The RENEX Manifesto — Passkey-Only Privacy Messenger">
+<meta property="og:description" content="The RENEX Manifesto: a passkey-only, human-first, open-standard messenger built as a counter-movement to the AI-generated internet. No bots, no email, no ads.">
+<meta property="og:image" content="https://renex.id/og/og-manifesto-en.png">
+<meta property="og:url" content="https://renex.id/manifesto">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RENEX">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="de_CH">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:creator" content="@renex_app">
+<meta name="twitter:title" content="The RENEX Manifesto — Passkey-Only Privacy Messenger">
+<meta name="twitter:description" content="The RENEX Manifesto: a passkey-only, human-first, open-standard messenger built as a counter-movement to the AI-generated internet. No bots, no email, no ads.">
+<meta name="twitter:image" content="https://renex.id/og/og-manifesto-en.png">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"The RENEX Manifesto","description":"The RENEX Manifesto: a passkey-only, human-first, open-standard messenger built as a counter-movement to the AI-generated internet. No bots, no email, no ads.","inLanguage":"en","datePublished":"2026-06-02","dateModified":"2026-06-02","author":{"@type":"Person","name":"Bruno Hochstrasser"},"publisher":{"@type":"Organization","name":"RENEX","url":"https://renex.id"},"image":"https://renex.id/og/og-manifesto-en.png","mainEntityOfPage":{"@type":"WebPage","@id":"https://renex.id/manifesto"},"license":"https://creativecommons.org/licenses/by/4.0/"}</script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#07070A;--panel:#0D0D11;--panel-2:#121218;
+  --text:#E6E6EB;--text-2:#9A9AA3;--muted:#71717A;
+  --cyan:#38BDF8;--glow:rgba(56,189,248,0.35);
+  --border:#27272A;--err:#EF4444;
+  --font:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}
+body{
+  font-family:var(--font);background:var(--bg);color:var(--text);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  line-height:1.6;overflow-x:hidden;
+}
+a{color:var(--cyan);text-decoration:none}
+a:hover{text-decoration:underline}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--cyan);color:var(--bg);
+  padding:10px 16px;border-radius:0 0 8px 0;font-weight:700;z-index:200}
+.skip-link:focus{left:0}
+
+/* ── HERO ─────────────────────────────────────────────── */
+.hero{
+  position:relative;min-height:100vh;min-height:100dvh;
+  display:flex;flex-direction:column;justify-content:center;
+  padding:96px clamp(24px,6vw,96px);overflow:hidden;
+  background:radial-gradient(ellipse 80% 60% at 50% 38%,rgba(56,189,248,0.08),transparent 70%);
+}
+.hero-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
+.hero-static{position:absolute;inset:0;z-index:0;display:none;
+  background:radial-gradient(ellipse 70% 50% at 50% 40%,rgba(56,189,248,0.10),transparent 70%)}
+.hero-top{position:absolute;top:clamp(20px,3vw,32px);left:0;right:0;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 clamp(24px,6vw,96px);z-index:3}
+.brand{font-size:clamp(22px,3vw,32px);font-weight:800;letter-spacing:0.04em;color:var(--text)}
+.brand .x{color:var(--cyan)}
+.lang-switch{display:flex;gap:4px;align-items:center;font-size:14px;font-weight:600}
+.lang-switch a,.lang-switch span{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-height:44px;min-width:44px;padding:0 10px;border-radius:10px;
+  color:var(--text-2);transition:color .15s,background .15s}
+.lang-switch a:hover{color:var(--cyan);text-decoration:none;background:rgba(56,189,248,0.08)}
+.lang-switch .current{color:var(--cyan);background:rgba(56,189,248,0.12)}
+.lang-switch .sep{min-width:auto;padding:0;color:var(--border)}
+.hero-inner{position:relative;z-index:2;max-width:1100px;margin:0 auto;width:100%}
+.hero h1{font-weight:800;letter-spacing:-0.02em;line-height:1.08;
+  font-size:clamp(48px,9vw,96px);color:var(--text);margin:0}
+.hero h1 span{display:block}
+.hero h1 .l2{color:var(--text)}
+.hero-caption{margin-top:clamp(20px,3vw,28px);font-size:clamp(18px,2.4vw,28px);
+  color:var(--cyan);text-transform:uppercase;letter-spacing:0.12em;font-weight:600;
+  text-shadow:0 0 24px var(--glow)}
+.scroll-ind{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);
+  z-index:2;color:var(--text-2);display:flex;flex-direction:column;align-items:center;
+  gap:6px;font-size:12px;letter-spacing:0.1em;text-transform:uppercase;
+  min-height:44px;justify-content:flex-end;text-decoration:none}
+.scroll-ind:hover{color:var(--cyan);text-decoration:none}
+.scroll-ind svg{width:22px;height:22px;animation:bob 2s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(6px)}}
+@media (prefers-reduced-motion: reduce){
+  .hero-canvas{display:none}.hero-static{display:block}
+  .scroll-ind svg{animation:none}
+}
+
+/* ── LAYOUT ───────────────────────────────────────────── */
+.content{max-width:1224px;margin:0 auto;padding:clamp(64px,8vw,120px) clamp(16px,4vw,32px);
+  display:grid;grid-template-columns:1fr;gap:48px}
+.toc{display:none}
+main{max-width:720px;width:100%;min-width:0}
+
+/* ── SECTIONS ─────────────────────────────────────────── */
+section.ms{margin-bottom:clamp(64px,9vw,120px);scroll-margin-top:24px}
+section.ms:last-child{margin-bottom:0}
+section.ms h2{font-size:clamp(32px,5vw,48px);font-weight:800;letter-spacing:-0.015em;
+  line-height:1.12;margin-bottom:28px;color:var(--text)}
+section.ms h3{font-size:clamp(20px,2.6vw,24px);font-weight:700;margin:36px 0 14px;color:var(--text)}
+main p{font-size:18px;line-height:1.65;color:var(--text);margin:0 0 20px}
+main ul,main ol{margin:0 0 20px;padding-left:22px}
+main li{font-size:18px;line-height:1.6;color:var(--text);margin-bottom:10px}
+main li::marker{color:var(--cyan)}
+main strong{color:var(--text);font-weight:700}
+main hr{display:none}
+.meta-line{font-size:14px;color:var(--muted);margin-bottom:48px;
+  padding-bottom:24px;border-bottom:1px solid var(--border)}
+.meta-line a{color:var(--text-2)}
+main p.label{color:var(--cyan);font-weight:700;font-size:16px;
+  margin:32px 0 10px}
+main p.label strong{color:var(--cyan)}
+
+/* ── PULL-QUOTES ──────────────────────────────────────── */
+.pullquote{border-left:3px solid var(--cyan);padding:6px 0 6px 24px;margin:32px 0;
+  font-size:1.5em;line-height:1.4;font-style:italic;color:var(--text);font-weight:600}
+.pullquote strong{color:var(--cyan);font-weight:700}
+@media (min-width:1024px){.pullquote{margin-left:-32px}}
+blockquote.note{border-left:3px solid var(--border);padding:4px 0 4px 20px;
+  margin:28px 0;color:var(--text-2);font-style:italic}
+blockquote.note p{margin:0 0 10px;font-size:16px;line-height:1.6;color:var(--text-2)}
+blockquote.note p:last-child{margin-bottom:0}
+.faq-intro blockquote.note{margin:8px 0 0}
+
+/* ── PRINCIPLES GRID (full-bleed on wide screens) ─────── */
+.breakout{margin-top:8px}
+.principles-grid{display:grid;gap:20px;grid-template-columns:1fr}
+.principle-card{background:var(--panel);border:1px solid var(--border);
+  border-radius:16px;padding:24px}
+.principle-card h3{margin:0 0 12px;color:var(--cyan);font-size:20px;line-height:1.25}
+.principle-card p{font-size:15px;line-height:1.55;color:var(--text-2);margin:0 0 12px}
+.principle-card p:last-child{margin-bottom:0}
+.principle-card ul{margin:0;padding-left:18px}
+.principle-card li{font-size:14px;line-height:1.5;color:var(--text-2);margin-bottom:6px}
+.principle-card .pullquote{margin:0 0 12px;font-size:1.05em;padding:4px 0 4px 14px;line-height:1.4}
+@media (min-width:768px){.principles-grid{grid-template-columns:repeat(2,1fr)}}
+@media (min-width:1280px){
+  .breakout{position:relative;left:50%;transform:translateX(-50%);
+    width:min(1080px,calc(100vw - 48px))}
+  .principles-grid{grid-template-columns:repeat(5,1fr);gap:16px}
+  .principle-card{padding:20px}
+  .principle-card h3{font-size:17px}
+}
+
+/* ── TABLES (responsive → stacked cards on mobile) ────── */
+.table-wrap{margin:24px 0}
+table{width:100%;border-collapse:collapse;font-size:16px}
+thead th{text-align:left;color:var(--cyan);font-weight:700;padding:12px 16px;
+  border-bottom:2px solid var(--border);font-size:14px;text-transform:uppercase;letter-spacing:0.04em}
+tbody td{padding:14px 16px;border-bottom:1px solid var(--border);
+  color:var(--text);vertical-align:top;line-height:1.5}
+tbody tr:hover{background:rgba(56,189,248,0.03)}
+@media (max-width:767px){
+  table,thead,tbody,tr,td{display:block;width:100%}
+  thead{position:absolute;left:-9999px}
+  tbody tr{background:var(--panel);border:1px solid var(--border);
+    border-radius:12px;padding:8px 14px;margin-bottom:14px}
+  tbody td{border-bottom:1px solid var(--border);padding:10px 0;display:flex;
+    flex-direction:column;gap:4px}
+  tbody td:last-child{border-bottom:none}
+  tbody td::before{content:attr(data-label);font-size:12px;text-transform:uppercase;
+    letter-spacing:0.05em;color:var(--cyan);font-weight:700}
+}
+
+/* ── FAQ ACCORDION ────────────────────────────────────── */
+.faq-intro{margin-bottom:28px}
+details.faq{border:1px solid var(--border);border-radius:12px;margin-bottom:12px;
+  background:var(--panel);overflow:hidden}
+details.faq[open]{border-color:rgba(56,189,248,0.3)}
+details.faq summary{cursor:pointer;list-style:none;padding:18px 22px;
+  font-size:17px;font-weight:600;color:var(--text);display:flex;
+  align-items:flex-start;gap:12px;transition:color .15s}
+details.faq summary::-webkit-details-marker{display:none}
+details.faq summary:hover{color:var(--cyan)}
+details.faq summary::before{content:"+";color:var(--cyan);font-weight:700;
+  font-size:22px;line-height:1;flex:0 0 auto;transition:transform .2s}
+details.faq[open] summary::before{content:"−"}
+.faq-body{padding:0 22px 20px 50px}
+.faq-body p{font-size:16px;color:var(--text-2);margin:0 0 14px}
+.faq-body ul,.faq-body ol{padding-left:20px;margin:0 0 14px}
+.faq-body li{font-size:16px;color:var(--text-2);margin-bottom:8px}
+.faq-body strong{color:var(--text)}
+
+/* ── FOOTER ───────────────────────────────────────────── */
+.ms-footer{border-top:1px solid var(--border);padding:64px 24px 80px;text-align:center}
+.ms-footer .tagline{font-size:clamp(18px,3vw,24px);font-weight:700;color:var(--text);
+  text-shadow:0 0 30px var(--glow);margin-bottom:24px}
+.ms-footer .links{display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:center;
+  margin-bottom:24px}
+.ms-footer .links a{color:var(--text-2);font-size:15px}
+.ms-footer .links a:hover{color:var(--cyan)}
+.ms-footer .back{font-size:14px;color:var(--muted)}
+
+/* ── DESKTOP SIDEBAR TOC ──────────────────────────────── */
+@media (min-width:1024px){
+  .content{grid-template-columns:240px minmax(0,720px);gap:64px;justify-content:center;align-items:start}
+  .toc{display:block;position:sticky;top:32px;align-self:start}
+  .toc-title{font-size:12px;text-transform:uppercase;letter-spacing:0.1em;
+    color:var(--muted);margin-bottom:16px;font-weight:700}
+  .toc ol{list-style:none;border-left:1px solid var(--border);padding:0}
+  .toc li{margin:0}
+  .toc a{display:block;padding:7px 0 7px 16px;margin-left:-1px;font-size:14px;
+    line-height:1.4;color:var(--text-2);border-left:2px solid transparent}
+  .toc a:hover{color:var(--text);text-decoration:none}
+  .toc a.active{color:var(--cyan);border-left-color:var(--cyan);font-weight:600}
+}
+
+/* ── MOBILE FAB + BOTTOM-SHEET ────────────────────────── */
+.fab{position:fixed;bottom:20px;right:20px;z-index:60;
+  display:inline-flex;align-items:center;gap:8px;
+  min-height:48px;padding:0 20px;border:none;border-radius:999px;
+  background:var(--cyan);color:var(--bg);font-family:var(--font);
+  font-size:15px;font-weight:700;cursor:pointer;
+  box-shadow:0 6px 24px rgba(56,189,248,0.4)}
+.sheet-backdrop{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,0.6);
+  opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}
+.sheet-backdrop.open{opacity:1;visibility:visible}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:80;
+  background:var(--panel);border-top:1px solid var(--border);
+  border-radius:18px 18px 0 0;padding:12px 20px max(20px,env(safe-area-inset-bottom));
+  transform:translateY(100%);transition:transform .25s ease;max-height:70vh;overflow-y:auto}
+.sheet.open{transform:translateY(0)}
+.sheet-grip{width:40px;height:4px;border-radius:2px;background:var(--border);
+  margin:6px auto 14px}
+.sheet h3{font-size:13px;text-transform:uppercase;letter-spacing:0.1em;
+  color:var(--muted);margin-bottom:8px}
+.sheet ol{list-style:none}
+.sheet a{display:block;padding:13px 8px;color:var(--text);font-size:16px;
+  border-bottom:1px solid var(--border);min-height:44px}
+.sheet a:hover{color:var(--cyan);text-decoration:none}
+.sheet li:last-child a{border-bottom:none}
+@media (min-width:1024px){.fab,.sheet,.sheet-backdrop{display:none}}
+@media (prefers-reduced-motion: reduce){.sheet,.sheet-backdrop{transition:none}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="hero">
+  <canvas id="hero-canvas" class="hero-canvas" aria-hidden="true"></canvas>
+  <div class="hero-static" aria-hidden="true"></div>
+  <div class="hero-top">
+    <a class="brand" href="/" aria-label="RENEX home">RENE<span class="x">X</span></a>
+    <nav class="lang-switch" aria-label="Language"><a href="/manifest-de" hreflang="de">🇨🇭 DE</a><span class="sep">/</span><span class="current">🇬🇧 EN</span></nav>
+  </div>
+  <div class="hero-inner">
+    <h1><span class="l1">PASSKEY-ONLY.</span><span class="l2">HUMAN-FIRST.</span><span class="l3">OPEN-STANDARD.</span></h1>
+    <p class="hero-caption">The RENEX Manifesto</p>
+  </div>
+  <a class="scroll-ind" href="#content" aria-label="Scroll to read">
+    <span>Scroll to read</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+  </a>
+</header>
+
+<div class="content">
+  <aside class="toc" aria-label="Sections">
+    <div class="toc-title">Sections</div>
+    <ol><li><a href="#why-now">Why now</a></li><li><a href="#what-we-re-building">What we're building</a></li><li><a href="#why">Why</a></li><li><a href="#the-5-principles">The 5 principles</a></li><li><a href="#what-we-will-never-do">What we will never do</a></li><li><a href="#how-we-resist-transparently">How we resist (transparently)</a></li><li><a href="#what-we-admit">What we admit</a></li><li><a href="#what-renex-is-what-it-is-not">What RENEX is, what it is not</a></li><li><a href="#to-allies">To allies</a></li><li><a href="#to-the-other-side">To the other side</a></li><li><a href="#to-the-future">To the future</a></li><li><a href="#appendix-a-skeptic-faq">Appendix A: Skeptic FAQ</a></li></ol>
+  </aside>
+  <main id="content">
+<div class="meta-line"><strong>Version:</strong> 1.4 · <strong>Last updated:</strong> 2026-06-02 · <strong>License:</strong> CC BY 4.0 — you may quote this manifesto with attribution.</div>
+<section class="ms" id="why-now"><h2>Why now</h2><p>RENEX is not &quot;another messenger&quot;. RENEX is a philosophical response to an increasingly AI-generated internet.</p>
+<p>We don&#39;t build <em>against</em> AI. We build <em>for</em> humans, in a time where the distinction between the two is blurring. When you talk to someone on RENEX five years from now, you should know: there&#39;s a human on the other side.</p>
+</section>
+<section class="ms" id="what-we-re-building"><h2>What we&#39;re building</h2><p>A messenger for humans. Humans only.</p>
+<p>No bots. No AI companions. No foundation models reading along. No email as identity. No phone number. No password. No ads. Ever.</p>
+<p class="pullquote">You are the key. <strong>YOU ARE THE KEY.</strong></p></section>
+<section class="ms" id="why"><h2>Why</h2><p>Because the internet we have in 2026 is broken.</p>
+<ul>
+<li><strong>Discord</strong> is optimized for scale, integrations, and automation — legitimate, but not what we want.</li>
+<li><strong>WhatsApp</strong> belongs to Meta. Enough said.</li>
+<li><strong>Signal</strong> is solid. Signal requires a phone number.</li>
+<li><strong>Telegram</strong> is not E2E by default and hosts half-public channels.</li>
+<li><strong>Threema</strong> is honest, but nobody uses it.</li>
+</ul>
+<p>And all of them together: they&#39;ve accepted that AI-generated content, bot armies, and LLM spam are part of the product.</p>
+<p>We haven&#39;t. Not today. Not in five years.</p>
+<p>When you write on RENEX, you write to a human. We can&#39;t guarantee this — but we make automation technically and economically expensive enough that it rarely pays off.</p>
+</section>
+<section class="ms" id="the-5-principles"><h2>The 5 principles</h2><div class="breakout"><div class="principles-grid"><div class="principle-card"><h3>1. Passkey-only</h3><p>Authentication exclusively via WebAuthn / FIDO2. Your identity is your biometric key. Not an email address that a marketing system can scrape. Not a phone number that a state can triangulate.</p>
+<p>Recovery? A 12-word phrase. On paper. In your hand. If you lose the phrase, your account is gone. That&#39;s by design — not a bug.</p>
+</div><div class="principle-card"><h3>2. Human-first</h3><p class="pullquote"><strong>We don&#39;t prove humanity — we make automation uneconomical.</strong></p><p>No bot APIs. No webhooks. No &quot;AI assistants&quot; politely making suggestions. Instead: captcha, rate limits, hardware attestation as a roadmap item, explicit Terms of Service, immediate ban on violation.</p>
+<p>If you run bots, you&#39;re out. If you use a tool like Grammarly to polish your own text, that&#39;s your business — we don&#39;t control user-side tools.</p>
+<p>If your use case requires a bot: find another messenger. We don&#39;t argue. We just say no.</p>
+</div><div class="principle-card"><h3>3. Open standard</h3><p>The <strong>RENEX Protocol v1</strong> is public, fully documented (<a href="https://github.com/bruno-renex/renex/blob/main/docs/PROTOCOL.md"><code>PROTOCOL.md</code></a>, <a href="https://github.com/bruno-renex/renex/blob/main/docs/MULTI_DEVICE.md"><code>MULTI_DEVICE.md</code></a>, <a href="https://github.com/bruno-renex/renex/blob/main/docs/RECOVERY.md"><code>RECOVERY.md</code></a>, <a href="https://github.com/bruno-renex/renex/blob/main/docs/THREAT_MODEL.md"><code>THREAT_MODEL.md</code></a>), and versioned.</p>
+<p>Anyone may build a RENEX-compatible server. Anyone may build a client. Lock-in is the opposite of trust.</p>
+<ul>
+<li><strong>Spec &amp; frontend:</strong> MIT OR Apache-2.0 (dual) — maximum spread.</li>
+<li><strong>Reference server:</strong> AGPL-3.0-only — protection against hyperscaler forks-and-hide.</li>
+</ul>
+</div><div class="principle-card"><h3>4. Privacy by default</h3><p>The server learns the absolute minimum.</p>
+<ul>
+<li>E2E encryption is not optional. Not in groups. Not in voice.</li>
+<li>Contact lists live on your device, not in a cloud index.</li>
+<li>No ads. No trackers. No &quot;analytics because we need them&quot;.</li>
+<li>Swiss data-protection standard (DSG + GDPR).</li>
+<li>Logs are not retained beyond the technically necessary.</li>
+</ul>
+<p>If law enforcement knocks: we have nothing they want. That&#39;s architecture, not politics.</p>
+</div><div class="principle-card"><h3>5. Gamer-first UX</h3><p>We don&#39;t build an enterprise compliance messenger. We build for communities.</p>
+<ul>
+<li>Low latency.</li>
+<li>Voice channels with drop-in.</li>
+<li>Push-to-talk.</li>
+<li>Screen sharing.</li>
+<li>Steam Rich Presence.</li>
+<li>No native app, because PWA is enough and faster.</li>
+</ul>
+<p>Performance &gt; bells and whistles. Bundle size matters.</p>
+</div></div></div></section>
+<section class="ms" id="what-we-will-never-do"><h2>What we will never do</h2><div class="table-wrap"><table><thead><tr><th>❌ Won&#39;t</th><th>❌ Never</th></tr></thead><tbody><tr><td data-label="❌ Won't">Run ads</td><td data-label="❌ Never">Sell user data</td></tr><tr><td data-label="❌ Won't">Build backdoors for governments</td><td data-label="❌ Never">Allow AI-generated content</td></tr><tr><td data-label="❌ Won't">Open a public API for external bots</td><td data-label="❌ Never">Paywall encryption</td></tr><tr><td data-label="❌ Won't">Allow phone/email as auth</td><td data-label="❌ Never">Paywall privacy features</td></tr><tr><td data-label="❌ Won't">Tracking pixels</td><td data-label="❌ Never">Build an algorithmic feed</td></tr><tr><td data-label="❌ Won't">Feed newsletter lists with user data</td><td data-label="❌ Never">&quot;Verified profile&quot; for a fee</td></tr></tbody></table></div><p>This is not a marketing list. These are hard architectural decisions. If an investor demands one of these lines be softened: we don&#39;t take the investor. Bootstrap &gt; sellout.</p>
+</section>
+<section class="ms" id="how-we-resist-transparently"><h2>How we resist (transparently)</h2><p>We do not promise an AI-free service. We promise to fight for one.</p>
+<p>Here is exactly what we do, today.</p>
+<p class="label"><strong>At the gate (account creation):</strong></p><ul>
+<li><strong>Passkey only.</strong> No email. No phone. No password. The most common bot-onboarding vectors — leaked email lists, SIM farms, credential stuffing — don&#39;t apply to RENEX. You cannot bulk-register accounts from a script.</li>
+<li><strong>Cloudflare Turnstile</strong> on every signup attempt. Privacy-respecting (no tracking cookies), a cryptographic challenge that requires browser-state proof-of-work.</li>
+</ul>
+<p class="label"><strong>At the surface (joining communities):</strong></p><ul>
+<li><strong>Turnstile again</strong> on every server creation and every invite acceptance. Discord lets anyone with an HTTP client join 100 servers in 60 seconds. We don&#39;t.</li>
+<li><strong>Per-action rate limits</strong> on every sensitive endpoint. A bot trying to brute-force invite tokens, mass-create channels, or flood role assignments hits the wall fast.</li>
+</ul>
+<p class="label"><strong>In the structure (architecture decisions):</strong></p><ul>
+<li><strong>No webhooks. No bot APIs. No &quot;developer portal&quot; for autonomous agents.</strong> RENEX has no integration layer for AI systems to plug into. None. This is not &quot;we haven&#39;t built it yet&quot;. This is &quot;we will not build it&quot;.</li>
+<li><strong>No AI-driven server features.</strong> No sentiment analysis. No conversation summarization. No automatic moderation by ML models. No nudges, no suggestions, no &quot;Here&#39;s what people are talking about today&quot; feeds.</li>
+</ul>
+<p class="label"><strong>For the moderator (community defense):</strong></p><ul>
+<li><strong>Server-level bans</strong> with optional reasons. <strong>Audit logs</strong> for every kick, role change, permission edit, ban, and unban. Community moderators can see what happened and hold each other accountable.</li>
+<li><strong>Per-channel permission overrides.</strong> A moderator can lock a channel down to specific roles or members in seconds. No bot army can spam a channel they cannot view.</li>
+<li><strong>No anonymous mass-reports.</strong> RENEX will not let a coordinated AI swarm flag a human into oblivion. Reports are linked to accounts and reviewed individually.</li>
+</ul>
+<p class="label"><strong>What we don&#39;t promise:</strong></p><p>We do not promise 100% AI-free communication. We can&#39;t. New jailbreaks appear weekly. Voice cloning is now a desktop application. We will lose some battles.</p>
+<p>What we promise is that we keep fighting. Every layer we add — every captcha, every rate limit, every &quot;we just won&#39;t build that&quot; decision — is recorded in this manifesto, in our changelog, and in our code.</p>
+<p>If you find a way humans can verify other humans without violating their privacy: <strong>tell us</strong>. We will ship it.</p>
+<p>Until then: this is a forever arms race. We have chosen our side.</p>
+</section>
+<section class="ms" id="what-we-admit"><h2>What we admit</h2><p>We don&#39;t lie. Three honest points:</p>
+<h3>1. Cloudflare lock-in (today)</h3><p>The reference server runs on Cloudflare Workers, D1, KV, R2, Durable Objects. That&#39;s <strong>lock-in for the reference implementation</strong>, not for the protocol. Anyone can build a RENEX-compliant server on their own infra — the spec does not prescribe where it runs.</p>
+<p>If Cloudflare drops us tomorrow: the protocol survives. User data is E2E-encrypted and portable.</p>
+<h3>2. WebAuthn coverage</h3><p>Passkey-only is vision-consistent, but WebAuthn is not pain-free everywhere in 2026. Cross-device passkeys via Bluetooth/QR are sometimes flaky, some browsers have rough edges. We accept that, because the alternative (email auth) breaks the brand core entirely.</p>
+<h3>3. Anti-AI is best-effort</h3><p>See &quot;How we resist (transparently)&quot; above for the active defenses we ship. This admission emphasizes the limitation: even with those defenses, we cannot guarantee zero AI on the platform. New techniques appear faster than we ship counter-mechanisms. We will not pretend otherwise.</p>
+<p>The Terms are explicit. Whoever runs AI on RENEX anyway is banned — without prior warning. That is policy, not detection. We catch the ones we catch. We don&#39;t catch all.</p>
+</section>
+<section class="ms" id="what-renex-is-what-it-is-not"><h2>What RENEX is, what it is not</h2><div class="table-wrap"><table><thead><tr><th>RENEX <strong>is</strong>…</th><th>RENEX is <strong>not</strong>…</th></tr></thead><tbody><tr><td data-label="RENEX is…">A messenger</td><td data-label="RENEX is not…">A social network with a feed</td></tr><tr><td data-label="RENEX is…">Open source</td><td data-label="RENEX is not…">A Crypto/Web3 wallet</td></tr><tr><td data-label="RENEX is…">Swiss-hosted</td><td data-label="RENEX is not…">An anonymous platform</td></tr><tr><td data-label="RENEX is…">Community-funded (today)</td><td data-label="RENEX is not…">VC-funded</td></tr><tr><td data-label="RENEX is…">Brand-aligned with privacy-first</td><td data-label="RENEX is not…">A Discord clone</td></tr><tr><td data-label="RENEX is…">A counter-movement</td><td data-label="RENEX is not…">A compliance suite</td></tr></tbody></table></div></section>
+<section class="ms" id="to-allies"><h2>To allies</h2><p>We&#39;re looking for people who:</p>
+<ul>
+<li><strong>Contribute code</strong> — Frontend (Svelte), backend (Workers/JS), spec reviews. See <a href="https://github.com/bruno-renex/renex/blob/main/docs/CONTRIBUTING.md"><code>CONTRIBUTING.md</code></a>.</li>
+<li><strong>Read and challenge specs</strong> — if our decision logs are wrong, say so.</li>
+<li><strong>Stream, write, spread the word</strong> — RENEX grows through word-of-mouth, not ad spend.</li>
+<li><strong>Host on your own infra</strong> — federation spec is roadmap, but standalone servers are possible today.</li>
+<li><strong>Give money</strong> — GitHub Sponsors, Founder&#39;s Pass ($25 lifetime Pro, capped at first 1000), later Pro subscription.</li>
+</ul>
+<p>Not for:</p>
+<ul>
+<li>Anyone who wants to build a bot. Save your time.</li>
+<li>Anyone who thinks &quot;fast growth via dark patterns&quot; is fine.</li>
+<li>Anyone who thinks AI companions are the next big thing and messengers must follow.</li>
+<li>Anyone who sees Discord as a role model.</li>
+</ul>
+</section>
+<section class="ms" id="to-the-other-side"><h2>To the other side</h2><p>To the bot operators, AI spam networks, growth hackers who will sooner or later try to subvert RENEX:</p>
+<p>We see you. We build the platform so you don&#39;t get in. If you still manage to: we ban you immediately, without hearing, without appeal. There is no &quot;it was a mistake&quot;. There is no &quot;we don&#39;t really know you&quot;.</p>
+<p>We draw clear lines — against bot operators and spam networks, not against humans. This is not hate, this is hygiene.</p>
+</section>
+<section class="ms" id="to-the-future"><h2>To the future</h2><p>In five years the question won&#39;t be whether a messenger is E2E-encrypted — that will be standard. The question will be whether it is <strong>human</strong>. Whether you can be sure that on the other side there is no model.</p>
+<p>RENEX is the answer to that.</p>
+<p>We build this because no one else does. If what we do here is taken for granted in five years: good. Then we&#39;ve won.</p>
+<p class="pullquote"><strong>Made in Switzerland. Made for humans. Made to last.</strong></p><blockquote class="note">
+<p>If you agree with this: <a href="https://github.com/bruno-renex/renex/blob/main/docs/CONTRIBUTING.md"><code>CONTRIBUTING.md</code></a>. Build with us.
+If you disagree: write to us, with arguments. We read.
+If you&#39;re indifferent to this: then RENEX is maybe not for you. Also fine.</p>
+</blockquote>
+</section>
+<section class="ms" id="appendix-a-skeptic-faq"><h2>Appendix A: Skeptic FAQ</h2><div class="faq-intro"><p>Ten questions that reliably come — from skeptical investors, Hacker News commenters, Redditors, journalists. We answer them here once in writing. When you get asked: link here.</p>
+<p>These answers are deliberately honest, not marketing-glossy. We name the limits of our own promises, because otherwise someone else will — less fairly.</p>
+</div><details class="faq"><summary>1. Why not just Discord + passkeys?</summary><div class="faq-body"><p>Discord has passkeys — as a second factor, not as primary auth. Email and phone remain mandatory. They can&#39;t give that up: email is their recovery, marketing, and compliance anchor.</p>
+<p>More seriously: Discord <strong>is</strong> a bot platform. A significant part of their developer ecosystem are bots. An &quot;AI-Free Discord&quot; would kill their own business model. Even if they announced a passkey-only mode tomorrow — nobody would believe them. And DMs are still not E2E-encrypted.</p>
+<p>We can keep the promise because we have nothing to protect except the promise.</p>
+</div></details><details class="faq"><summary>2. How do you prevent Sybil attacks?</summary><div class="faq-body"><p>Not fully. Nobody can. We raise the <strong>cost per fake identity</strong>:</p>
+<ul>
+<li><strong>Turnstile captcha on every signup, every server creation, every invite acceptance.</strong> Live as of 2026-06-01. ~$0.001/solve as a baseline, but compounding across three gates a bot must cross.</li>
+<li><strong>Passkey registration</strong> → real device + biometric setup, ~5 min of human work per account. Cannot be batch-automated without thousands of physical devices.</li>
+<li><strong>Per-endpoint rate limits + audit logs</strong> → bot farms cannot scale operations silently. Every mass action leaves a trace.</li>
+<li><strong>Hardware attestation (roadmap Phase 9)</strong> → bypass costs ~$200/device, brings account cost to roughly the same as a Discord Nitro yearly subscription. At that point, why bot us?</li>
+</ul>
+<p>Realistically: account cost goes from ~$0 (email signup elsewhere) to ~$5–50 today, with Phase 9 toward ~$200. That makes spam economically unattractive. Enough for a community platform.</p>
+<p>&quot;Sybil-resistant&quot; would be a lie. &quot;Sybil-expensive&quot; is the truth.</p>
+</div></details><details class="faq"><summary>3. How do you prove &quot;human&quot;?</summary><div class="faq-body"><p>We don&#39;t. We make automation expensive.</p>
+<ul>
+<li><strong>Architecturally:</strong> no public API, no webhooks, no bot tokens. RENEX is not scriptable without reverse engineering plus a captcha farm.</li>
+<li><strong>Technically:</strong> passkey + hardware attestation (Phase 9) + Turnstile on three gates + rate limits → high setup cost per fake.</li>
+<li><strong>Socially:</strong> explicit Terms, immediate ban, audit-log accountability for moderators.</li>
+<li><strong>Experientially (Phase 6.5 onwards):</strong> Pulse. An ambient presence layer that makes the human on the other side visible — through micro-motion, typing energy, device shake. Not authentication. A <em>belief layer</em>. Bots have no pulse. See <a href="https://github.com/bruno-renex/renex/blob/main/docs/PULSE.md"><code>PULSE.md</code></a>.</li>
+</ul>
+<p>We don&#39;t prove humanity — we make automation uneconomical and human presence sensorially apparent. That&#39;s intellectually honest. Any stronger statement would be marketing, and marketing promises break in court and on Reddit.</p>
+</div></details><details class="faq"><summary>4. Why would communities switch from Discord?</summary><div class="faq-body"><p>Most won&#39;t. That&#39;s the truth about network effects.</p>
+<p>What we sell is not &quot;switch&quot;, but <strong>&quot;second home&quot;</strong>:</p>
+<ul>
+<li>Privacy-aware inner circles inside larger Discord communities</li>
+<li>Indie-dev communities tired of bot spam</li>
+<li>Clans wanting a clean restart after a data leak or Discord policy drama</li>
+</ul>
+<p>Users stay on Discord for their main community and use RENEX for the core group next to it. We don&#39;t replace Discord — we replace the WhatsApp group that runs alongside it anyway.</p>
+<p>Niche-first. Plan six to twelve months of network effects. Anyone who grows faster in this market usually grows with bots.</p>
+</div></details><details class="faq"><summary>5. What&#39;s your unfair advantage?</summary><div class="faq-body"><p>Two real moats, two smaller levers:</p>
+<ol>
+<li><strong>&quot;AI-Free&quot; as a brand moat.</strong> Discord, Slack, Telegram cannot imitate this without killing their bot and developer business. An &quot;AI-Free mode&quot; at any incumbent would be unbelievable. Credibility is not imitable when you have too much to lose.</li>
+<li><strong>Swiss jurisdiction.</strong> DSG standard, no CLOUD Act, no FISA. A legal advantage, not just location marketing.</li>
+<li>Open standard + AGPL server → protects against hyperscaler forks-and-hide.</li>
+<li>Solo dev + bootstrap → fast iteration, no investor pressure, principled rather than sellout.</li>
+</ol>
+<p>The heavy moat is #1.</p>
+</div></details><details class="faq"><summary>6. How do you onboard users without friction?</summary><div class="faq-body"><p>Not friction-free. Friction-low.</p>
+<ul>
+<li><strong>No app download</strong> — PWA, one click to &quot;Add to Home Screen&quot;.</li>
+<li><strong>No email, no SMS, no verification</strong> — handle-only identity.</li>
+<li><strong>Sign-in via passkey</strong> — 1 click on a known device, QR scan on a new one.</li>
+<li><strong>Recovery phrase is step 2, not step 1.</strong> Offered at first login, not enforced.</li>
+<li><strong>Aggressive install tutorial with GIF/video</strong>, because iOS-PWA push needs a manual step.</li>
+</ul>
+<p>Where it breaks: Safari/iOS passkey UX is still not perfect in 2026. Users without Touch-ID/Face-ID devices we lose — that&#39;s the price of the promise.</p>
+<p>30 seconds of passkey setup against zero spam and zero data leak: fair trade.</p>
+</div></details><details class="faq"><summary>7. How do you prevent growth death by too-strong security?</summary><div class="faq-body"><p>We accept that security-first is a growth filter. We compensate in four places:</p>
+<ol>
+<li><strong>Security as empowerment, not burden.</strong> &quot;YOU ARE THE KEY&quot; sells control, not paranoia.</li>
+<li><strong>Friction only where necessary.</strong> Login is 1 click. E2E runs invisibly. Verify-contact is TOFU + auto-toast (Apple-style), not modal hell.</li>
+<li><strong>UX quality &gt; security theatre.</strong> Performance, latency, voice later — gamer-first. Anyone starting RENEX should notice it&#39;s faster, not more paranoid.</li>
+<li><strong>Realistic growth expectations.</strong> Year 1 target: 5,000 active users. Not 5 million. We plan for slow-path and scarcity hype (Founder&#39;s Pass), not for mass push.</li>
+</ol>
+<p>The honest hard case: if a user loses recovery phrase <strong>and</strong> all devices, the account is gone. It&#39;s in the Terms. It&#39;s warned in the UI. That&#39;s architecture, not a bug. Whoever doesn&#39;t accept that is not our target audience.</p>
+</div></details><details class="faq"><summary>8. Why not Matrix/Element, Session, or SimpleX?</summary><div class="faq-body"><p>Three good projects with similar ethos, three different trade-offs:</p>
+<ul>
+<li><p><strong>Matrix/Element:</strong> Federation is strength and burden at once. Onboarding is hard for non-techies (&quot;choose a homeserver&quot; is not what 95% of users want). E2E has improved, but is not active by default everywhere. We chose a single-server model with an open-standard spec — one less onboarding step, federation as a roadmap option for v3+.</p>
+</li>
+<li><p><strong>Session:</strong> Anonymous by design (no account, no identifier except onion ID). Strong for whistleblowers, weak for persistent communities. We build for stable identities + clans + re-recognition — passkey instead of anonymity.</p>
+</li>
+<li><p><strong>SimpleX:</strong> Per-contact queues, no user identifier — very strong privacy model. Trade-off: discovery is hard (you must exchange links/QR codes for every contact). We chose handle-based identity with E2E — slightly less paranoid, dramatically better UX for groups.</p>
+</li>
+</ul>
+<p>We respect all three. RENEX is not for whistleblowers (take Session), not for federation enthusiasts (take Matrix), not for maximum-paranoid actors (take SimpleX). RENEX is for the gap between: <strong>communities that want WhatsApp/Discord convenience but without bots, without email coercion, without Meta reading along.</strong></p>
+</div></details><details class="faq"><summary>9. Isn&#39;t passkey-only Apple/Google lock-in?</summary><div class="faq-body"><p>This is the most common concern — and it&#39;s half justified.</p>
+<p><strong>What&#39;s true:</strong> passkeys on many devices sync via iCloud Keychain or Google Password Manager. Anyone using exclusively Apple or Android devices is indirectly tied to those providers&#39; cloud sync.</p>
+<p class="label"><strong>What we do about it:</strong></p><ul>
+<li><strong>Hardware security keys are fully supported.</strong> YubiKey, SoloKey, Nitrokey — no cloud, no vendor sync.</li>
+<li><strong>Bitwarden / 1Password / KeePassXC</strong> now support passkey storage out of the box. Anyone running a self-hosted password manager stays independent.</li>
+<li><strong>Recovery phrase is the master override.</strong> If all devices are gone and you have no Apple/Google sync: a 12-word BIP39 phrase reactivates the account. You are never tied to a single vendor.</li>
+</ul>
+<p>In practice: RENEX works without an Apple ID, without a Google account, without a vendor cloud. But we don&#39;t lie — the easiest path uses platform sync because that&#39;s the UX users know. Anyone who doesn&#39;t want that has all alternatives open.</p>
+</div></details><details class="faq"><summary>10. How can I trust web distribution? Reproducible builds?</summary><div class="faq-body"><p>Honest answer: with a PWA from the browser, you cannot <strong>fully</strong> trust the server. Cloudflare Pages ships the frontend bundle — theoretically a compromised deployment could send you a modified client with a backdoor that weakens the crypto locally.</p>
+<p class="label"><strong>What we do about it:</strong></p><ul>
+<li><strong>Open-source frontend</strong> (MIT/Apache-2.0). Bundle is reproducible from the repo via <code>npm install &amp;&amp; npm run build</code> — output hash can be compared against the live bundle.</li>
+<li><strong>CI build with hash publication</strong> (planned post-launch). Each release tag produces a deterministic bundle whose SHA-256 we publish. Externally auditable.</li>
+<li><strong>Server can&#39;t decrypt anything.</strong> Even with a frontend backdoor: CMKs, GSKs, recovery phrase never leave the device unencrypted. A backdoor would have to exfiltrate local IndexedDB — harder and visible in the browser network tab.</li>
+<li><strong>Roadmap:</strong> Native apps (Capacitor/Tauri) for users who want to verify reproducible binaries against a hash list.</li>
+</ul>
+<p>Whoever wants maximum crypto purity: wait for native builds or build yourself from the repo. The PWA path is the convenience trade-off, not the security maximum.</p>
+</div></details><div class="faq-intro"><blockquote class="note">
+<p>This FAQ is a living document. If a question is not honestly answered here: write to us, with arguments. We update.</p>
+</blockquote>
+</div></section>
+  </main>
+</div>
+
+<footer class="ms-footer">
+  <div class="tagline">Made in Switzerland. Made for humans. Made to last.</div>
+  <nav class="links" aria-label="Footer">
+    <a href="https://github.com/bruno-renex/renex/blob/main/docs/CONTRIBUTING.md">Contributing</a><a href="https://github.com/bruno-renex/renex/blob/main/docs/PROTOCOL.md">Protocol</a><a href="/terms/">Terms</a><a href="/privacy/">Privacy</a><a href="https://github.com/bruno-renex/renex">GitHub</a>
+  </nav>
+  <div class="back"><a href="/">← Back to renex.id</a></div>
+</footer>
+
+<button class="fab" id="fab" aria-label="Sections">📑 Sections</button>
+<div class="sheet-backdrop" id="sheet-backdrop"></div>
+<nav class="sheet" id="sheet" aria-label="Sections">
+  <div class="sheet-grip"></div>
+  <h3>Sections</h3>
+  <ol><li><a href="#why-now">Why now</a></li><li><a href="#what-we-re-building">What we're building</a></li><li><a href="#why">Why</a></li><li><a href="#the-5-principles">The 5 principles</a></li><li><a href="#what-we-will-never-do">What we will never do</a></li><li><a href="#how-we-resist-transparently">How we resist (transparently)</a></li><li><a href="#what-we-admit">What we admit</a></li><li><a href="#what-renex-is-what-it-is-not">What RENEX is, what it is not</a></li><li><a href="#to-allies">To allies</a></li><li><a href="#to-the-other-side">To the other side</a></li><li><a href="#to-the-future">To the future</a></li><li><a href="#appendix-a-skeptic-faq">Appendix A: Skeptic FAQ</a></li></ol>
+</nav>
+
+<script>
+(function(){
+  "use strict";
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ── Bottom-sheet (mobile section nav) ── */
+  var fab = document.getElementById("fab");
+  var sheet = document.getElementById("sheet");
+  var backdrop = document.getElementById("sheet-backdrop");
+  function openSheet(){ if(sheet){sheet.classList.add("open");backdrop.classList.add("open");} }
+  function closeSheet(){ if(sheet){sheet.classList.remove("open");backdrop.classList.remove("open");} }
+  if(fab){ fab.addEventListener("click", openSheet); }
+  if(backdrop){ backdrop.addEventListener("click", closeSheet); }
+  if(sheet){ sheet.addEventListener("click", function(e){ if(e.target.tagName==="A") closeSheet(); }); }
+
+  /* ── Active TOC highlight (desktop) ── */
+  var tocLinks = Array.prototype.slice.call(document.querySelectorAll(".toc a"));
+  if(tocLinks.length && "IntersectionObserver" in window){
+    var byId = {};
+    tocLinks.forEach(function(a){ byId[a.getAttribute("href").slice(1)] = a; });
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        var link = byId[en.target.id];
+        if(!link) return;
+        if(en.isIntersecting){
+          tocLinks.forEach(function(l){ l.classList.remove("active"); });
+          link.classList.add("active");
+        }
+      });
+    }, { rootMargin: "-20% 0px -70% 0px" });
+    document.querySelectorAll("section.ms[id]").forEach(function(s){ io.observe(s); });
+  }
+
+  /* ── Particle background ── */
+  var canvas = document.getElementById("hero-canvas");
+  if(!canvas || reduce) return;
+  var ctx = canvas.getContext("2d");
+  if(!ctx) return;
+  var particles = [], raf = null, running = false, dim = null;
+  var paused = { hidden:false, battery:false };
+
+  function resize(){
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    dim = { dpr:dpr, w:rect.width, h:rect.height };
+  }
+  function seed(){
+    var isMobile = window.matchMedia("(max-width: 767px)").matches;
+    var count = isMobile ? 18 : 32;
+    particles = [];
+    for(var i=0;i<count;i++){
+      particles.push({
+        x: Math.random()*dim.w, y: Math.random()*dim.h,
+        vx: (Math.random()-0.5)*0.22, vy: (Math.random()-0.5)*0.22
+      });
+    }
+  }
+  function step(){
+    var w=dim.w, h=dim.h, dpr=dim.dpr;
+    ctx.clearRect(0,0,w*dpr,h*dpr);
+    ctx.save();
+    ctx.scale(dpr,dpr);
+    var MAX=130;
+    for(var i=0;i<particles.length;i++){
+      for(var j=i+1;j<particles.length;j++){
+        var a=particles[i], b=particles[j];
+        var dx=a.x-b.x, dy=a.y-b.y;
+        var dist=Math.sqrt(dx*dx+dy*dy);
+        if(dist<MAX){
+          var alpha=(1-dist/MAX)*0.15;
+          ctx.strokeStyle="rgba(56,189,248,"+alpha+")";
+          ctx.lineWidth=1;
+          ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+        }
+      }
+    }
+    ctx.fillStyle="rgba(56,189,248,0.5)";
+    for(var k=0;k<particles.length;k++){
+      var p=particles[k];
+      ctx.beginPath();ctx.arc(p.x,p.y,1.4,0,Math.PI*2);ctx.fill();
+      p.x+=p.vx; p.y+=p.vy;
+      if(p.x<0||p.x>w) p.vx=-p.vx;
+      if(p.y<0||p.y>h) p.vy=-p.vy;
+    }
+    ctx.restore();
+  }
+  function loop(){ if(!running) return; step(); raf=requestAnimationFrame(loop); }
+  function start(){ if(running||paused.hidden||paused.battery) return; running=true; loop(); }
+  function stop(){ running=false; if(raf){cancelAnimationFrame(raf);raf=null;} }
+
+  resize(); seed(); start();
+
+  document.addEventListener("visibilitychange", function(){
+    paused.hidden = document.hidden;
+    if(document.hidden) stop(); else start();
+  });
+  var rt;
+  window.addEventListener("resize", function(){
+    clearTimeout(rt);
+    rt=setTimeout(function(){
+      resize();
+      for(var i=0;i<particles.length;i++){
+        if(particles[i].x>dim.w) particles[i].x=dim.w;
+        if(particles[i].y>dim.h) particles[i].y=dim.h;
+      }
+    },150);
+  });
+
+  /* ── Battery-aware pause (< 20% and not charging) ── */
+  if(navigator.getBattery){
+    navigator.getBattery().then(function(bat){
+      function check(){
+        paused.battery = (bat.level < 0.2 && !bat.charging);
+        if(paused.battery) stop(); else start();
+      }
+      bat.addEventListener("levelchange", check);
+      bat.addEventListener("chargingchange", check);
+      check();
+    }).catch(function(){});
+  }
+})();
+</script>
+</body>
+</html>

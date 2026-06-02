@@ -4,6 +4,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-02 — Manifesto Static-Site (Phase 6 Brand) 📜
+
+Das RENEX-Manifesto ist jetzt eine öffentliche, indexierbare Static-Site —
+nicht mehr nur GitHub-Blob. Markdown → HTML via Build-Script, gerendert im
+Direction-B „Statement"-Look (full-width Hero, Partikel-Background, brand-
+defining Typografie).
+
+### ✨ Added
+- **`scripts/build-manifesto.js` NEU** — token-walking `marked`-Renderer
+  (kein default-HTML-Output, für präzise Layout-Kontrolle). Rendert
+  `docs/MANIFESTO.md` → `frontend/public/manifesto/index.html` (EN) und
+  `docs/MANIFESTO_DE.md` → `frontend/public/manifest-de/index.html` (DE).
+  Idempotent. Spezial-Handling: 5-Prinzipien → responsive Card-Grid (5/2/1),
+  „Never do"-Tabelle → Desktop-Table/Mobile-Stacked-Cards (`data-label`),
+  bold/ALL-CAPS-Absätze → Cyan-Pull-Quotes, Skeptiker-FAQ → native
+  `<details>`-Accordion, relative `*.md`-Links → GitHub-Blob-URLs.
+- **`scripts/manifesto/template.js` NEU** — parametrisiertes HTML-Template
+  (`renderPage({lang, contentHtml, toc, dateModified})`). Inline-CSS +
+  Inline-JS (Partikel-Canvas aus LandingParticles.svelte vanilla-portiert,
+  `prefers-reduced-motion`/`document.hidden`/Battery-API-aware), Sprach-
+  Switch (🇨🇭 DE / 🇬🇧 EN), Desktop-Sidebar-TOC + Mobile-Bottom-Sheet,
+  voller SEO-Head (OG/Twitter/hreflang/canonical + JSON-LD Article).
+- **`deploy.sh` Step 0** — `node scripts/build-manifesto.js` läuft vor
+  `vite build` (Vite kopiert `frontend/public/` → `dist/`). Bricht Deploy
+  ab bei Build-Fehler.
+
+### 🎯 Decisions
+- **`robots: index,follow`** (anders als Legal-Pages, die `noindex` sind) —
+  das Manifesto SOLL in Suchmaschinen ranken.
+- **system-ui Font-Stack** statt Web-Font — CSP `font-src 'self'` verbietet
+  CDN-Fonts und das <100kb-Page-Budget lässt keinen Web-Font zu. 0 Bytes.
+- **`marked@18` als devDependency** — nur Build-Time, kein Runtime-Bundle.
+
+### 📋 Out-of-scope (diese Session)
+OG-Image-PNGs (`og/og-manifesto-{en,de}.png`, Bruno macht sie in Figma) +
+DNS-Setup. HTML referenziert die Pfade bereits.
+
+vitest 461/461 grün; vite build clean. Beide Seiten in `dist/`.
+
+---
+
 ## 2026-06-01 — Phase 5-Light Turnstile Captcha 🛡
 
 Anti-AI-Brand-Move umgesetzt. Cloudflare Turnstile auf Server-Erstellung

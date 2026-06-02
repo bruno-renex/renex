@@ -4,18 +4,16 @@
 // Single Source of Truth für Allowed-Origins.
 // - renex.id              → Brand-Apex (Phase 6, deckt auch Login/App via RP-ID renex.id)
 // - app.renex.id          → Production App-Host
-// - renex-static.pages.dev → Pages-Project alt (Vanilla)
-// - renex-svelte.pages.dev → Pages-Project Svelte (Phase 1A.6 Migration)
-// - <hash>.renex-svelte.pages.dev → per-Deploy Preview-URLs (Cloudflare Pages)
+// - renex-static.pages.dev → Production Pages-Project (Svelte-Build, Deploy-Ziel)
+// - <hash>.renex-static.pages.dev → per-Deploy Preview-URLs (Cloudflare Pages)
 // - localhost:*           → lokale Entwicklung
-const PAGES_DEPLOY_RE = /^https:\/\/[a-z0-9-]+\.renex-svelte\.pages\.dev$/;
+const PAGES_DEPLOY_RE = /^https:\/\/[a-z0-9-]+\.renex-static\.pages\.dev$/;
 
 function isAllowedOrigin(origin) {
   if (!origin) return false;
   if (origin === "https://renex.id") return true;
   if (origin === "https://app.renex.id") return true;
   if (origin === "https://renex-static.pages.dev") return true;
-  if (origin === "https://renex-svelte.pages.dev") return true;
   if (origin.startsWith("http://localhost:")) return true;
   if (PAGES_DEPLOY_RE.test(origin)) return true;
   return false;

@@ -4,6 +4,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-02 — Manifesto v1.5 — Honesty/Tone-Pass 📝
+
+Inhaltliches Review (Bruno) umgesetzt — EN-Original + DE gespiegelt. Schärft
+zwei sachliche Schwachstellen und entschärft den Ton, ohne die Haltung
+aufzuweichen.
+
+### ✏️ Changed (MANIFESTO.md + MANIFESTO_DE.md)
+- **Logik-Bug behoben:** „Never"-Tabelle sagte „KI-generierte Inhalte
+  erlauben" — widersprach dem Grammarly-Carve-out (Prinzip 2). Jetzt
+  „Autonome Bots/Agenten erlauben" — konsistent mit der Bot-/Automatisierungs-
+  These statt der unverteidigbaren „kein KI-berührter Text"-Position.
+- **Faktischer Angriffspunkt entschärft:** FAQ #5 behauptete „kein CLOUD
+  Act, kein FISA" als Moat — angreifbar, weil der Reference-Server auf
+  Cloudflare (US, CLOUD-Act-erreichbar) läuft. Jetzt ehrlich: Schweizer DSG
+  als realer Metadaten-Vorteil, echter Schutz = E2E („nichts Brauchbares
+  herauszugeben").
+- **These nach vorne gezogen:** „Wir beweisen Menschsein nicht — wir machen
+  Automatisierung teuer" steht jetzt in „Warum jetzt" als ehrlicher Rahmen
+  vorweg (löst die Spannung Vision↔Realität).
+- **Prinzip 5 umbenannt** „Gamer-first UX" → „Für Menschen gebaut, nicht für
+  Enterprise" — Feature-Dump (inkl. Steam Rich Presence) zu einem Werte-
+  Statement (Performance = Respekt vorm Menschen) umformuliert; behebt den
+  Narrativ-Bruch Privacy↔Gaming.
+- **Ton entschärft (nur Prinzip 2):** „Wir diskutieren nicht. Wir sagen
+  einfach nein." → bewusste Design-Entscheidung, ohne Allies abzuschrecken.
+  Harte Linie gegen Bot-Operatoren in „An die andere Seite" bleibt.
+- Version 1.4 → **1.5**.
+
+---
+
 ## 2026-06-02 — Manifesto Static-Site (Phase 6 Brand) 📜
 
 Das RENEX-Manifesto ist jetzt eine öffentliche, indexierbare Static-Site —

@@ -2,7 +2,7 @@
 
 > **PASSKEY-ONLY. HUMAN-FIRST. OPEN-STANDARD.**
 
-**Version:** 1.4
+**Version:** 1.5
 **Letzte Aktualisierung:** 2026-06-02
 **Lizenz:** CC BY 4.0 — du darfst dieses Manifest mit Quellenangabe zitieren.
 **Übersetzungen:** [English](./MANIFESTO.md) (Original)
@@ -14,6 +14,8 @@
 RENEX ist nicht „noch ein Messenger". RENEX ist eine philosophische Antwort auf ein zunehmend KI-generiertes Internet.
 
 Wir bauen nicht *gegen* KI. Wir bauen *für* Menschen, in einer Zeit, in der die Unterscheidung zwischen beiden verschwimmt. Wenn du in fünf Jahren mit jemandem auf RENEX sprichst, sollst du wissen: auf der anderen Seite sitzt ein Mensch.
+
+**Wir beweisen Menschsein nicht — wir machen Automatisierung teuer.** Das ist der ehrliche Kern von allem, was folgt. Keine Garantie, dass jeder Account ein Mensch ist, sondern eine Plattform, die so gebaut ist, dass sich Fälschen selten lohnt. Lies den Rest mit diesem Rahmen: jede Aussage hier ist ein Kampf, den wir führen, kein Versprechen, das wir längst gewonnen hätten.
 
 ---
 
@@ -61,7 +63,7 @@ Keine Bot-APIs. Keine Webhooks. Keine „KI-Assistenten", die höflich Vorschlä
 
 Wenn du Bots betreibst, fliegst du raus. Wenn du ein Tool wie Grammarly nutzt, um deinen eigenen Text zu polieren, ist das deine Sache — wir kontrollieren keine User-side-Tools.
 
-Wenn dein Use-Case einen Bot verlangt: such dir einen anderen Messenger. Wir diskutieren nicht. Wir sagen einfach nein.
+Wenn dein Use-Case einen Bot verlangt, ist RENEX nicht das richtige Werkzeug — und das ist eine bewusste Design-Entscheidung, keine Lücke, die wir später füllen. Wir sind lieber der falsche Fit für manche Use-Cases als der richtige für Automatisierung.
 
 ### 3. Offener Standard
 
@@ -84,18 +86,13 @@ Der Server erfährt das absolute Minimum.
 
 Wenn die Strafverfolgung anklopft: wir haben nichts, was sie wollen. Das ist Architektur, keine Politik.
 
-### 5. Gamer-first UX
+### 5. Für Menschen gebaut, nicht für Enterprise
 
-Wir bauen keinen Enterprise-Compliance-Messenger. Wir bauen für Communities.
+Wir bauen keinen Enterprise-Compliance-Messenger. Wir bauen für Communities aus Menschen, die abhängen wollen, nicht Tickets abarbeiten.
 
-- Niedrige Latenz.
-- Voice-Channels mit Drop-in.
-- Push-to-Talk.
-- Screen-Sharing.
-- Steam Rich Presence.
-- Keine native App, weil PWA reicht und schneller ist.
+Das macht Performance zum Feature, nicht zum Luxus: niedrige Latenz, Voice mit Drop-in, Push-to-Talk, Screen-Sharing — das, worin Echtzeit-Communities tatsächlich leben. Keine aufgeblähte native App; eine schnelle PWA respektiert dein Gerät und deine Zeit.
 
-Performance > Schnickschnack. Bundle-Size matters.
+Performance > Schnickschnack. Geschwindigkeit ist, wie wir den Menschen auf der anderen Seite respektieren.
 
 ---
 
@@ -104,7 +101,7 @@ Performance > Schnickschnack. Bundle-Size matters.
 | ❌ Werden nicht | ❌ Niemals |
 |---|---|
 | Werbung schalten | User-Daten verkaufen |
-| Backdoors für Regierungen bauen | KI-generierte Inhalte erlauben |
+| Backdoors für Regierungen bauen | Autonome Bots/Agenten erlauben |
 | Öffentliche API für externe Bots öffnen | Verschlüsselung paywallen |
 | Telefon/E-Mail als Auth zulassen | Privacy-Features paywallen |
 | Tracking-Pixel | Algorithmischen Feed bauen |
@@ -292,7 +289,7 @@ Niche-first. Plane sechs bis zwölf Monate Netzwerk-Effekte ein. Wer in diesem M
 Zwei echte Moats, zwei kleinere Hebel:
 
 1. **„AI-Free" als Brand-Moat.** Discord, Slack, Telegram können das nicht imitieren, ohne ihr Bot- und Developer-Geschäft zu killen. Ein „AI-Free-Modus" bei jedem Incumbent wäre unglaubwürdig. Glaubwürdigkeit ist nicht imitierbar, wenn man zu viel zu verlieren hat.
-2. **Schweizer Jurisdiktion.** DSG-Standard, kein CLOUD Act, kein FISA. Ein rechtlicher Vorteil, nicht nur Standort-Marketing.
+2. **Schweizer Jurisdiktion, abgesichert durch E2E.** Der Schweizer DSG-Standard deckt die wenigen Metadaten, die wir halten — ein echter rechtlicher Vorteil gegenüber US-Plattformen, nicht nur Standort-Marketing. Wir verkaufen es nicht zu hoch: Der Reference-Server läuft heute auf Cloudflare (US-Unternehmen, vom CLOUD Act erreichbar), Jurisdiktion allein ist also kein Schutzschild. Der echte Schutz: wir haben nichts Brauchbares herauszugeben — Kontakte, Nachrichten und Schlüssel sind E2E-verschlüsselt und erreichen uns nie im Klartext.
 3. Offener Standard + AGPL-Server → schützt vor Hyperscaler-fork-and-hide.
 4. Solo-Dev + Bootstrap → schnelle Iteration, kein Investor-Druck, prinzipientreu statt Sellout.
 

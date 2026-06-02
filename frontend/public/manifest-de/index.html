@@ -269,9 +269,10 @@ details.faq[open] summary::before{content:"−"}
     <ol><li><a href="#warum-jetzt">Warum jetzt</a></li><li><a href="#was-wir-bauen">Was wir bauen</a></li><li><a href="#warum">Warum</a></li><li><a href="#die-5-prinzipien">Die 5 Prinzipien</a></li><li><a href="#was-wir-niemals-tun-werden">Was wir niemals tun werden</a></li><li><a href="#wie-wir-uns-wehren-transparent">Wie wir uns wehren (transparent)</a></li><li><a href="#was-wir-zugeben">Was wir zugeben</a></li><li><a href="#was-renex-ist-was-es-nicht-ist">Was RENEX ist, was es nicht ist</a></li><li><a href="#an-verbundete">An Verbündete</a></li><li><a href="#an-die-andere-seite">An die andere Seite</a></li><li><a href="#an-die-zukunft">An die Zukunft</a></li><li><a href="#anhang-a-skeptiker-faq">Anhang A: Skeptiker-FAQ</a></li></ol>
   </aside>
   <main id="content">
-<div class="meta-line"><strong>Version:</strong> 1.4 · <strong>Letzte Aktualisierung:</strong> 2026-06-02 · <strong>Lizenz:</strong> CC BY 4.0 — du darfst dieses Manifest mit Quellenangabe zitieren.</div>
+<div class="meta-line"><strong>Version:</strong> 1.5 · <strong>Letzte Aktualisierung:</strong> 2026-06-02 · <strong>Lizenz:</strong> CC BY 4.0 — du darfst dieses Manifest mit Quellenangabe zitieren.</div>
 <section class="ms" id="warum-jetzt"><h2>Warum jetzt</h2><p>RENEX ist nicht „noch ein Messenger&quot;. RENEX ist eine philosophische Antwort auf ein zunehmend KI-generiertes Internet.</p>
 <p>Wir bauen nicht <em>gegen</em> KI. Wir bauen <em>für</em> Menschen, in einer Zeit, in der die Unterscheidung zwischen beiden verschwimmt. Wenn du in fünf Jahren mit jemandem auf RENEX sprichst, sollst du wissen: auf der anderen Seite sitzt ein Mensch.</p>
+<p><strong>Wir beweisen Menschsein nicht — wir machen Automatisierung teuer.</strong> Das ist der ehrliche Kern von allem, was folgt. Keine Garantie, dass jeder Account ein Mensch ist, sondern eine Plattform, die so gebaut ist, dass sich Fälschen selten lohnt. Lies den Rest mit diesem Rahmen: jede Aussage hier ist ein Kampf, den wir führen, kein Versprechen, das wir längst gewonnen hätten.</p>
 </section>
 <section class="ms" id="was-wir-bauen"><h2>Was wir bauen</h2><p>Einen Messenger für Menschen. Nur für Menschen.</p>
 <p>Keine Bots. Keine KI-Companions. Keine Foundation-Models, die mitlesen. Keine E-Mail als Identität. Keine Telefonnummer. Kein Passwort. Keine Werbung. Niemals.</p>
@@ -292,7 +293,7 @@ details.faq[open] summary::before{content:"−"}
 <p>Recovery? Eine 12-Wort-Phrase. Auf Papier. In deiner Hand. Verlierst du die Phrase, ist dein Konto weg. Das ist Design — kein Bug.</p>
 </div><div class="principle-card"><h3>2. Human-first</h3><p class="pullquote"><strong>Wir beweisen Menschsein nicht — wir machen Automatisierung unwirtschaftlich.</strong></p><p>Keine Bot-APIs. Keine Webhooks. Keine „KI-Assistenten&quot;, die höflich Vorschläge machen. Stattdessen: Captcha, Rate-Limits, Hardware-Attestation als Roadmap-Item, explizite Nutzungsbedingungen, sofortige Sperre bei Verstoss.</p>
 <p>Wenn du Bots betreibst, fliegst du raus. Wenn du ein Tool wie Grammarly nutzt, um deinen eigenen Text zu polieren, ist das deine Sache — wir kontrollieren keine User-side-Tools.</p>
-<p>Wenn dein Use-Case einen Bot verlangt: such dir einen anderen Messenger. Wir diskutieren nicht. Wir sagen einfach nein.</p>
+<p>Wenn dein Use-Case einen Bot verlangt, ist RENEX nicht das richtige Werkzeug — und das ist eine bewusste Design-Entscheidung, keine Lücke, die wir später füllen. Wir sind lieber der falsche Fit für manche Use-Cases als der richtige für Automatisierung.</p>
 </div><div class="principle-card"><h3>3. Offener Standard</h3><p>Das <strong>RENEX-Protokoll v1</strong> ist öffentlich, vollständig dokumentiert (<a href="https://github.com/bruno-renex/renex/blob/main/docs/PROTOCOL.md"><code>PROTOCOL.md</code></a>, <a href="https://github.com/bruno-renex/renex/blob/main/docs/MULTI_DEVICE.md"><code>MULTI_DEVICE.md</code></a>, <a href="https://github.com/bruno-renex/renex/blob/main/docs/RECOVERY.md"><code>RECOVERY.md</code></a>, <a href="https://github.com/bruno-renex/renex/blob/main/docs/THREAT_MODEL.md"><code>THREAT_MODEL.md</code></a>) und versioniert.</p>
 <p>Jeder darf einen RENEX-kompatiblen Server bauen. Jeder darf einen Client bauen. Lock-in ist das Gegenteil von Vertrauen.</p>
 <ul>
@@ -308,18 +309,11 @@ details.faq[open] summary::before{content:"−"}
 <li>Logs werden nicht über das technisch Notwendige hinaus aufbewahrt.</li>
 </ul>
 <p>Wenn die Strafverfolgung anklopft: wir haben nichts, was sie wollen. Das ist Architektur, keine Politik.</p>
-</div><div class="principle-card"><h3>5. Gamer-first UX</h3><p>Wir bauen keinen Enterprise-Compliance-Messenger. Wir bauen für Communities.</p>
-<ul>
-<li>Niedrige Latenz.</li>
-<li>Voice-Channels mit Drop-in.</li>
-<li>Push-to-Talk.</li>
-<li>Screen-Sharing.</li>
-<li>Steam Rich Presence.</li>
-<li>Keine native App, weil PWA reicht und schneller ist.</li>
-</ul>
-<p>Performance &gt; Schnickschnack. Bundle-Size matters.</p>
+</div><div class="principle-card"><h3>5. Für Menschen gebaut, nicht für Enterprise</h3><p>Wir bauen keinen Enterprise-Compliance-Messenger. Wir bauen für Communities aus Menschen, die abhängen wollen, nicht Tickets abarbeiten.</p>
+<p>Das macht Performance zum Feature, nicht zum Luxus: niedrige Latenz, Voice mit Drop-in, Push-to-Talk, Screen-Sharing — das, worin Echtzeit-Communities tatsächlich leben. Keine aufgeblähte native App; eine schnelle PWA respektiert dein Gerät und deine Zeit.</p>
+<p>Performance &gt; Schnickschnack. Geschwindigkeit ist, wie wir den Menschen auf der anderen Seite respektieren.</p>
 </div></div></div></section>
-<section class="ms" id="was-wir-niemals-tun-werden"><h2>Was wir niemals tun werden</h2><div class="table-wrap"><table><thead><tr><th>❌ Werden nicht</th><th>❌ Niemals</th></tr></thead><tbody><tr><td data-label="❌ Werden nicht">Werbung schalten</td><td data-label="❌ Niemals">User-Daten verkaufen</td></tr><tr><td data-label="❌ Werden nicht">Backdoors für Regierungen bauen</td><td data-label="❌ Niemals">KI-generierte Inhalte erlauben</td></tr><tr><td data-label="❌ Werden nicht">Öffentliche API für externe Bots öffnen</td><td data-label="❌ Niemals">Verschlüsselung paywallen</td></tr><tr><td data-label="❌ Werden nicht">Telefon/E-Mail als Auth zulassen</td><td data-label="❌ Niemals">Privacy-Features paywallen</td></tr><tr><td data-label="❌ Werden nicht">Tracking-Pixel</td><td data-label="❌ Niemals">Algorithmischen Feed bauen</td></tr><tr><td data-label="❌ Werden nicht">Newsletter-Listen mit User-Daten füttern</td><td data-label="❌ Niemals">„Verified Profile&quot; gegen Bezahlung</td></tr></tbody></table></div><p>Das ist keine Marketing-Liste. Das sind harte Architektur-Entscheidungen. Wenn ein Investor verlangt, dass eine dieser Linien aufgeweicht wird: dann nehmen wir den Investor nicht. Bootstrap &gt; Sellout.</p>
+<section class="ms" id="was-wir-niemals-tun-werden"><h2>Was wir niemals tun werden</h2><div class="table-wrap"><table><thead><tr><th>❌ Werden nicht</th><th>❌ Niemals</th></tr></thead><tbody><tr><td data-label="❌ Werden nicht">Werbung schalten</td><td data-label="❌ Niemals">User-Daten verkaufen</td></tr><tr><td data-label="❌ Werden nicht">Backdoors für Regierungen bauen</td><td data-label="❌ Niemals">Autonome Bots/Agenten erlauben</td></tr><tr><td data-label="❌ Werden nicht">Öffentliche API für externe Bots öffnen</td><td data-label="❌ Niemals">Verschlüsselung paywallen</td></tr><tr><td data-label="❌ Werden nicht">Telefon/E-Mail als Auth zulassen</td><td data-label="❌ Niemals">Privacy-Features paywallen</td></tr><tr><td data-label="❌ Werden nicht">Tracking-Pixel</td><td data-label="❌ Niemals">Algorithmischen Feed bauen</td></tr><tr><td data-label="❌ Werden nicht">Newsletter-Listen mit User-Daten füttern</td><td data-label="❌ Niemals">„Verified Profile&quot; gegen Bezahlung</td></tr></tbody></table></div><p>Das ist keine Marketing-Liste. Das sind harte Architektur-Entscheidungen. Wenn ein Investor verlangt, dass eine dieser Linien aufgeweicht wird: dann nehmen wir den Investor nicht. Bootstrap &gt; Sellout.</p>
 </section>
 <section class="ms" id="wie-wir-uns-wehren-transparent"><h2>Wie wir uns wehren (transparent)</h2><p>Wir versprechen keinen KI-freien Dienst. Wir versprechen, dafür zu kämpfen.</p>
 <p>Hier ist genau das, was wir heute tun.</p>
@@ -416,7 +410,7 @@ Wenn dir das egal ist: dann ist RENEX vielleicht nichts für dich. Auch okay.</p
 </div></details><details class="faq"><summary>5. Was ist euer unfairer Vorteil?</summary><div class="faq-body"><p>Zwei echte Moats, zwei kleinere Hebel:</p>
 <ol>
 <li><strong>„AI-Free&quot; als Brand-Moat.</strong> Discord, Slack, Telegram können das nicht imitieren, ohne ihr Bot- und Developer-Geschäft zu killen. Ein „AI-Free-Modus&quot; bei jedem Incumbent wäre unglaubwürdig. Glaubwürdigkeit ist nicht imitierbar, wenn man zu viel zu verlieren hat.</li>
-<li><strong>Schweizer Jurisdiktion.</strong> DSG-Standard, kein CLOUD Act, kein FISA. Ein rechtlicher Vorteil, nicht nur Standort-Marketing.</li>
+<li><strong>Schweizer Jurisdiktion, abgesichert durch E2E.</strong> Der Schweizer DSG-Standard deckt die wenigen Metadaten, die wir halten — ein echter rechtlicher Vorteil gegenüber US-Plattformen, nicht nur Standort-Marketing. Wir verkaufen es nicht zu hoch: Der Reference-Server läuft heute auf Cloudflare (US-Unternehmen, vom CLOUD Act erreichbar), Jurisdiktion allein ist also kein Schutzschild. Der echte Schutz: wir haben nichts Brauchbares herauszugeben — Kontakte, Nachrichten und Schlüssel sind E2E-verschlüsselt und erreichen uns nie im Klartext.</li>
 <li>Offener Standard + AGPL-Server → schützt vor Hyperscaler-fork-and-hide.</li>
 <li>Solo-Dev + Bootstrap → schnelle Iteration, kein Investor-Druck, prinzipientreu statt Sellout.</li>
 </ol>

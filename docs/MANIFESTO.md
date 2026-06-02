@@ -2,7 +2,7 @@
 
 > **PASSKEY-ONLY. HUMAN-FIRST. OPEN-STANDARD.**
 
-**Version:** 1.4
+**Version:** 1.5
 **Last updated:** 2026-06-02
 **License:** CC BY 4.0 — you may quote this manifesto with attribution.
 **Translations:** [Deutsch](./MANIFESTO_DE.md)
@@ -14,6 +14,8 @@
 RENEX is not "another messenger". RENEX is a philosophical response to an increasingly AI-generated internet.
 
 We don't build *against* AI. We build *for* humans, in a time where the distinction between the two is blurring. When you talk to someone on RENEX five years from now, you should know: there's a human on the other side.
+
+**We don't prove humanity — we make automation expensive.** That is the honest core of everything below. Not a guarantee that every account is human, but a platform engineered so that faking one rarely pays off. Read the rest with that frame: every claim here is a fight we wage, not a promise we pretend to have already won.
 
 ---
 
@@ -61,7 +63,7 @@ No bot APIs. No webhooks. No "AI assistants" politely making suggestions. Instea
 
 If you run bots, you're out. If you use a tool like Grammarly to polish your own text, that's your business — we don't control user-side tools.
 
-If your use case requires a bot: find another messenger. We don't argue. We just say no.
+If your use case requires a bot, RENEX isn't the right tool — and that's a deliberate design choice, not a gap we'll fill later. We'd rather be the wrong fit for some use cases than the right fit for automation.
 
 ### 3. Open standard
 
@@ -84,18 +86,13 @@ The server learns the absolute minimum.
 
 If law enforcement knocks: we have nothing they want. That's architecture, not politics.
 
-### 5. Gamer-first UX
+### 5. Built for humans, not enterprise
 
-We don't build an enterprise compliance messenger. We build for communities.
+We don't build an enterprise compliance messenger. We build for communities of people who want to hang out, not file tickets.
 
-- Low latency.
-- Voice channels with drop-in.
-- Push-to-talk.
-- Screen sharing.
-- Steam Rich Presence.
-- No native app, because PWA is enough and faster.
+That makes performance a feature, not a luxury: low latency, instant voice with drop-in, push-to-talk, screen sharing — the things real-time human communities actually live in. No bloated native app; a fast PWA respects your device and your time.
 
-Performance > bells and whistles. Bundle size matters.
+Performance > bells and whistles. Speed is how we respect the human on the other end.
 
 ---
 
@@ -104,7 +101,7 @@ Performance > bells and whistles. Bundle size matters.
 | ❌ Won't | ❌ Never |
 |---|---|
 | Run ads | Sell user data |
-| Build backdoors for governments | Allow AI-generated content |
+| Build backdoors for governments | Allow autonomous bots/agents |
 | Open a public API for external bots | Paywall encryption |
 | Allow phone/email as auth | Paywall privacy features |
 | Tracking pixels | Build an algorithmic feed |
@@ -292,7 +289,7 @@ Niche-first. Plan six to twelve months of network effects. Anyone who grows fast
 Two real moats, two smaller levers:
 
 1. **"AI-Free" as a brand moat.** Discord, Slack, Telegram cannot imitate this without killing their bot and developer business. An "AI-Free mode" at any incumbent would be unbelievable. Credibility is not imitable when you have too much to lose.
-2. **Swiss jurisdiction.** DSG standard, no CLOUD Act, no FISA. A legal advantage, not just location marketing.
+2. **Swiss jurisdiction, backed by E2E.** Swiss DSG covers the little metadata we hold — a real legal edge over US-based platforms, not just location marketing. We don't oversell it: the reference server still runs on Cloudflare (US-domiciled, so the CLOUD Act can reach it), which means jurisdiction alone is no shield. The real protection is that there's nothing useful to surrender — contacts, messages, and keys are E2E-encrypted and never reach us in clear.
 3. Open standard + AGPL server → protects against hyperscaler forks-and-hide.
 4. Solo dev + bootstrap → fast iteration, no investor pressure, principled rather than sellout.
 

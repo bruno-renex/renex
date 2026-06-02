@@ -183,8 +183,13 @@ blockquote.note p:last-child{margin-bottom:0}
 .principle-card .pullquote{margin:0 0 12px;font-size:1.05em;padding:4px 0 4px 14px;line-height:1.4}
 @media (min-width:768px){.principles-grid{grid-template-columns:repeat(2,1fr)}}
 @media (min-width:1280px){
-  .breakout{position:relative;left:50%;transform:translateX(-50%);
-    width:min(1080px,calc(100vw - 48px))}
+  /* Widen into the 64px column-gap (left, up to the sidebar's right edge —
+     no overlap) and the 68px right whitespace. The content grid is always at
+     its 1224px max-width here (breakout only ≥1280px), so these offsets are
+     stable: 64 = grid gap, 68 = (1160 inner − 1024 grid)/2. Do NOT
+     viewport-center — main lives in the right column, so 50%/translateX
+     would pull the grid left into the sidebar. */
+  .breakout{margin-left:-64px;margin-right:-68px}
   .principles-grid{grid-template-columns:repeat(5,1fr);gap:16px}
   .principle-card{padding:20px}
   .principle-card h3{font-size:17px}

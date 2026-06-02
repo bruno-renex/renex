@@ -488,12 +488,14 @@ Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 
 > Hinweis: zwischen Phase 6 und Phase 7 ist [Phase 6.5 Pulse](#phase-65--pulse-presence-layer) eingeschoben.
 > Falls Phase 6 länger braucht: Phase 7 um 1 Woche schieben, Pulse darf nicht skippen.
+
 - Landing-Page Redesign
-- Demo-Video + GIF für PWA-Install-Onboarding
+- Demo-Video + GIF für PWA-Install-Onboarding (Product-Demo Screen-Recording, kein on-camera)
 - Press-Kit
-- Founder's Pass-System (Stripe)
-- AGB rechtssicher (Anti-AI Best-Effort-Klausel + Schweizer DSG-Auskunftsrecht via Audit-Log)
-- Manifesto öffentlich
+- **AGB-Update** (NICHT neu — existierende `/agb`, `/datenschutz`, `/terms`, `/privacy`, `/impressum` Pages schon da): Anti-AI Best-Effort-Klausel hinzufügen + DSG-Auftragsdatenverarbeiter-Liste reviewen (Cloudflare, Sentry, Turnstile)
+- Manifesto öffentlich machen (Static-Site Vanilla-HTML auf `renex.id/manifesto`, plus Landing-Section, plus In-App Settings→About) — neu: "Why Pulse" + "Anti-AI Best-Effort Transparency" Sections
+
+**Bewusst NICHT in Phase 6:** Founder's Pass / Stripe-Integration. Per Monetization-Plan §6 ist **Phase 1 (Monat 0-6 nach Beta-Launch) komplett kostenlos**. Founder's Pass startet in **Phase 2 Monetization-Tier (~Dezember 2026 / Januar 2027)**, separates Build-Window, eigener Sprint. Vorteil: kein Schweizer Business-Stripe-Konto-Setup als Phase-7-Blocker, Tier-Limits-KV-Foundation (Phase 3A.5) ist eh schon ready, der Webhook-Bau ist in 2 Tagen machbar wenn Zeit reif.
 
 ### Phase 6.5 — Pulse (Presence Layer) ✨ *(Wo 6: 2026-06-16 → 2026-06-22, neu eingeschoben 2026-06-02)*
 **Brand-defining ambient sensorische Schicht über 1:1-DM.** Mikro-Bewegungen (Maus, Touch, Acceleromter, Tippgeschwindigkeit) → abstrakte „Pulse"-Energie `0.0–1.0` → Canvas-2D-Partikel-Visualisierung. Sender + Empfänger sehen visualisiertes Lebenszeichen des Gegenübers.
@@ -684,6 +686,7 @@ Wenn eine strategische Entscheidung geändert wird, hier dokumentieren:
 | 2026-06-01 | **Phase 3A.5 COMPLETE — 7/7** | Phase 3A.5 5/7 (nach Ban-System 2026-05-29) | **7/7 — komplettes deferred-Set aus Phase 3A geschlossen** | Sechstes Item Private Channels in 1 Session shipped (backend permission-override CRUD + getVisibleChannelIds server-side filter + ChannelEditModal frontend), siebtes Item Tier-Limits in 30min shipped (KV `user:tier:<handle>`, getUserTier helper, tier-aware createServer limit). Codebase-weiter pushToUserDO-Audit fixierte 7 weitere fire-and-forget Bugs (Multi-Device-Sync). 461/461 vitest stable, vite build clean nach jeder Deploy. ~5 Kalendertage von 3/7 (2026-05-28) bis 7/7 (2026-06-01). Roadmap-Status: Phase 3A.5 vollständig abgehakt — nächstes: Phase 5-Light Captcha (geplant Wo 2-3 = 2026-05-26 → 2026-06-01, also DEUTLICH overdue per Roadmap, sollte als nächstes geschoben werden) ODER Phase 6 Prep (Brand & Launch). Phase 3A.5 hat 4 dauerhafte CF-Workers-Memory-Lessons hinzugefügt: iCloud + git, push-vor-deploy, wrangler.toml not in repo, pushToUserDO await sub-requests. |
 | 2026-06-01 | **Phase 5-Light Captcha LIVE** | Phase 5-Light geplant Wo 2-3 (overdue) | **Shipped on-time per pivot, Roadmap on-track** | Cloudflare Turnstile auf POST `/servers/create` + POST `/servers/join/<token>`. Wiederverwendung der existing verifyTurnstile-Infrastruktur aus Phase 1A (Register-Flow) — keine CF-Dashboard-Änderung nötig. Neuer ServerJoinModal ersetzt nativen `confirm()`-Dialog (UX-Win plus Captcha-Ready in einem Schritt). 9 i18n Strings DE/EN/ES. Hardware-Attestation + Behavioral-Analysis bleiben weiterhin Phase 9 per ursprünglichem Decision. |
 | 2026-06-02 | **Phase 6.5 Pulse eingeschoben** | Phase 6 → Phase 7 direkt | **Phase 6 → Phase 6.5 Pulse → Phase 7** | Brand-Brainstorm mit Bruno: ambient sensorische Visualisierungs-Schicht über 1:1-DM (Pulse-Energy aus Maus/Touch/Acceleromter/Tippen → Canvas-2D-Partikel). Brand-defining für „For Humans. By Humans." Anti-AI-Story bekommt visuelles Demo-Material für TikTok/HN-Launch. KEIN Captcha-Replacement (Belief-Layer, kein Auth-Gate). MVP 1 Wo (Wo 6 = 2026-06-16 → 2026-06-22) zwischen Phase 6 Brand-Prep und Phase 7 Beta-Launch. Trade-off: falls Phase 6 nicht in 2 Wo fertig → Phase 7 um 1 Wo schieben (Ende Juni → Anfang Juli), Pulse darf nicht skippen weil ohne ihn Beta-Launch-Story ohne visuellen Differenziator. Detail-Spec: [`PULSE.md`](./PULSE.md) v0.1 mit 13 Decisions + 5 Open Questions. |
+| 2026-06-02 | **Founder's Pass / Stripe aus Phase 6 entfernt** | Phase 6 enthielt "Founder's Pass-System (Stripe)" als Deliverable | **Stripe + Founder's Pass deferred zu Phase 2 Monetization-Start (~Dez 2026)** | Inkonsistenz zwischen §6 Monetization-Plan ("Phase 1 Monat 0-6 = komplett kostenlos") und §10 Phase 6 ("Founder's Pass-System (Stripe)") aufgelöst. Beta-Launch Ende Juni 2026 = Monat 0 vom Free-Tier. Founder's Pass startet erst Monat 6 (~Dez 2026). Vorteile der Defer: (1) kein Schweizer Business-Stripe-Konto-Setup als Phase-7-Blocker (Bruno hat nur Privat-Stripe), (2) Tier-Limits-KV-Foundation (Phase 3A.5) ist schon live + Pro-Webhook-Bau in 2 Tagen machbar wenn Zeit reif, (3) Phase 6 wird kürzer (1.5 Wo statt 2), schafft Puffer für Phase 6.5 Pulse. Phase 6 Scope jetzt: Landing-Redesign + Demo-Video + Install-GIF + AGB-Update + Manifesto öffentlich. |
 
 ---
 

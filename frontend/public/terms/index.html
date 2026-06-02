@@ -134,7 +134,7 @@
   </div>
 
   <div class="title">Terms of Service</div>
-  <div class="subtitle">Effective from April 15, 2026</div>
+  <div class="subtitle">Effective from June 2, 2026 (v2 — Anti-AI clause added)</div>
   <div class="lang-switch"><a href="/agb/">Deutsch</a></div>
 
   <div class="section-title">1. Scope</div>
@@ -155,6 +155,24 @@
       <li>Use of the service is <strong>free of charge</strong>. There is no entitlement to specific features, continuous availability, or further development.</li>
       <li>The service is provided «as is». No particular fitness for a specific purpose or functionality is warranted.</li>
     </ul>
+  </div>
+
+  <div class="section-title">3a. Anti-AI / Anti-Bot Best Effort</div>
+  <div class="text">
+    RENEX is deliberately positioned as a bot- and AI-resistant messaging service. We employ the following protection mechanisms:
+    <ul>
+      <li><strong>Passkey-only authentication</strong> without email or phone number — prevents bulk account creation via leaked or purchased address lists.</li>
+      <li><strong>Cloudflare Turnstile</strong> on registration, server creation, and invite acceptance as an anti-bot challenge without tracking cookies.</li>
+      <li><strong>Rate limits</strong> on all sensitive API endpoints.</li>
+      <li><strong>Server audit logs</strong> for moderation actions (bans, kicks, role changes) for abuse traceability.</li>
+      <li><strong>No webhooks, no bot APIs, no third-party integration layer</strong> — RENEX provides no mechanism for automated systems to send messages programmatically.</li>
+      <li><strong>No AI-driven content processing</strong> by the provider (no sentiment tracking, no automatic summarization, no behavioral profiling).</li>
+    </ul>
+    <strong>Best-effort limitation:</strong> The provider does NOT guarantee complete freedom from bots or AI. New AI techniques may circumvent existing detection mechanisms. The user accepts that, despite these measures, isolated AI-generated or automated content may appear.
+    <br><br>
+    <strong>Reported violations</strong> will be reviewed by the provider, and corresponding accounts will be suspended in accordance with §7 of these Terms.
+    <br><br>
+    Hardware attestation and behavioral analysis as additional anti-bot layers are planned for future versions and will be added here once implemented.
   </div>
 
   <div class="section-title">4. Registration and User Account</div>
@@ -185,6 +203,7 @@
       <li>infringement of copyrights, trademarks, or other third-party rights</li>
       <li>distributing malware, phishing links, or fraud attempts</li>
       <li>abuse of technical features (e.g., automated requests, denial-of-service attacks, circumvention of security measures)</li>
+      <li>mass creation of accounts or automated posting of messages using AI systems or bots at a scale that systematically attempts to circumvent bot detection</li>
       <li>use of false identities to deceive other users</li>
       <li>any action that could harm the service or its users</li>
     </ul>

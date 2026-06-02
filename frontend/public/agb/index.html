@@ -134,7 +134,7 @@
   </div>
 
   <div class="title">Allgemeine Nutzungsbedingungen (AGB)</div>
-  <div class="subtitle">Gültig ab 15. April 2026</div>
+  <div class="subtitle">Gültig ab 2. Juni 2026 (v2 — Anti-AI-Klausel hinzugefügt)</div>
   <div class="lang-switch"><a href="/terms/">English</a></div>
 
   <div class="section-title">1. Geltungsbereich</div>
@@ -156,6 +156,24 @@
       <li>Die Nutzung ist <strong>kostenlos</strong>. Es besteht kein Anspruch auf bestimmte Funktionen, ständige Verfügbarkeit oder Weiterentwicklung.</li>
       <li>Der Dienst wird «wie besehen» («as is») zur Verfügung gestellt. Eine bestimmte Nutzungseignung oder Funktionalität wird nicht zugesichert.</li>
     </ul>
+  </div>
+
+  <div class="section-title">3a. Anti-AI / Anti-Bot-Best-Effort</div>
+  <div class="text">
+    RENEX positioniert sich bewusst als bot- und KI-resistenter Messaging-Dienst. Wir setzen folgende Schutzmechanismen ein:
+    <ul>
+      <li><strong>Passkey-only-Authentifizierung</strong> ohne E-Mail oder Telefonnummer — verhindert Bulk-Account-Erstellung durch geleakte oder gekaufte Adress-Listen.</li>
+      <li><strong>Cloudflare Turnstile</strong> auf Registrierung, Server-Erstellung und Invite-Beitritt als Anti-Bot-Challenge ohne Tracking-Cookies.</li>
+      <li><strong>Rate-Limits</strong> auf allen sensitiven API-Endpunkten.</li>
+      <li><strong>Server-Audit-Logs</strong> für Moderations-Aktionen (Bans, Kicks, Rollen-Änderungen) zur Nachverfolgbarkeit von Missbrauch.</li>
+      <li><strong>Keine Webhooks, keine Bot-APIs, keine 3rd-Party-Integration-Layer</strong> — RENEX bietet keinen Mechanismus für automatisierte Systeme, Nachrichten programmatisch zu senden.</li>
+      <li><strong>Keine AI-gestützte Inhalts-Verarbeitung</strong> durch den Anbieter (kein Sentiment-Tracking, kein automatisches Zusammenfassen, kein Behavioral-Profiling).</li>
+    </ul>
+    <strong>Best-Effort-Limitierung:</strong> Der Anbieter gibt KEINE Garantie für vollständige Bot- oder AI-Freiheit. Neue AI-Techniken können bestehende Detektions-Mechanismen umgehen. Der Nutzer akzeptiert, dass trotz dieser Maßnahmen vereinzelt AI-generierte oder automatisierte Inhalte erscheinen können.
+    <br><br>
+    <strong>Gemeldete Verstöße</strong> prüft der Anbieter und sperrt entsprechende Konten gemäss §7 dieser AGB.
+    <br><br>
+    Hardware-Attestation und Behavioral-Analyse als zusätzliche Anti-Bot-Layer sind für zukünftige Versionen geplant und werden hier ergänzt, sobald implementiert.
   </div>
 
   <div class="section-title">4. Registrierung und Nutzerkonto</div>
@@ -186,6 +204,7 @@
       <li>die Verletzung von Urheberrechten, Markenrechten oder sonstigen Rechten Dritter</li>
       <li>die Verbreitung von Schadsoftware, Phishing-Links oder Betrugsversuchen</li>
       <li>der Missbrauch technischer Funktionen (z.B. automatisierte Anfragen, Denial-of-Service, Umgehung von Sicherheitsmassnahmen)</li>
+      <li>die Massenerstellung von Konten oder automatisiertes Posten von Nachrichten mittels AI-/KI-Systemen oder Bots in einem Umfang, der die Bot-Erkennung systematisch zu umgehen versucht</li>
       <li>die Nutzung falscher Identitäten zur Täuschung anderer Nutzer</li>
       <li>jede Handlung, die den Dienst oder dessen Nutzer schädigen könnte</li>
     </ul>

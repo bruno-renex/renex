@@ -1,7 +1,7 @@
 # RENEX — Pulse (Phase 6.5)
 
 **Status:** Living document
-**Version:** 0.1 (Draft für MVP-Scope)
+**Version:** 0.2 (Open Questions resolved → MVP-ready Spec)
 **Letzte Aktualisierung:** 2026-06-02
 **Autor:** Bruno Hochstrasser
 **Phase:** 6.5 — Presence Layer (eingeschoben zwischen Phase 6 Brand-Prep und Phase 7 Beta-Launch)
@@ -171,6 +171,21 @@ Inputs sind gerätspezifisch. Engine normalisiert via:
 
 **Result:** ein Stream `{ energy: 0.0–1.0, mode: string }` der gerätagnostic ist.
 
+### 5.4 Foam-Trigger-Konfiguration (v0.2)
+
+**Two-Path-Trigger** (Either-Or):
+
+| Path | Bedingung | Anwendung |
+|---|---|---|
+| **Primary — Motion** | `|userAcceleration| > 1.5 m/s²` sustained 150ms | Mobile-User mit DeviceMotion-Permission |
+| **Secondary — Typing-Rate** | `chars/sec > 10` (sliding window 500ms) | Desktop-User UND Mobile-User die Motion-Permission ablehnen |
+
+**Safety-Clamp:** Motion-Peaks `> 6 m/s²` werden ignoriert (Phone-Drop-Filter, nicht „joy").
+
+**Foam-Cooldown:** Auto-Decay nach 800ms zurück zu `excited`. Kein sustained Foam (annoying-by-design).
+
+**Calibration-Plan für Beta:** User-Survey nach 2 Wochen — wenn 30%+ "zu sensitiv" → Motion-Threshold 1.5→1.8; wenn 30%+ "nie erlebt" → Motion-Threshold 1.5→1.2. Phase 8: User-Slider (high/med/low/off).
+
 ---
 
 ## 6. State Machine — Emotion States
@@ -229,6 +244,24 @@ const interpolated = lerp(currentEnergy, targetEnergy, deltaTime / 100);
 ```
 
 Bei Stream-Drop > 2s: Receiver fadet Peer-Pulse aus (Decay-Rate 0.1/s).
+
+### 7.4 Multi-Device-Sender — MVP-Strategie (v0.2)
+
+**Pre-MVP-Realität:** Bruno kann gleichzeitig auf iPhone + Desktop logged in sein. Beide Devices senden Pulse parallel an Anna.
+
+**MVP-Approach (F+A Hybrid, deferred-Coordination):**
+- Each device sends own Pulse @ 5Hz independent (keine Coordination)
+- **Anna's Frontend de-dupliziert:** „latest-frame-wins" mit 200ms-Smoothing (Receiver-Side EMA)
+- Bruno's Desktop zeigt NUR Anna's Pulse — **kein Cross-Device-Self-Mirror**
+- Akzeptable Compromise: Anna's Pulse-Wahrnehmung von Bruno wirkt leicht gedämpft (Mittel aus active+idle Devices) — gut genug für MVP
+
+**Phase 8 echte Coordination:**
+- Active-Device-Lock via GSK-Multi-Device-Pipeline
+- Backend-Aggregation in `UserSessionDO` (max() across devices → single „Bruno's Pulse")
+- Optional: Bruno's Desktop zeigt subtle „📱 iPhone aktiv"-Indicator
+- Per-Device-Theme-Customization (Power-Feature)
+
+**Backend-RL-Impact:** 2 Devices × 5Hz = 10 Frames/sec/Sender — bleibt innerhalb `pulseSync` bucket (15/s cap). Safe.
 
 ### 7.4 Rate-Limiting
 
@@ -356,13 +389,61 @@ Bei Akku < 20% UND Pulse aktiv:
 
 Nicht-blockierend, eine Sekunde sichtbar.
 
-### 9.4 Rendering-Stile
+### 9.4 Rendering-Stile (v0.2 — Cyan-Anchored mit Warm-Spike)
 
-Default-Theme: Bubbles in Akzent-Farbe (RENEX accent-voice = `#22d3ee` cyan), Opacity 30-60%.
+**Default-Theme:** Cyan-Anchored mit Warm-Gold Foam-Spike.
 
-Per-User-Customization (in Phase 8): Color-Theme-Selection (Cyan/Warm/Mint/Rose).
+| Element | HSL-Wert | Wann |
+|---|---|---|
+| **Calm/Active/Excited** | `hsl(190, 80%, L%)` mit L=40-75% (Energy-modulated) | 99% der Zeit |
+| **Foam-Spike** | Transition zu `hsl(38, 95%, 65%)` (warm gold) für 400ms | Bei Foam-Trigger |
+| **Foam-Decay** | Smooth back zu cyan über 300ms | Nach Foam-Cooldown |
 
-`prefers-reduced-motion` Fallback: statischer „Mood Indicator" — ein kleiner Kreis links/rechts der mit Energy-Level pulsiert (langsame Skala-Animation), keine Partikel.
+Saturation bleibt **konstant** (verhindert Color-Bombing). Nur Lightness varies mit Energy + brief Hue-shift bei Foam.
+
+**Brand-Begründung:** 99% cyan = RENEX-UI-Extension (nicht eine fremde Feature-Insel). 1% gold-flash bei Foam = emotional payoff bei seltenen Spikes. Marketing-tauglich für TikTok-Demo-Clip ("alles cyan, dann gelber Splash bei Phone-Shake").
+
+**Per-User-Customization (Phase 8):** Color-Theme-Selection (Cyan/Warm/Mint/Rose).
+
+**`prefers-reduced-motion` Fallback:** statischer „Mood Indicator" — ein kleiner Kreis links/rechts der mit Energy-Level pulsiert (langsame Skala-Animation), keine Partikel.
+
+### 9.5 Self-View (v0.2 — Mini-Indicator + Onboarding)
+
+**Persistent UI:** Mini-Pulse-Dot neben eigenem Avatar im Chat-Header. Opacity tied to current energy (0.2 calm → 0.9 foam). Klein, awareness-ohne-Lärm.
+
+**First-Use-Reveal:** In den ersten 3 Pulse-aktiven Chats wird beim Öffnen eine 5-Sekunden-Onboarding-Animation gespielt:
+- Eigener Pulse wird kurz prominent gezeigt (Background)
+- Text-Overlay: „Du sendest gerade Pulse. Andere sehen das so."
+- Fade-out nach 5s, zurück zu Mini-Indicator-only
+
+**Settings-Toggle:** „Eigene Pulse-Visualisierung anzeigen" (default OFF). Power-User können volle Self-View aktivieren — wird dann mit halbierter Opacity im Background gerendert (nicht dominant).
+
+**Hardrule:** Mini-Indicator MUSS muted-by-default sein wenn DeviceMotion-Permission verweigert oder Pulse pro Chat disabled. Sonst sieht User „ich pulse" obwohl nichts rausgeht (verwirrend).
+
+### 9.6 Cold-Start (v0.2 — Conditional Fade-In)
+
+**Was Anna sieht beim Öffnen des Chats mit Bruno:**
+
+```
+Bruno online + Pulse-enabled:
+  Render: leere Canvas
+  Subscribe: WS für peer-pulse-Frames
+  First Frame received: Fade-In 800ms (energy: 0 → empfangener Value)
+  Continue: live stream
+  Cold-Start-Init-Energy = 0.05 (NICHT 0 — "calm hat Lebenszeichen")
+
+Bruno online + Pulse-disabled:
+  Render: NICHTS (kein Toggle, kein Hint — silent)
+
+Bruno offline:
+  Render: NICHTS (oder existing "zuletzt gesehen"-Indicator)
+
+First-Frame-Timeout (>3s, Bruno-Status unklar):
+  Render: subtle calm-baseline (energy=0.05) mit faded Disclaimer
+  "Pulse von Bruno wird verbunden..."
+```
+
+**Hardrule:** **NIEMALS** last-known Pulse-Wert cachen (Privacy-Hardrule §8.1).
 
 ---
 
@@ -601,16 +682,33 @@ Im Manifesto-Update (Phase 6 Deliverable):
 | 2026-06-02 | Accessibility-Hardrule | Pulse-Abwesenheit als Bot-Indikator / Strikt neutral | **Strikt neutral, niemals Bot-Marker** | EU-Accessibility-Act + ADA + Brand-Integrität. Discrimination-Risk vermeiden. |
 | 2026-06-02 | MVP-Timeline | 1 Woche fixiert / Phase 7 verschieben falls nötig | **1 Woche Ziel, 1 Woche Buffer für Phase 7** | Realistische Solo-Dev-Pace; Beta-Launch-Story braucht Pulse, lieber 1 Woche später als ohne |
 | 2026-06-02 | Marketing-Strategie | Creator-Outreach upfront / Self-Posts-First | **Self-Posts erst, Creator-Outreach Phase 7** | Bruno hat keine TikTok-Erfahrung. Erst eigenen Channel etablieren, dann Creators mit Social-Proof ansprechen. |
+| 2026-06-02 | **Theming-Default** (Open Q1) | 7 Options (Cyan-pure, Warm-yellow, Energy-mapped Hue, Time-of-day, User-pick, Monochrome, Per-User-adaptive) | **D — Cyan-Anchored mit Warm-Spike** | 99% RENEX-cyan (`hsl(190,80%,40-75%)` energy-modulated, Lightness varies). 1% Foam: Hue-Transition zu `hsl(38,95%,65%)` warm gold für 400ms. Brand-coherent + emotional Payoff bei seltenen Spikes. Marketing-Recognition für TikTok. Phase 8 kann User-Custom dranhängen. Saturation konstant verhindert Color-Bombing. |
+| 2026-06-02 | **Foam-Trigger-Sensitivity** (Open Q2) | 7 Options (Conservative/Moderate/Aggressive Thresholds, Two-Stage, Adaptive, Typing-only, Combined) | **B+F Hybrid — Two-Path-Trigger** | Primary: Motion `>1.5 m/s²` sustained 150ms (deliberate-aber-discoverable, falsified-positives selten). Secondary: Typing-Rate `>10 chars/sec` 500ms-window (Desktop + iOS-Motion-Decliners). Either-Or-Trigger. Safety-Clamp `>6 m/s²` = ignore (Phone-Drop-Filter). Foam-Cooldown 800ms. Calibration via Beta-Survey, Phase 8 User-Slider. |
+| 2026-06-02 | **Pulse-Self-View** (Open Q3) | 8 Options (None, Full, Mini-Indicator, Split, Toggle, First-Use-Reveal, Mini-Mirror, Background-Foreground-Layered) | **C+F Hybrid — Mini-Indicator + Onboarding-Reveal** | First 3 Pulse-aktive Chats: 5s First-Use-Animation („Du sendest gerade Pulse"). Danach persistent: Mini-Pulse-Dot neben eigenem Avatar im Chat-Header (Opacity tied to energy). Settings-Toggle für volle Self-View (default OFF, Power-User-Feature). Hardrule: Mini muted wenn Permission verweigert. Awareness-ohne-visueller-Lärm. |
+| 2026-06-02 | **Cold-Start-UX** (Open Q4) | 7 Options (Immediate, Fade-In, Connecting-State, Last-Known-Cached, Wake-Up-Burst, Calm-Baseline+Sync, Peer-Online-Aware) | **B+G Hybrid — Conditional Fade-In** | Peer online + Pulse-enabled → 800ms Fade-In 0 → first frame. Peer online + disabled → nichts (silent). Peer offline → nichts. 3s-Timeout → calm-baseline + faded Disclaimer. Init-Energy `0.05` (nicht 0 — "calm hat Lebenszeichen"). **NIEMALS** last-known cachen (Privacy-Hardrule). Smooth ohne Theatralik. |
+| 2026-06-02 | **Multi-Device Self-Sync** (Open Q5) | 6 Output-Options × 3 Awareness-Modi | **F+A für MVP, Full Coordination deferred Phase 8** | MVP: Each device sends own pulse @5Hz independent (keine Coordination). Anna's Frontend de-dupliziert via "latest-frame-wins" + 200ms-Smoothing. Bruno's Desktop sieht NUR Anna's Pulse (kein Self-Mirror). Akzeptabler Trade-off: Multi-Device-Energie wirkt leicht gedämpft. Bandwidth innerhalb RL `pulseSync` bucket (15/s cap). Phase 8: GSK-Multi-Device-Lock + UserSessionDO-Aggregation + optional „iPhone aktiv"-Indicator. |
 
 ---
 
-## 16. Open Questions (für Bruno's Next-Brainstorm)
+## 16. Open Questions (Resolution-Tracker)
 
-1. **Pulse-Theming-Default:** Cyan (matched accent-voice) oder warm-yellow (matched friendliness)? Wirkt subtil aber signifikant für Brand-Mood.
-2. **Foam-Trigger-Sensitivity:** Wie schnell muss man's Phone schütteln um Foam-Mode zu triggern? Zu sensitiv = unintentional, zu rigid = niemand entdeckt's. Calibration via Beta-User-Feedback nötig.
-3. **Pulse-Self-View:** Soll User SEINE EIGENE Pulse-Visualisierung im Chat sehen? Pro: Awareness, Spielerei. Con: Visueller Lärm. Default-Vorschlag: nur Peer-Pulse sichtbar, eigene als Mini-Indicator im Header.
-4. **Cold-Start vs Warm-Open:** Wenn Anna den Chat öffnet, sieht sie Bruno's Pulse von „jetzt" oder ein „Wake-Up"-Animation („connecting...")? UX-Frage.
-5. **Multi-Device Self-Sync (deferred Phase 8):** Wenn Bruno an iPhone tippt aber auch am Desktop logged-in ist — soll der Desktop seinen Pulse mitsehen? Privacy: eigene Geräte schon, andere Identitäten nie.
+### ✅ Initial Open Questions (v0.1) — RESOLVED 2026-06-02
+
+Alle 5 Open Questions aus v0.1 sind im Decision Log §15 dokumentiert (Einträge 14-18):
+
+1. ~~Pulse-Theming-Default~~ → ✅ **D — Cyan-Anchored mit Warm-Spike** (§15 Decision #14)
+2. ~~Foam-Trigger-Sensitivity~~ → ✅ **B+F Hybrid Two-Path** (§15 Decision #15)
+3. ~~Pulse-Self-View~~ → ✅ **C+F Hybrid Mini-Indicator + Onboarding-Reveal** (§15 Decision #16)
+4. ~~Cold-Start vs Warm-Open~~ → ✅ **B+G Hybrid Conditional Fade-In** (§15 Decision #17)
+5. ~~Multi-Device Self-Sync~~ → ✅ **F+A für MVP, Coordination Phase 8** (§15 Decision #18)
+
+Body-Sections aktualisiert: §5.4 (Foam-Trigger), §7.4 (Multi-Device-Sender), §9.4 (Theming), §9.5 (Self-View), §9.6 (Cold-Start).
+
+### 🆕 Neue Open Questions (entstehen während Implementierung)
+
+Wenn neue offene Punkte beim Phase-6.5-Sprint auftauchen, hier dokumentieren — und beim Auflösen ins Decision Log promoten (Pattern aus v0.1 → v0.2 Resolution).
+
+*Noch keine neuen Open Questions identifiziert.*
 
 ---
 

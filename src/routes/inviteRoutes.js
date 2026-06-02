@@ -90,7 +90,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     return json(request, {
       ok: true,
       token,
-      inviteUrl: `https://app.renex.id/join?token=${token}`,
+      inviteUrl: `https://renex.id/join?token=${token}`,
       expiresAt,
       msgLimit: GUEST_MSG_LIMIT,
     });

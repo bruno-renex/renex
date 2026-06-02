@@ -116,7 +116,7 @@
   let busyRevoke = $state(null);   // token während revoke
   let copiedToken = $state(null);  // token mit aktivem "Kopiert"-Feedback
 
-  const inviteUrlFor = (token) => `https://app.renex.id/?join-server=${token}`;
+  const inviteUrlFor = (token) => `https://renex.id/?join-server=${token}`;
 
   async function loadInvites() {
     if (!serverId) return;

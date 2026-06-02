@@ -87,7 +87,7 @@ export async function handleChatSend(request, env) {
           error:    "Message limit reached",
           msgCount: guestRow.msg_count,
           msgLimit: guestRow.msg_limit,
-          convertUrl: "https://app.renex.id/join?convert=1",
+          convertUrl: "https://renex.id/join?convert=1",
         }, 429);
       }
     }

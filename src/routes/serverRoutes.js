@@ -2213,7 +2213,7 @@ async function invitesHandler({ request, env, me }, serverId) {
     return json(request, {
       ok: true,
       token,
-      url: `https://app.renex.id/?join-server=${token}`,
+      url: `https://renex.id/?join-server=${token}`,
       maxUses, expiresAt, initialRoleId,
     });
   }

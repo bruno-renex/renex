@@ -29,7 +29,7 @@ const STRINGS = {
     ogLocaleAlt: 'de_CH',
     canonical: 'https://renex.id/manifesto',
     altUrl: 'https://renex.id/manifest-de',
-    ogImage: 'https://renex.id/og/og-manifesto-en.png',
+    ogImage: 'https://renex.id/og/og-manifesto.png',
     footerTagline: 'Made in Switzerland. Made for humans. Made to last.',
     footerLinks: [
       { label: 'Contributing', href: REPO + '/blob/main/docs/CONTRIBUTING.md' },
@@ -53,7 +53,7 @@ const STRINGS = {
     ogLocaleAlt: 'en_US',
     canonical: 'https://renex.id/manifest-de',
     altUrl: 'https://renex.id/manifesto',
-    ogImage: 'https://renex.id/og/og-manifesto-de.png',
+    ogImage: 'https://renex.id/og/og-manifesto.png',
     footerTagline: 'Made in Switzerland. Made for humans. Made to last.',
     footerLinks: [
       { label: 'Mitwirken', href: REPO + '/blob/main/docs/CONTRIBUTING.md' },

@@ -4,6 +4,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-03 — Pulse MVP: ambient Presence-Layer für 1:1-DMs ✨ (Phase 6.5)
+
+RENEX' brand-definierendes Anti-AI-Feature ist live (`2026-06-03-13`) — **~2 Wochen
+vor Roadmap**. Pulse übersetzt Mikro-Bewegung (Maus/Touch/Tippen/Sensor) in einen
+E2E-verschlüsselten Energie-Skalar, den das Gegenüber als ambient Partikel sieht.
+„Bots haben keinen Puls." Per-Chat opt-in, default OFF. Smoke-Test grün.
+
+### ✨ Added
+- **Pulse-Engine** (`lib/pulse/engine.js`) — EMA-Smoothing, Auto-Decay,
+  Mode-FSM mit Hysterese (calm/active/excited/foam). 11 Unit-Tests.
+- **Inputs** (`lib/pulse/inputs.js`) — Maus/Wheel/Tippen/Backspace + Touch/Motion,
+  rAF-gedrosselt, gerätagnostische Normalisierung. **iOS-Permission-Flow**.
+- **PulseCanvas** — Peer-Puls als ambient Hintergrund (Cyan + Gold-Foam-Spike,
+  `prefers-reduced-motion`-Fallback, Tab-Pause, silent wenn Peer nicht teilt).
+- **PulseToggle** im Chat-Header (1:1) mit Mini-Self-Indicator (✨ pulsiert mit
+  eigener Energie). **PulsePermissionModal** (iOS). **PulseController** (Sende-Loop).
+- **Backend** `type:"pulse"` — kein D1, kein Unread, kein Self-Mirror, awaited
+  Forward via `pushToUserDO`, eigenes RL-Bucket (15/s). E2E über Session-CMK
+  (keine Signatur — Belief-Layer, keine Authority).
+- Logout wiped Pulse-Opt-in-Flags + RAM (Privacy). i18n de/en/es.
+
+### 🐛 Fixed
+- `effect_update_depth_exceeded` beim Öffnen jedes DMs (idempotente
+  activate/deactivate, kein thrashendes Effect-Cleanup). *(v2026-06-03-12 … -13)*
+
+---
+
 ## 2026-06-03 — Landing-Page Redesign: Statement-first + interaktiver Pulse 🫀
 
 Phase 6: Die anonyme Landing (`renex.id`) wurde von „Login-Formular zuerst" auf

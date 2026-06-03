@@ -714,7 +714,7 @@ Wenn neue offene Punkte beim Phase-6.5-Sprint auftauchen, hier dokumentieren —
 
 ## 19. Manifesto-Integration — "Why Pulse" Pre-Draft (publishes after Phase 6.5 Ship)
 
-**Status:** Vorgelagerter Brand-Statement-Text, NICHT in MANIFESTO.md publiziert bis Pulse live ist. Vermeidet Vaporware-PR. Sobald Phase 6.5 deployed + smoke-tested ist, wird dieser Text als neue Top-Level-Sektion in MANIFESTO.md eingefügt — Position: zwischen "How we resist (transparently)" und "What we admit" (vor §6.3).
+**Status:** ✅ **PUBLIZIERT 2026-06-03** (Manifesto v1.7, EN + DE) — Trigger erfüllt (Pulse Phase 6.5 deployed `2026-06-03-13` + smoke-tested grün). Eingefügt als Top-Level-Sektion „Why Pulse"/„Warum Pulse" zwischen „How we resist (transparently)" und „What we admit". Eine inhaltlich unklare Draft-Zeile („we lost the arrest" / „die Festnahme verloren") wurde für die Veröffentlichung geschärft zu „Economically, that fight is already lost for you — and won for us." (DE analog). Der Original-Pre-Draft bleibt unten als Referenz erhalten.
 
 ### Pre-Draft EN — "Why Pulse"
 

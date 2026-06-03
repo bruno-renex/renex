@@ -2,8 +2,8 @@
 
 > **PASSKEY-ONLY. HUMAN-FIRST. OPEN-STANDARD.**
 
-**Version:** 1.6
-**Last updated:** 2026-06-02
+**Version:** 1.7
+**Last updated:** 2026-06-03
 **License:** CC BY 4.0 — you may quote this manifesto with attribution.
 **Translations:** [Deutsch](./MANIFESTO_DE.md)
 
@@ -147,6 +147,48 @@ What we promise is that we keep fighting. Every layer we add — every captcha, 
 If you find a way humans can verify other humans without violating their privacy: **tell us**. We will ship it.
 
 Until then: this is a forever arms race. We have chosen our side.
+
+---
+
+## Why Pulse
+
+Discord shows typing dots. iMessage shows three pulsing bubbles. Slack turns your avatar into a green circle. These are signals from 2008.
+
+RENEX shows your *pulse*.
+
+When you chat with someone on RENEX, you can see them. Not their words — the *energy* with which they're sending those words. Are they typing slowly, thinking? Are they fast and excited? Did they just put their phone down? Are they nervous, hesitating, about to send something hard?
+
+You see it. In ambient particles, in soft pulses, in foam when they shake their phone in mock-frustration. You feel that there's a human breathing on the other side.
+
+This is not a typing indicator. This is not "presence" in the Microsoft Teams sense. This is *embodied digital presence* — the first time text chat has tried to communicate that the other side is *alive*.
+
+**Why we built this:**
+
+Because AI-generated text is now indistinguishable from human-generated text. The Turing test is over. ChatGPT won. We can't fight this on the content layer.
+
+So we moved the fight to the *body* layer. Bots type. Humans tremble. Humans drum fingers. Humans hold their breath before sending something vulnerable. Humans shake their phone in joy.
+
+We can't (yet) prove cryptographically that a Pulse stream comes from a human. We're not trying to. Pulse is not authentication. It's *belief*.
+
+And belief, in the end, is what holds communities together.
+
+**What we promise:**
+
+- Your pulse never leaves your device as raw data.
+- Only an abstracted scalar (0.0 to 1.0) crosses the wire, end-to-end-encrypted.
+- We don't store pulse history. Ever. Each session begins from zero.
+- We don't profile your pulse patterns. Ever.
+- You can turn Pulse off, per-conversation, in two clicks.
+
+**What we don't promise:**
+
+We don't promise that a bot can't fake a pulse. Sophisticated motion-modeling will eventually fake it convincingly. We promise that the engineering cost of doing so makes commodity bot-spam economically irrational on RENEX.
+
+For the rare attacker who builds a human-movement-modeled bot army just to spam us: you are now spending more compute on bot-spam than legitimate humans spend on RENEX. Economically, that fight is already lost for you — and won for us.
+
+Pulse is brand statement, brand experience, and brand defense in one. And as far as we can tell, no other messenger on the planet has it.
+
+We're not waiting for someone else to make this real. We're shipping it.
 
 ---
 

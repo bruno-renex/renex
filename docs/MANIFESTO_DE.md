@@ -2,8 +2,8 @@
 
 > **PASSKEY-ONLY. HUMAN-FIRST. OPEN-STANDARD.**
 
-**Version:** 1.6
-**Letzte Aktualisierung:** 2026-06-02
+**Version:** 1.7
+**Letzte Aktualisierung:** 2026-06-03
 **Lizenz:** CC BY 4.0 — du darfst dieses Manifest mit Quellenangabe zitieren.
 **Übersetzungen:** [English](./MANIFESTO.md) (Original)
 
@@ -147,6 +147,48 @@ Was wir versprechen, ist: wir kämpfen weiter. Jede zusätzliche Schicht — jed
 Wenn du einen Weg findest, mit dem Menschen andere Menschen verifizieren können, ohne deren Privatsphäre zu verletzen: **sag's uns**. Wir shippen es.
 
 Bis dahin: das ist ein ewiger Wettkampf. Wir haben unsere Seite gewählt.
+
+---
+
+## Warum Pulse
+
+Discord zeigt Tipp-Punkte. iMessage zeigt drei pulsierende Bubbles. Slack macht deinen Avatar zu einem grünen Kreis. Das sind Signale aus 2008.
+
+RENEX zeigt deinen *Puls*.
+
+Wenn du auf RENEX mit jemandem chattest, siehst du ihn. Nicht seine Worte — die *Energie*, mit der er diese Worte sendet. Tippt er langsam, nachdenkend? Ist er schnell und aufgeregt? Hat er gerade das Phone weggelegt? Ist er nervös, zögert, kurz davor etwas Schweres zu schicken?
+
+Du siehst es. In ambient Partikeln, in sanften Pulsen, in Schaum, wenn er sein Phone in gespieltem Frust schüttelt. Du spürst, dass auf der anderen Seite ein Mensch atmet.
+
+Das ist kein Tipp-Indikator. Das ist nicht „Presence" im Microsoft-Teams-Sinn. Das ist *embodied digital presence* — das erste Mal, dass Text-Chat versucht zu kommunizieren, dass die andere Seite *lebt*.
+
+**Warum wir das gebaut haben:**
+
+Weil KI-generierter Text mittlerweile von menschlich-generiertem Text nicht mehr zu unterscheiden ist. Der Turing-Test ist vorbei. ChatGPT hat gewonnen. Wir können diesen Kampf auf der Content-Schicht nicht gewinnen.
+
+Also haben wir den Kampf auf die *Körper*-Schicht verlegt. Bots tippen. Menschen zittern. Menschen trommeln mit den Fingern. Menschen halten den Atem an, bevor sie etwas Verletzliches schicken. Menschen schütteln ihr Phone vor Freude.
+
+Wir können (noch) nicht kryptographisch beweisen, dass ein Pulse-Stream von einem Menschen kommt. Wir versuchen es nicht. Pulse ist keine Authentifizierung. Es ist *Belief*.
+
+Und Belief ist am Ende das, was Communities zusammenhält.
+
+**Was wir versprechen:**
+
+- Dein Puls verlässt dein Gerät niemals als Rohdaten.
+- Nur ein abstrahierter Skalar (0.0 bis 1.0) geht über die Leitung, Ende-zu-Ende-verschlüsselt.
+- Wir speichern keine Pulse-Historie. Niemals. Jede Session beginnt bei null.
+- Wir profilieren deine Pulse-Muster nicht. Niemals.
+- Du kannst Pulse pro Konversation in zwei Klicks ausschalten.
+
+**Was wir nicht versprechen:**
+
+Wir versprechen nicht, dass ein Bot keinen Puls faken kann. Sophistizierte Motion-Modellierung wird ihn irgendwann überzeugend faken. Wir versprechen, dass die Engineering-Kosten dafür Commodity-Bot-Spam auf RENEX ökonomisch irrational machen.
+
+Für den seltenen Angreifer, der eine human-movement-modellierte Bot-Armee baut, nur um uns zu spammen: du gibst jetzt mehr Compute für Bot-Spam aus, als legitime Menschen für RENEX ausgeben. Ökonomisch ist dieser Kampf für dich bereits verloren — und für uns gewonnen.
+
+Pulse ist Brand-Statement, Brand-Erlebnis und Brand-Verteidigung in einem. Und soweit wir wissen, hat kein anderer Messenger auf dem Planeten das.
+
+Wir warten nicht, dass jemand anderes das Realität macht. Wir shippen es.
 
 ---
 

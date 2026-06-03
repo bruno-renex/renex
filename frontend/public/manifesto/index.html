@@ -266,10 +266,10 @@ details.faq[open] summary::before{content:"−"}
 <div class="content">
   <aside class="toc" aria-label="Sections">
     <div class="toc-title">Sections</div>
-    <ol><li><a href="#why-now">Why now</a></li><li><a href="#what-we-re-building">What we're building</a></li><li><a href="#why">Why</a></li><li><a href="#the-5-principles">The 5 principles</a></li><li><a href="#what-we-will-never-do">What we will never do</a></li><li><a href="#how-we-resist-transparently">How we resist (transparently)</a></li><li><a href="#what-we-admit">What we admit</a></li><li><a href="#what-renex-is-what-it-is-not">What RENEX is, what it is not</a></li><li><a href="#to-allies">To allies</a></li><li><a href="#to-the-other-side">To the other side</a></li><li><a href="#to-the-future">To the future</a></li><li><a href="#appendix-a-skeptic-faq">Appendix A: Skeptic FAQ</a></li></ol>
+    <ol><li><a href="#why-now">Why now</a></li><li><a href="#what-we-re-building">What we're building</a></li><li><a href="#why">Why</a></li><li><a href="#the-5-principles">The 5 principles</a></li><li><a href="#what-we-will-never-do">What we will never do</a></li><li><a href="#how-we-resist-transparently">How we resist (transparently)</a></li><li><a href="#why-pulse">Why Pulse</a></li><li><a href="#what-we-admit">What we admit</a></li><li><a href="#what-renex-is-what-it-is-not">What RENEX is, what it is not</a></li><li><a href="#to-allies">To allies</a></li><li><a href="#to-the-other-side">To the other side</a></li><li><a href="#to-the-future">To the future</a></li><li><a href="#appendix-a-skeptic-faq">Appendix A: Skeptic FAQ</a></li></ol>
   </aside>
   <main id="content">
-<div class="meta-line"><strong>Version:</strong> 1.6 · <strong>Last updated:</strong> 2026-06-02 · <strong>License:</strong> CC BY 4.0 — you may quote this manifesto with attribution.</div>
+<div class="meta-line"><strong>Version:</strong> 1.7 · <strong>Last updated:</strong> 2026-06-03 · <strong>License:</strong> CC BY 4.0 — you may quote this manifesto with attribution.</div>
 <section class="ms" id="why-now"><h2>Why now</h2><p>RENEX is not &quot;another messenger&quot;. RENEX is a philosophical response to an increasingly AI-generated internet.</p>
 <p>We don&#39;t build <em>against</em> AI. We build <em>for</em> humans, in a time where the distinction between the two is blurring. When you talk to someone on RENEX five years from now, you should know: there&#39;s a human on the other side.</p>
 <p><strong>We don&#39;t prove humanity — we make automation expensive.</strong> That is the honest core of everything below. Not a guarantee that every account is human, but a platform engineered so that faking one rarely pays off. Read the rest with that frame: every claim here is a fight we wage, not a promise we pretend to have already won.</p>
@@ -338,6 +338,27 @@ details.faq[open] summary::before{content:"−"}
 <p>What we promise is that we keep fighting. Every layer we add — every captcha, every rate limit, every &quot;we just won&#39;t build that&quot; decision — is recorded in this manifesto, in our changelog, and in our code.</p>
 <p>If you find a way humans can verify other humans without violating their privacy: <strong>tell us</strong>. We will ship it.</p>
 <p>Until then: this is a forever arms race. We have chosen our side.</p>
+</section>
+<section class="ms" id="why-pulse"><h2>Why Pulse</h2><p>Discord shows typing dots. iMessage shows three pulsing bubbles. Slack turns your avatar into a green circle. These are signals from 2008.</p>
+<p>RENEX shows your <em>pulse</em>.</p>
+<p>When you chat with someone on RENEX, you can see them. Not their words — the <em>energy</em> with which they&#39;re sending those words. Are they typing slowly, thinking? Are they fast and excited? Did they just put their phone down? Are they nervous, hesitating, about to send something hard?</p>
+<p>You see it. In ambient particles, in soft pulses, in foam when they shake their phone in mock-frustration. You feel that there&#39;s a human breathing on the other side.</p>
+<p>This is not a typing indicator. This is not &quot;presence&quot; in the Microsoft Teams sense. This is <em>embodied digital presence</em> — the first time text chat has tried to communicate that the other side is <em>alive</em>.</p>
+<p class="label"><strong>Why we built this:</strong></p><p>Because AI-generated text is now indistinguishable from human-generated text. The Turing test is over. ChatGPT won. We can&#39;t fight this on the content layer.</p>
+<p>So we moved the fight to the <em>body</em> layer. Bots type. Humans tremble. Humans drum fingers. Humans hold their breath before sending something vulnerable. Humans shake their phone in joy.</p>
+<p>We can&#39;t (yet) prove cryptographically that a Pulse stream comes from a human. We&#39;re not trying to. Pulse is not authentication. It&#39;s <em>belief</em>.</p>
+<p>And belief, in the end, is what holds communities together.</p>
+<p class="label"><strong>What we promise:</strong></p><ul>
+<li>Your pulse never leaves your device as raw data.</li>
+<li>Only an abstracted scalar (0.0 to 1.0) crosses the wire, end-to-end-encrypted.</li>
+<li>We don&#39;t store pulse history. Ever. Each session begins from zero.</li>
+<li>We don&#39;t profile your pulse patterns. Ever.</li>
+<li>You can turn Pulse off, per-conversation, in two clicks.</li>
+</ul>
+<p class="label"><strong>What we don&#39;t promise:</strong></p><p>We don&#39;t promise that a bot can&#39;t fake a pulse. Sophisticated motion-modeling will eventually fake it convincingly. We promise that the engineering cost of doing so makes commodity bot-spam economically irrational on RENEX.</p>
+<p>For the rare attacker who builds a human-movement-modeled bot army just to spam us: you are now spending more compute on bot-spam than legitimate humans spend on RENEX. Economically, that fight is already lost for you — and won for us.</p>
+<p>Pulse is brand statement, brand experience, and brand defense in one. And as far as we can tell, no other messenger on the planet has it.</p>
+<p>We&#39;re not waiting for someone else to make this real. We&#39;re shipping it.</p>
 </section>
 <section class="ms" id="what-we-admit"><h2>What we admit</h2><p>We don&#39;t lie. Four honest points:</p>
 <h3>1. Cloudflare lock-in (today)</h3><p>The reference server runs on Cloudflare Workers, D1, KV, R2, Durable Objects. That&#39;s <strong>lock-in for the reference implementation</strong>, not for the protocol. Anyone can build a RENEX-compliant server on their own infra — the spec does not prescribe where it runs.</p>
@@ -481,7 +502,7 @@ If you&#39;re indifferent to this: then RENEX is maybe not for you. Also fine.</
 <nav class="sheet" id="sheet" aria-label="Sections">
   <div class="sheet-grip"></div>
   <h3>Sections</h3>
-  <ol><li><a href="#why-now">Why now</a></li><li><a href="#what-we-re-building">What we're building</a></li><li><a href="#why">Why</a></li><li><a href="#the-5-principles">The 5 principles</a></li><li><a href="#what-we-will-never-do">What we will never do</a></li><li><a href="#how-we-resist-transparently">How we resist (transparently)</a></li><li><a href="#what-we-admit">What we admit</a></li><li><a href="#what-renex-is-what-it-is-not">What RENEX is, what it is not</a></li><li><a href="#to-allies">To allies</a></li><li><a href="#to-the-other-side">To the other side</a></li><li><a href="#to-the-future">To the future</a></li><li><a href="#appendix-a-skeptic-faq">Appendix A: Skeptic FAQ</a></li></ol>
+  <ol><li><a href="#why-now">Why now</a></li><li><a href="#what-we-re-building">What we're building</a></li><li><a href="#why">Why</a></li><li><a href="#the-5-principles">The 5 principles</a></li><li><a href="#what-we-will-never-do">What we will never do</a></li><li><a href="#how-we-resist-transparently">How we resist (transparently)</a></li><li><a href="#why-pulse">Why Pulse</a></li><li><a href="#what-we-admit">What we admit</a></li><li><a href="#what-renex-is-what-it-is-not">What RENEX is, what it is not</a></li><li><a href="#to-allies">To allies</a></li><li><a href="#to-the-other-side">To the other side</a></li><li><a href="#to-the-future">To the future</a></li><li><a href="#appendix-a-skeptic-faq">Appendix A: Skeptic FAQ</a></li></ol>
 </nav>
 
 <script>

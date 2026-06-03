@@ -9,6 +9,7 @@
   import { profileCache } from '../stores/profileCache.svelte.js';
   import { presenceStore } from '../stores/presence.svelte.js';
   import { userStore } from '../stores/user.svelte.js';
+  import { pulseStore } from '../stores/pulseStore.svelte.js';
   import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
   import ChatHeaderMenu from './ChatHeaderMenu.svelte';
   import GroupMembersModal from './GroupMembersModal.svelte';
@@ -38,6 +39,15 @@
   // Live-Online-Status aus presenceStore — DM only (Group hat keine peer-Presence-Summe)
   let isPeerOnline = $derived(
     chat?.type === 'dm' && chat?.peer ? presenceStore.isOnline(chat.peer) : false
+  );
+
+  // „Silent Together" (vNext): Peer sendet gerade live Pulse → additive „gerade da"-
+  // Anzeige ÜBER online/offline (nie Ersatz — Accessibility §8.3). Nur wenn ich
+  // selbst Pulse an habe und Frames vom offenen Chat empfange.
+  let pulsePresent = $derived(
+    chat?.type === 'dm' && !!chat?.peer
+    && pulseStore.enabled && pulseStore.peerActive
+    && pulseStore.activePeer === String(chat?.peer || '').toLowerCase()
   );
 
   // Bei Chat-Open frischen Presence-Wert holen (sonst stale bis nächster Poll-Tick).
@@ -152,7 +162,10 @@
       <div class="info">
         <div class="name">{headerName}</div>
         <div class="status">
-          {#if isPeerOnline}
+          {#if pulsePresent}
+            <span class="pulse-present-dot"></span>
+            {lang.pulsePresentNow || "gerade da"}
+          {:else if isPeerOnline}
             <span class="online-dot"></span>
             {lang.online || "Online"}
           {:else}
@@ -323,6 +336,23 @@
     height: 8px;
     border-radius: 50%;
     background: var(--status-success);
+  }
+
+  /* „Silent Together": atmender Cyan-Dot — signalisiert live Pulse-Präsenz */
+  .pulse-present-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-voice);
+    box-shadow: 0 0 6px var(--accent-voice);
+    animation: pulse-breathe 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse-breathe {
+    0%, 100% { opacity: 0.5; transform: scale(0.85); }
+    50%      { opacity: 1;   transform: scale(1.15); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pulse-present-dot { animation: none; opacity: 0.9; }
   }
 
   .actions {

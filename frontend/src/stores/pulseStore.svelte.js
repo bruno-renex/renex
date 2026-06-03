@@ -23,6 +23,14 @@ const STALE_MS = 2000;        // >2s kein Frame → Peer-Pulse ausfaden (§7.3)
 const STALE_DECAY = 0.1;      // Energie-Einheiten/s beim Ausfaden
 const RECV_LERP = 0.18;       // Receiver-Side Smoothing-Faktor
 
+// Handshake/Sync (vNext §20.2): beide Energien gleichzeitig hoch → Sync-Moment.
+// Rein client-seitig — beide Seiten erkennen die Bedingung selbst und triggern
+// ~gleichzeitig (WS-Latenz). Selten halten = magisch (Cooldown).
+const SYNC_THRESHOLD = 0.40;  // beide Energien darüber
+const SYNC_HOLD_MS = 1100;    // so lange gehalten → Trigger
+const SYNC_DURATION_MS = 2600;
+const SYNC_COOLDOWN_MS = 12000;
+
 // ── Reaktiver State ──
 let _activePeer = $state(null);     // Handle des offenen, pulse-aktiven Chats
 let _enabled = $state(false);       // Pulse für den aktiven Chat eingeschaltet?
@@ -32,6 +40,13 @@ let _peerEnergy = $state(0);        // geglättet (für Render)
 let _peerMode = $state(MODES.CALM);
 let _peerActive = $state(false);    // kürzlich ein Frame empfangen?
 let _motionGranted = $state(false); // DeviceMotion-Permission erteilt (Session)
+let _syncActive = $state(false);    // Handshake-Moment läuft gerade?
+
+// Nicht-reaktiver Handshake-State
+let _bothHighSince = 0;
+let _syncStart = 0;
+let _syncUntil = 0;
+let _syncCooldownUntil = 0;
 
 // ── Nicht-reaktiver Receiver-State ──
 let _peerTarget = 0;                // zuletzt empfangener Zielwert
@@ -48,6 +63,11 @@ function resetPeer() {
   _peerEnergy = 0;
   _peerMode = MODES.CALM;
   _peerActive = false;
+  _syncActive = false;
+  _bothHighSince = 0;
+  _syncStart = 0;
+  _syncUntil = 0;
+  _syncCooldownUntil = 0;
 }
 
 export const pulseStore = {
@@ -58,6 +78,7 @@ export const pulseStore = {
   get peerEnergy() { return _peerEnergy; },
   get peerMode()   { return _peerMode; },
   get peerActive() { return _peerActive; },
+  get syncActive() { return _syncActive; },
   get motionGranted() { return _motionGranted; },
   setMotionGranted(on) { _motionGranted = !!on; },
 
@@ -126,7 +147,29 @@ export const pulseStore = {
       _peerEnergy = 0;
       _peerMode = MODES.CALM;
     }
-    return { energy: _peerEnergy, mode: _peerMode, active: _peerActive };
+
+    // ── Handshake/Sync: beide Energien gleichzeitig hoch, ~1.1s gehalten ──
+    if (now < _syncUntil) {
+      // läuft — nichts neu prüfen
+    } else {
+      const bothHigh = _peerActive && _peerEnergy > SYNC_THRESHOLD && _selfEnergy > SYNC_THRESHOLD;
+      if (bothHigh && now >= _syncCooldownUntil) {
+        if (_bothHighSince === 0) _bothHighSince = now;
+        else if (now - _bothHighSince >= SYNC_HOLD_MS) {
+          _syncStart = now;
+          _syncUntil = now + SYNC_DURATION_MS;
+          _syncCooldownUntil = _syncUntil + SYNC_COOLDOWN_MS;
+          _bothHighSince = 0;
+        }
+      } else {
+        _bothHighSince = 0;
+      }
+    }
+    const syncNow = now < _syncUntil;
+    if (syncNow !== _syncActive) _syncActive = syncNow;
+    const syncT = syncNow ? (now - _syncStart) / SYNC_DURATION_MS : 0;
+
+    return { energy: _peerEnergy, mode: _peerMode, active: _peerActive, sync: syncNow, syncT };
   },
 
   // ── Logout: Opt-in-Flags + RAM wipen (Privacy-Hardrule §8.1) ──

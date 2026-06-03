@@ -253,6 +253,7 @@ export default {
   pulsePermPoint3:         "Nur dein Gegenüber sieht es",
   pulsePermHint:           "iOS fragt im nächsten Schritt nach der Bewegungs-Berechtigung.",
   pulsePermAllow:          "Erlauben →",
+  pulsePresentNow:         "gerade da",
   attachmentTooLarge:      "Datei zu groß (max. 10 MB).",
   attachmentMimeBlocked:   "Dateityp nicht erlaubt.",
   attachmentExtBlocked:    "Dateiendung nicht erlaubt.",

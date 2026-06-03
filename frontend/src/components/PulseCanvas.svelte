@@ -70,19 +70,24 @@
   }
 
   function step(ctx, now) {
-    const { energy, mode, active } = pulseStore.tickPeer(now);
+    const { energy, mode, active, sync, syncT } = pulseStore.tickPeer(now);
 
     ctx.clearRect(0, 0, dim.w * dim.dpr, dim.h * dim.dpr);
 
     // Silent wenn Peer nicht teilt / offline (§9.6)
     if (!active && energy < 0.01) { particles = []; return; }
 
+    // Handshake-Envelope: 0 → 1 → 0 über die Sync-Dauer (anschwellen + abebben)
+    const env = sync ? Math.sin(Math.PI * Math.min(1, Math.max(0, syncT))) : 0;
+    // Während Sync schwillt das Feld an (beide Pulse „verschmelzen")
+    const eEff = Math.min(1, energy + env * 0.35);
+
     ctx.save();
     ctx.scale(dim.dpr, dim.dpr);
 
-    const c = colorFor(mode, energy);
-    const speedMul = 0.4 + energy * 2.2;
-    const target = Math.round(lerp(P_MIN, P_MAX, energy));
+    const c = colorFor(mode, eEff);
+    const speedMul = 0.4 + eEff * 2.2;
+    const target = Math.round(lerp(P_MIN, P_MAX, eEff));
     adjustCount(target);
 
     for (const p of particles) {
@@ -91,11 +96,34 @@
       if (p.x < 0 || p.x > dim.w) p.vx = -p.vx;
       if (p.y < 0 || p.y > dim.h) p.vy = -p.vy;
 
-      const alpha = (0.12 + energy * 0.4) * MAX_OPACITY;
+      const alpha = (0.12 + eEff * 0.4) * MAX_OPACITY;
       ctx.fillStyle = `hsla(${c.hue}, ${c.sat}%, ${c.light}%, ${alpha})`;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r * (0.85 + energy * 0.7), 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, p.r * (0.85 + eEff * 0.7), 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    // ── Handshake/Sync: zentrale Glut + konzentrische Ripples (zwei Pulse synchron) ──
+    if (env > 0.001) {
+      const cx = dim.w / 2, cy = dim.h / 2;
+      const maxR = Math.hypot(dim.w, dim.h) / 2;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 0.6);
+      grad.addColorStop(0, `hsla(190, 95%, 76%, ${0.22 * env})`);
+      grad.addColorStop(1, 'hsla(190, 95%, 76%, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, dim.w, dim.h);
+
+      const rings = 3;
+      for (let i = 0; i < rings; i++) {
+        const phase = ((syncT * 1.6) + i / rings) % 1;
+        const r = phase * maxR;
+        const a = (1 - phase) * 0.30 * env;
+        ctx.strokeStyle = `hsla(190, 92%, 72%, ${a})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     }
 
     ctx.restore();

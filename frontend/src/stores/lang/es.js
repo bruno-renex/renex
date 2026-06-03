@@ -223,13 +223,13 @@ export default {
   featureE2eTitle:        "🔒 Cifrado de extremo a extremo",
   featureE2eDesc:         "Tus mensajes se cifran en tu dispositivo. Ni siquiera nosotros podemos leerlos — el servidor solo ve ciphertext, nunca texto plano.",
   featureBotResistantTitle: "🤖 Resistente a bots",
-  featureBotResistantDesc:  "No verificamos tu humanidad — hacemos que la automatización no sea rentable. Login solo con passkey + captcha + aceptación obligatoria de contactos significa: los bots necesitan dispositivos reales, biometría real, relaciones reales. El spam deja de ser rentable.",
+  featureBotResistantDesc:  "No verificamos tu humanidad — simplemente hacemos que el spam sea demasiado caro. Operar miles de bots exigiría miles de dispositivos reales, biometría real, relaciones reales. Los humanos siguen accesibles, los bots se rinden.",
   featureGuestTitle:      "🔗 Acceso de invitado",
-  featureGuestDesc:       "Comparte un link. Tu amigo chatea al instante — sin registro. Perfecto para conversaciones rápidas.",
+  featureGuestDesc:       "Comparte un enlace para el primer contacto — tu amigo chatea al instante, sin registro. Para conversaciones duraderas se crea después un passkey propio.",
   featureCallsTitle:      "🎙️ Llamadas sin nube estadounidense",
-  featureCallsDesc:       "Las llamadas de voz se establecen peer-to-peer con DTLS-SRTP — y el relay de respaldo es nuestro propio servidor en Alemania. Sin Twilio, sin Cloudflare Realtime, sin tracker entre tú y la otra persona.",
+  featureCallsDesc:       "Tus llamadas van directamente entre los dispositivos. Si no es posible, usamos nuestro propio servidor relay en Alemania — sin nube estadounidense, sin rastreadores en medio.",
   featureZeroTrackTitle:  "🛡️ Cero rastreo",
-  featureZeroTrackDesc:   "Sin anuncios. Sin analítica de marketing. El servidor almacena solo lo técnicamente necesario: handles, contactos cifrados, mensajes cifrados, reportes de crash vía Sentry (alojado en UE, RGPD). El contenido de los mensajes nunca podemos leerlo.",
+  featureZeroTrackDesc:   "Sin anuncios. Sin píxeles de rastreo. Sin perfiles de marketing. Solo datos técnicos de diagnóstico nos ayudan a corregir errores — nunca podemos leer el contenido de tus mensajes.",
   landingFooterCopy:      "© 2026 RENEX",
 
   // ── Manifesto ──────────────────────────────────────

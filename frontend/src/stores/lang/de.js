@@ -223,13 +223,13 @@ export default {
   featureE2eTitle:        "🔒 Ende-zu-Ende-Verschlüsselung",
   featureE2eDesc:         "Nachrichten werden auf deinem Gerät verschlüsselt. Selbst wir können sie nicht lesen — der Server sieht nur Ciphertext, nie Klartext.",
   featureBotResistantTitle: "🤖 Bot-resistent",
-  featureBotResistantDesc:  "Wir prüfen nicht deine Menschlichkeit — wir machen Automatisierung unwirtschaftlich. Passkey-Pflicht + Captcha + verpflichtende Kontakt-Annahme heisst: Bots brauchen echte Geräte, echte Biometrie, echte Beziehungen. Spam wird ökonomisch sinnlos.",
+  featureBotResistantDesc:  "Wir prüfen nicht deine Menschlichkeit — wir machen Spam einfach zu teuer. Wer tausende Bots betreiben will, braucht tausende echte Geräte, echte Biometrie, echte Beziehungen. Menschen bleiben erreichbar, Bots geben auf.",
   featureGuestTitle:      "🔗 Guest-Access",
-  featureGuestDesc:       "Teile einen Link. Dein Freund chattet sofort — ohne Anmeldung. Perfekt für schnelle Gespräche.",
+  featureGuestDesc:       "Teile einen Link für den Erstkontakt — dein Gegenüber chattet sofort, ohne Anmeldung. Für dauerhafte Gespräche wird später ein eigener Passkey angelegt.",
   featureCallsTitle:      "🎙️ Anrufe ohne US-Cloud",
-  featureCallsDesc:       "Sprach-Anrufe laufen Peer-to-Peer mit DTLS-SRTP — und der Fallback-Relay ist unser eigener Server in Deutschland. Keine Twilio, keine CF Realtime, kein Tracker zwischen dir und deinem Gegenüber.",
+  featureCallsDesc:       "Deine Anrufe laufen direkt zwischen den Geräten. Geht das nicht, nutzen wir unseren eigenen Relay-Server in Deutschland — kein US-Cloud-Dienst, kein Tracker dazwischen.",
   featureZeroTrackTitle:  "🛡️ Zero-Tracking",
-  featureZeroTrackDesc:   "Keine Werbung. Keine Marketing-Analytics. Der Server speichert nur das technisch Nötige: Handles, verschlüsselte Kontakte, verschlüsselte Nachrichten-Bodies, Crash-Reports via Sentry (EU-hosted, DSGVO). Nachrichten-Inhalte können wir nie lesen.",
+  featureZeroTrackDesc:   "Keine Werbung. Keine Tracking-Pixel. Keine Marketing-Profile. Nur technische Diagnosedaten helfen uns, Fehler zu beheben — Nachrichten-Inhalte können wir nie lesen.",
   landingFooterCopy:      "© 2026 RENEX",
 
   // ── Manifesto ──────────────────────────────────────

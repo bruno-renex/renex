@@ -223,13 +223,13 @@ export default {
   featureE2eTitle:        "🔒 End-to-End Encryption",
   featureE2eDesc:         "Your messages are encrypted on your device. Not even we can read them — the server only sees ciphertext, never plaintext.",
   featureBotResistantTitle: "🤖 Bot-resistant",
-  featureBotResistantDesc:  "We don't prove humanity — we make automation uneconomical. Passkey-only login + captcha + mandatory contact acceptance means: bots need real devices, real biometrics, real relationships. Spam stops being profitable.",
+  featureBotResistantDesc:  "We don't test your humanity — we just make spam too expensive. Running thousands of bots would take thousands of real devices, real biometrics, real relationships. Humans stay reachable, bots give up.",
   featureGuestTitle:      "🔗 Guest Access",
-  featureGuestDesc:       "Share a link. Your friend chats instantly — no signup. Perfect for quick conversations.",
+  featureGuestDesc:       "Share a link for first contact — your friend chats instantly, no signup. For lasting conversations, a passkey is created later.",
   featureCallsTitle:      "🎙️ Calls without US cloud",
-  featureCallsDesc:       "Voice calls run peer-to-peer with DTLS-SRTP — and the fallback relay is our own server in Germany. No Twilio, no Cloudflare Realtime, no tracker between you and the other side.",
+  featureCallsDesc:       "Your calls run directly between devices. If that's not possible, we use our own relay server in Germany — no US cloud service, no tracker in between.",
   featureZeroTrackTitle:  "🛡️ Zero Tracking",
-  featureZeroTrackDesc:   "No ads. No marketing analytics. The server stores only what's technically needed: handles, encrypted contacts, encrypted message bodies, crash reports via Sentry (EU-hosted, GDPR). Message content we can never read.",
+  featureZeroTrackDesc:   "No ads. No tracking pixels. No marketing profiles. Only technical diagnostics help us fix bugs — we can never read your message content.",
   landingFooterCopy:      "© 2026 RENEX",
 
   // ── Manifesto ──────────────────────────────────────

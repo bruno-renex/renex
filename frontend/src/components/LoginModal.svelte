@@ -13,7 +13,7 @@
   import LandingFeatures from './LandingFeatures.svelte';
   import LandingManifesto from './LandingManifesto.svelte';
   import LandingFooter from './LandingFooter.svelte';
-  import LandingParticles from './LandingParticles.svelte';
+  import PulseLandingCanvas from './PulseLandingCanvas.svelte';
 
   // Recovery-Login wird im Parent (App.svelte) gerendert, damit das Modal
   // nach Passkey-Auth nicht unmountet (LoginModal selbst verschwindet sobald myUser gesetzt).
@@ -21,6 +21,12 @@
 
   // Reactive: lang aus Store ableiten
   let lang = $derived(i18nStore.lang);
+
+  // Statement-first Landing (Option B): Hero zeigt zuerst das Brand-Statement +
+  // interaktive Pulse-Demo; Login-Card wird per CTA eingeblendet. Bei Guest-
+  // Convert (User klickte "Account erstellen") direkt zur Card springen — sonst
+  // wäre der erwartete Login-Flow hinter einem extra Klick versteckt.
+  let showLogin = $state(isGuestConvertPending());
 
   // Local state
   let handle = $state("");
@@ -152,8 +158,18 @@
 
 <div class="login-modal" role="dialog" aria-labelledby="login-title">
   <div class="hero-section">
-    <LandingParticles />
+    <PulseLandingCanvas />
+
+  {#if showLogin}
   <div class="login-card">
+    <button
+      type="button"
+      class="back-link"
+      onclick={() => (showLogin = false)}
+      disabled={isSubmitting}
+    >
+      {lang.heroBack || "← Zurück"}
+    </button>
     <div class="logo-wrap">
       <div class="logo" id="login-title">RENE<span class="x">X</span></div>
       <p class="slogan">{lang.loginSlogan || "You are the key."}</p>
@@ -240,6 +256,32 @@
       {/each}
     </div>
   </div>
+  {:else}
+    <div class="hero-statement">
+      <div class="logo" id="login-title">RENE<span class="x">X</span></div>
+      <h1 class="hero-title">
+        {lang.heroPrefix || "Du hast einen"}
+        <span class="accent">{lang.heroAccent || "Puls"}</span>.<br />
+        <span class="line2">{lang.heroLine2 || "Bots nicht."}</span>
+      </h1>
+      <p class="hero-sub">{lang.heroSub || "Beweg dich — das ist dein Puls."}</p>
+      <button type="button" class="hero-cta" onclick={() => (showLogin = true)}>
+        {lang.heroCta || "Loslegen →"}
+      </button>
+      <div class="lang-row">
+        {#each i18nStore.supported as code}
+          <button
+            type="button"
+            class="lang-pill"
+            class:active={code === i18nStore.currentLang}
+            onclick={() => i18nStore.setLang(code)}
+          >
+            {code === "de" ? "🇩🇪 DE" : code === "en" ? "🇬🇧 EN" : "🇪🇸 ES"}
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
   </div>
 
   <!-- Marketing-Sections (scrollen unter dem Hero) -->
@@ -281,6 +323,96 @@
   .hero-section :global(.login-card) {
     position: relative;
     z-index: 1;
+  }
+
+  /* ── Statement-first Hero (Option B) ───────────────── */
+  .hero-statement {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 640px;
+    padding: 0 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 22px;
+    animation: statement-in 0.5s ease-out;
+  }
+
+  @keyframes statement-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .hero-title {
+    font-size: clamp(34px, 8vw, 62px);
+    font-weight: 800;
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin: 0;
+  }
+
+  .hero-title .accent {
+    color: var(--accent-voice);
+    text-shadow: 0 0 28px rgba(56, 189, 248, 0.55);
+  }
+
+  .hero-title .line2 {
+    color: var(--text-muted);
+  }
+
+  .hero-sub {
+    font-size: 15px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    max-width: 460px;
+    margin: 0 auto;
+  }
+
+  .hero-cta {
+    padding: 14px 34px;
+    background: var(--accent-voice);
+    color: #07070a;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    box-shadow: 0 8px 28px rgba(56, 189, 248, 0.28);
+    transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+  }
+
+  .hero-cta:hover {
+    background: #0ea5e9;
+    box-shadow: 0 10px 34px rgba(56, 189, 248, 0.4);
+  }
+
+  .hero-cta:active {
+    transform: scale(0.98);
+  }
+
+  .back-link {
+    align-self: flex-start;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 4px;
+    margin-bottom: -8px;
+    transition: color 0.15s;
+  }
+
+  .back-link:hover:not(:disabled) {
+    color: var(--text-secondary);
+  }
+
+  .back-link:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   .login-card {

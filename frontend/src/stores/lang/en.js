@@ -207,6 +207,14 @@ export default {
   pwaMacRequirementHint:   "Requires Safari 17 or newer (macOS Sonoma+).",
   pwaUnsupportedHint:      "Your browser doesn't support direct installation. Try Chrome, Edge, or Safari.",
 
+  // ── Landing Hero (Statement-first) ─────────────────
+  heroPrefix:             "You have a",
+  heroAccent:             "pulse",
+  heroLine2:              "Bots don't.",
+  heroSub:                "RENEX is the messenger for humans — passkey-only, end-to-end encrypted, zero tracking. Move around: that's your pulse.",
+  heroCta:                "Get started →",
+  heroBack:               "← Back",
+
   // ── Landing Marketing ──────────────────────────────
   landingSectionTitle:    "Built for humans, not for bots.",
   landingSectionSub:      "We don't prove humanity — we make automation uneconomical.",

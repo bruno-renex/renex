@@ -15,7 +15,7 @@
 //   selectServer(id)          — set selected + lazy-load detail
 //   createServer({name,...})  — POST /servers/create + reload
 //   leaveServer(id)           — POST /servers/<id>/leave + reload
-//   reset()                   — clear all state (logout)
+// (Logout-State-Wipe: window.location.reload() in session.svelte.js — kein reset())
 // ======================================================
 
 import { apiFetch } from '../lib/api.js';
@@ -486,13 +486,9 @@ async function joinByToken(token, cfTurnstileToken = null) {
   }
 }
 
-function reset() {
-  _servers = [];
-  _selectedServerId = null;
-  _selectedServerDetail = null;
-  _isLoading = false;
-  _errorMsg = null;
-}
+// Hinweis: Kein reset() — Logout macht window.location.reload() (session.svelte.js),
+// das wischt allen Modul-State strukturell. Ein manuelles reset() wäre toter Code
+// und ein Leak-Risiko (würde bei jedem neuen State-Feld vergessen).
 
 export const serverStore = {
   get servers()              { return _servers; },
@@ -530,5 +526,4 @@ export const serverStore = {
   deleteInvite,
   getInviteInfo,
   joinByToken,
-  reset,
 };

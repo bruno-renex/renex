@@ -87,5 +87,11 @@ export const sessionStore = {
     } catch { /* logout darf nicht fehlschlagen */ }
     userStore.clear();
     _state = STATES.ANONYMOUS;
+    // Harter, vollständiger State-Wipe: alle Per-Account-Stores leben im
+    // Modul-Scope und überleben sonst Logout→Login (Cross-Account-Leak, z.B.
+    // is_owner/Server-Liste/Kontakte des Vor-Accounts kurz sichtbar). Reload
+    // wischt strukturell ALLEN RAM-State — IndexedDB (CMKs/Passkey) bleibt
+    // absichtlich, damit Re-Login ohne Recovery-Phrase funktioniert.
+    window.location.reload();
   },
 };

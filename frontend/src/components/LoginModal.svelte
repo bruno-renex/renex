@@ -258,6 +258,7 @@
   </div>
   {:else}
     <div class="hero-statement">
+      <div class="hero-kicker">{lang.heroKicker || "Menschliche Kommunikation"}</div>
       <div class="logo" id="login-title">RENE<span class="x">X</span></div>
       <h1 class="hero-title">
         {lang.heroPrefix || "Du hast einen"}
@@ -268,6 +269,14 @@
       <button type="button" class="hero-cta" onclick={() => (showLogin = true)}>
         {lang.heroCta || "Loslegen →"}
       </button>
+      <a
+        class="hero-os"
+        href="https://github.com/bruno-renex/renex"
+        target="_blank"
+        rel="noopener"
+      >
+        ★ {lang.heroOpenSource || "Open Source · Code auf GitHub"} ↗
+      </a>
       <div class="lang-row">
         {#each i18nStore.supported as code}
           <button
@@ -392,6 +401,32 @@
 
   .hero-cta:active {
     transform: scale(0.98);
+  }
+
+  .hero-kicker {
+    font-size: 12px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--accent-voice);
+    opacity: 0.85;
+    margin-bottom: -10px;
+  }
+
+  .hero-os {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: -6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-decoration: none;
+    letter-spacing: 0.02em;
+    transition: color 0.15s;
+  }
+
+  .hero-os:hover {
+    color: var(--accent-voice);
   }
 
   .back-link {

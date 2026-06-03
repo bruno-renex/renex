@@ -214,6 +214,8 @@ export default {
   heroSub:                "RENEX es el mensajero para humanos — solo passkey, cifrado de extremo a extremo, sin rastreo. Muévete: ese es tu pulso.",
   heroCta:                "Empezar →",
   heroBack:               "← Atrás",
+  heroKicker:             "Comunicación humana",
+  heroOpenSource:         "Código abierto · en GitHub",
 
   // ── Landing Marketing ──────────────────────────────
   landingSectionTitle:    "Hecho para humanos, no para bots.",

@@ -15,6 +15,7 @@
     <a href="/datenschutz/" target="_blank" rel="noopener">{lang.footerPrivacy || 'Datenschutz'}</a>
     <a href="/agb/" target="_blank" rel="noopener">{lang.footerTerms || 'AGB'}</a>
     <a href="/feedback/" target="_blank" rel="noopener">{lang.footerFeedback || 'Feedback'}</a>
+    <a href="https://github.com/bruno-renex/renex" target="_blank" rel="noopener">GitHub</a>
   </nav>
   <div class="footer-copy">{lang.landingFooterCopy || '© 2026 RENEX'}</div>
 </footer>

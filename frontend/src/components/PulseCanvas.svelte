@@ -106,6 +106,27 @@
     ctx.restore();
   }
 
+  // Generischer N-Punkt-Stern (rotierbar). points=6 → klassischer Stern,
+  // deutlich andere Silhouette als die 4-Punkt-✦ des Felds.
+  function drawStar(ctx, x, y, points, rOuter, rInner, rot, color, alpha) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    ctx.globalAlpha = Math.min(1, Math.max(0, alpha));
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    const n = points * 2;
+    for (let i = 0; i < n; i++) {
+      const ang = (Math.PI / points) * i - Math.PI / 2;
+      const rad = i % 2 === 0 ? rOuter : rInner;
+      const px = Math.cos(ang) * rad, py = Math.sin(ang) * rad;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   // Herzschlag-Hüllkurve (2 „lub-dub" über die Sync-Dauer, t in 0..1)
   function heartbeat(t) {
     const p = (t * 2) % 1;
@@ -185,16 +206,51 @@
       }
     }
 
-    // ── Nachglühen: ein warmer Reststern in der Mitte, verglimmt über ~25s ──
+    // ── Nachglühen: warmer 6-Punkt-Stern, weiß-heißer Kern. Sternschnuppen-
+    //    Eintritt, Schimmer + atmender Halo, langsame Drehung, ~25s Verglimmen.
+    //    Bewusst WARM (nicht cyan) → hebt sich vom kalten Sternenfeld ab. ──
     if (afterglow) {
-      const agT = (now - agStart) / AFTERGLOW_MS;          // 0..1
+      const elapsed = now - agStart;
+      const ENTRANCE_MS = 650;
+      const ent = Math.min(1, elapsed / ENTRANCE_MS);     // Eintritts-Fortschritt
+      const agT = Math.min(1, elapsed / AFTERGLOW_MS);    // Gesamt-Leben
       const cx = dim.w / 2, cy = dim.h / 2;
-      const breath = 0.85 + 0.15 * Math.sin(nowSec * 1.6); // sanftes Atmen
-      const agAlpha = Math.pow(1 - agT, 1.5) * 0.6 * breath;
-      const agSize = (14 + 8 * (1 - agT)) * breath;
-      ctx.globalAlpha = Math.min(1, agAlpha);
-      ctx.drawImage(warmSprite, cx - agSize * 2, cy - agSize * 2, agSize * 4, agSize * 4);
-      drawSparkle(ctx, cx, cy, agSize * 0.7, '#ffe1b0', agAlpha * 1.3);
+      const life = Math.pow(1 - agT, 1.4);                // Gesamt-Fade
+      const shimmer = 0.82 + 0.18 * Math.sin(nowSec * 4.5);
+      const breath = 0.5 + 0.5 * Math.sin(nowSec * 1.05); // 0..1 langsames Atmen
+      const rot = elapsed * 0.00018;                      // langsame Drehung
+      const eo = 1 - Math.pow(1 - ent, 3);                // easeOutCubic
+
+      // Sternschnuppen-Eintritt: Head fliegt von oben-rechts ins Zentrum
+      const sx = cx + 70, sy = cy - 150;
+      const hx = sx + (cx - sx) * eo;
+      const hy = sy + (cy - sy) * eo;
+      if (ent < 1) {
+        const tail = 0.35 * (1 - eo) + 0.12;
+        const tx = hx - (cx - sx) * tail;
+        const ty = hy - (cy - sy) * tail;
+        const grad = ctx.createLinearGradient(hx, hy, tx, ty);
+        grad.addColorStop(0, `rgba(255,245,220,${0.9 * (1 - ent * 0.3)})`);
+        grad.addColorStop(1, 'rgba(255,220,150,0)');
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(tx, ty); ctx.stroke();
+      }
+
+      const px = ent < 1 ? hx : cx;
+      const py = ent < 1 ? hy : cy;
+      const flash = (ent > 0.6 ? 1 : 0) * Math.max(0, 1 - Math.abs(ent - 1) * 8); // Lande-Blitz
+
+      // Warmer, atmender Halo
+      const haloSize = (26 + 10 * breath) * (0.7 + 0.3 * eo);
+      ctx.globalAlpha = Math.min(1, (0.42 + 0.22 * breath) * life);
+      ctx.drawImage(warmSprite, px - haloSize * 2, py - haloSize * 2, haloSize * 4, haloSize * 4);
+
+      // 6-Punkt-Stern: warm-gold Schicht + weiß-heißer Kern (schimmernd, rotierend)
+      const starR = (9 + 3 * shimmer + flash * 9) * (0.5 + 0.5 * eo);
+      drawStar(ctx, px, py, 6, starR, starR * 0.40, rot, '#ffcf7a', (0.7 * life + flash) * shimmer);
+      drawStar(ctx, px, py, 6, starR * 0.62, starR * 0.26, rot, '#fffbe9', (0.85 * life + flash) * shimmer);
     }
 
     ctx.globalAlpha = 1;

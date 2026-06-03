@@ -4,6 +4,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-03 — Brand-Apex `renex.id` Konsolidierung (Abschluss) ✅
+
+Schließt die offenen Punkte der Brand-Apex-Migration: alle User-facing-URLs,
+Onboarding-Texte und SEO-Signale zeigen jetzt konsistent auf `renex.id`.
+`app.renex.id` bleibt funktional (App-Host), verschwindet aber aus dem Index.
+
+### ✏️ Changed (Deep-Links & Onboarding → `renex.id`)
+- **Invite/Join-Deep-Links** (`inviteRoutes.js`, `serverRoutes.js` + Frontend-
+  Spiegel `ServerSettingsModal.svelte`, `chatSend.js`): Guest-Invite, Server-
+  Invite und Convert-URL zeigen auf `renex.id` statt `app.renex.id`. *(v2026-06-02-9)*
+- **Add-Device-Onboarding**: QR-Ziel (`AddDeviceModal.svelte` `APP_URL`),
+  Schritt-Texte und Captcha-Block-Hilfe — `stores/lang/` (de/en/es) +
+  `join/lib/lang/` (de/en/es). *(v2026-06-03-1)*
+
+### 🧹 Cleanup
+- **Gemeinsames OG-Bild** für EN+DE-Manifesto (`og/og-manifesto.png`, 1200×631)
+  statt zwei getrennter `-en`/`-de`-Dateien. *(v2026-06-02-7)*
+- **CORS-Allowlist** (`utils.js`): `renex-svelte`-Origin entfernt, Preview-Regex
+  auf `renex-static.pages.dev` repointed (tatsächliches Deploy-Ziel). *(v2026-06-02-8)*
+- **CF-Projekte gelöscht**: `renex-svelte` (Pages), `fancy-hill-6bf2` (Worker),
+  `renex-app` (Pages) — alle ungenutzt, nirgends referenziert.
+
+### 🌐 Infra (Cloudflare Dashboard)
+- **`www.renex.id` → 301 → `renex.id`**: proxied CNAME `www → renex.id` +
+  Single-Redirect-Rule (Wildcard `https://www.*` → `https://${1}`, Query erhalten).
+- **`app.renex.id` → `noindex`**: Transform Rule (Modify Response Header) setzt
+  `X-Robots-Tag: noindex, nofollow` für `http.host eq "app.renex.id"`. Apex bleibt
+  indexierbar → SEO konsolidiert auf `renex.id` (Canonical-Ziel).
+
+---
+
 ## 2026-06-02 — Brand-Apex `renex.id` + WebAuthn RP-ID-Migration 🌐
 
 `renex.id` (Apex) wird als Brand-Host auf das `renex-static` Pages-Projekt
@@ -32,9 +63,10 @@ Fenster es noch billig macht.
   `robots index,follow`, OG-/Twitter-Card-Tags (Fallback-Image `icon-512.png`).
 - `robots.txt` + `sitemap.xml` (/, /manifesto, /manifest-de mit hreflang).
 
-### 📋 Deferred
-- Invite/Join-Deep-Links (`inviteRoutes.js`, `serverRoutes.js`, `chatSend.js`)
-  zeigen noch auf `app.renex.id` — funktional ok, Brand-Konsistenz später.
+### 📋 Deferred → ✅ erledigt 2026-06-03
+- ~~Invite/Join-Deep-Links (`inviteRoutes.js`, `serverRoutes.js`, `chatSend.js`)
+  zeigen noch auf `app.renex.id`~~ → umgestellt auf `renex.id`, siehe Eintrag
+  *2026-06-03 — Brand-Apex Konsolidierung (Abschluss)*.
 
 ---
 

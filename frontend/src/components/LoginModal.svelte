@@ -11,6 +11,7 @@
   import { renderTurnstile, preloadTurnstileScript } from '../lib/turnstile.js';
   import { isGuestConvertPending, performGuestConvert, clearPendingGuestConvert } from '../lib/guestConvert.js';
   import LandingFeatures from './LandingFeatures.svelte';
+  import LandingManifesto from './LandingManifesto.svelte';
   import LandingFooter from './LandingFooter.svelte';
   import LandingParticles from './LandingParticles.svelte';
 
@@ -243,6 +244,7 @@
 
   <!-- Marketing-Sections (scrollen unter dem Hero) -->
   <LandingFeatures />
+  <LandingManifesto />
   <LandingFooter />
 </div>
 

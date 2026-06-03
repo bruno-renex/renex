@@ -223,6 +223,13 @@ export default {
   featureZeroTrackTitle:  "🛡️ Zero Tracking",
   featureZeroTrackDesc:   "No ads. No marketing analytics. The server stores only what's technically needed: handles, encrypted contacts, encrypted message bodies, crash reports via Sentry (EU-hosted, GDPR). Message content we can never read.",
   landingFooterCopy:      "© 2026 RENEX",
+
+  // ── Manifesto ──────────────────────────────────────
+  manifestoLabel:          "Manifesto",
+  landingManifestoTitle:   "Why RENEX exists",
+  landingManifestoBody:    "The internet is drowning in bots, platforms sell your attention, AI imitates humans. RENEX is the counter-movement: a place by people, for people. Read what we stand for.",
+  landingManifestoCta:     "Read the Manifesto →",
+
   attachmentTooLarge:      "File too large (max. 10 MB).",
   attachmentMimeBlocked:   "File type not allowed.",
   attachmentExtBlocked:    "File extension not allowed.",

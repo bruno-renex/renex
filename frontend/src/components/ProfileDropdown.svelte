@@ -25,6 +25,8 @@
   import { isStandalone, requestInstallPrompt } from '../lib/pwaInstall.js';
 
   let lang = $derived(i18nStore.lang);
+  // Sprach-abhängige Manifest-URL: DE → /manifest-de/, sonst → /manifesto/
+  let manifestoUrl = $derived(i18nStore.currentLang === 'de' ? '/manifest-de/' : '/manifesto/');
 
   // Modal-States (lifted up — die Modals selbst werden hier gerendert)
   let showDisplayNameModal = $state(false);
@@ -256,6 +258,10 @@
           </a>
         </div>
       {/if}
+
+      <a href={manifestoUrl} target="_blank" rel="noopener" class="dropdown-item link">
+        📜 {lang.manifestoLabel || "Manifest"}
+      </a>
 
       <a href="/feedback/" target="_blank" rel="noopener" class="dropdown-item link">
         💬 {lang.footerFeedback || "Feedback"}

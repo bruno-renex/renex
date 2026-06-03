@@ -5,10 +5,12 @@
   import { i18nStore } from '../stores/i18n.svelte.js';
 
   let lang = $derived(i18nStore.lang);
+  let manifestoUrl = $derived(i18nStore.currentLang === 'de' ? '/manifest-de/' : '/manifesto/');
 </script>
 
 <footer class="landing-footer">
   <nav class="footer-links">
+    <a href={manifestoUrl} target="_blank" rel="noopener">{lang.manifestoLabel || 'Manifesto'}</a>
     <a href="/impressum/" target="_blank" rel="noopener">{lang.footerImprint || 'Impressum'}</a>
     <a href="/datenschutz/" target="_blank" rel="noopener">{lang.footerPrivacy || 'Datenschutz'}</a>
     <a href="/agb/" target="_blank" rel="noopener">{lang.footerTerms || 'AGB'}</a>

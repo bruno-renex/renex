@@ -137,13 +137,15 @@
     // sodass der Puls sichtbar "atmet" — auch ganz ohne Interaktion. Auf Desktop
     // (Hover) aus, dort treibt die Maus den Effekt.
     if (isCoarse && !reducedMotion) {
-      if (nextBeat === 0) nextBeat = now + 700;
+      if (nextBeat === 0) nextBeat = now + 1200;
       if (now >= nextBeat) {
-        energy = Math.max(energy, 0.5 + Math.random() * 0.18);
+        // Ruhiger Schlag: sanfte Energie (bleibt im "active"-Bereich, kein Foam),
+        // wenige Partikel, langsames Intervall — soll atmen, nicht flackern.
+        energy = Math.max(energy, 0.30 + Math.random() * 0.12);
         const bx = dim.w * (0.28 + Math.random() * 0.44);
         const by = dim.h * (0.30 + Math.random() * 0.40);
-        spawnBurst(bx, by, isMobile ? 5 : 7);
-        nextBeat = now + 1600 + Math.random() * 1200;
+        spawnBurst(bx, by, isMobile ? 3 : 4);
+        nextBeat = now + 3000 + Math.random() * 1800;
       }
     }
 

@@ -4,6 +4,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-03 — Landing-Page Redesign: Statement-first + interaktiver Pulse 🫀
+
+Phase 6: Die anonyme Landing (`renex.id`) wurde von „Login-Formular zuerst" auf
+ein Brand-Statement mit erlebbarer Pulse-Demo umgebaut — RENEX' Signature-Feature
+(`Pulse`) wird so schon **vor** dem Login spürbar.
+
+### ✨ Added
+- **Statement-first Hero** (`LoginModal`, Option B): Kategorie-Kicker „Menschliche
+  Kommunikation" + „Du hast einen **Puls**. Bots nicht." + CTA, der die Login-Card
+  einblendet (Guest-Convert springt weiter direkt zur Card).
+- **`PulseLandingCanvas`** — interaktive, cursor-/touch-getriebene Pulse-Visualisierung
+  (ersetzt das statische `LandingParticles`-Netzwerk). Cyan-anchored mit Gold-Foam-Spike,
+  `prefers-reduced-motion`-Fallback, Battery-aware. Auf Touch-Geräten autonomer
+  „Heartbeat" (atmet ohne Interaktion) + Tap-/Wisch-Bursts. **KEIN DeviceMotion** auf
+  der Landing (Permission-Prompt = Conversion-Killer; Sensor bleibt fürs In-App-Pulse).
+- **`LandingShowcase`** — App-Screenshot (provisorisch, wird nach Pulse-Ship ersetzt)
+  im Phone-Frame, direkt nach dem Hero (beantwortet „wie sieht RENEX aus?").
+- **Open-Source-Badge** unter dem CTA + **GitHub-Link** im Footer (erstes Social-Proof-Signal).
+
+### ✏️ Changed
+- Feature-Copy ergebnis-orientiert geschärft: Guest↔Passkey-Widerspruch aufgelöst,
+  Twilio/CF-Realtime/Sentry-Jargon raus, weniger Mechanismus / mehr Ergebnis. i18n de/en/es.
+
+### 🗑️ Removed
+- `LandingParticles.svelte` (Dead-Code, ersetzt durch `PulseLandingCanvas`). *(v2026-06-03-6 … -11)*
+
+---
+
 ## 2026-06-03 — Manifest aus der App verlinkt 📜
 
 Phase 6: Die öffentliche Manifest-Static-Site (`renex.id/manifesto` EN,

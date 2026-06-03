@@ -86,12 +86,12 @@ export async function requireSession(request, env) {
     return null;
   }
 
-  // Sliding-TTL-Refresh (M4, 2026-05-02): wenn letzte Refresh-Zeit > 6h alt ist,
-  // verlängert sich KV-TTL auf weitere 24h. Aktive User bleiben praktisch
-  // unbegrenzt eingeloggt; idle 24h → KV expired → forced logout.
-  // Cookie ist Max-Age=30d (in Routes), aber KV ist Source-of-Truth.
+  // Sliding-TTL-Refresh (M4, 2026-05-02; TTL 24h→30d 2026-06-03): wenn letzte
+  // Refresh-Zeit > 6h alt ist, verlängert sich KV-TTL auf weitere 30d. Aktive
+  // User bleiben praktisch unbegrenzt eingeloggt; idle 30d → KV expired →
+  // forced logout. KV-TTL = Cookie-Max-Age (konsistent), KV ist Source-of-Truth.
   const SESSION_REFRESH_THRESHOLD_MS = 6 * 60 * 60 * 1000;
-  const SESSION_TTL_SEC = 86_400;
+  const SESSION_TTL_SEC = 2_592_000;
   const lastRef = Number(session.lastRefreshed || session.createdAt || session.created_at || 0);
   if (lastRef > 0 && Date.now() - lastRef > SESSION_REFRESH_THRESHOLD_MS) {
     session.lastRefreshed = Date.now();

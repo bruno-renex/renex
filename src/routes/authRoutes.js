@@ -317,12 +317,12 @@ export async function handleAuthRoutes(request, env, path, params) {
             lastRefreshed: sessionNow,    // Sliding-TTL Anker (M4)
             ua: uaHash,
           }),
-          { expirationTtl: 86_400 }
+          { expirationTtl: 2_592_000 }
         );
         await registerSessionToken(env, handle, sessionToken);
 
-        // Cookie Max-Age = 30d (sliding session: aktive User bleiben unbegrenzt
-        // eingeloggt, idle 24h → KV-Expiry → forced re-login).
+        // Cookie Max-Age = 30d, KV-TTL ebenfalls 30d (sliding session: aktive
+        // User bleiben unbegrenzt eingeloggt, idle 30d → KV-Expiry → re-login).
         const sessionCookie = `session=${sessionToken}; HttpOnly; Secure; SameSite=Strict; Domain=renex.id; Path=/; Max-Age=2592000`;
         return new Response(
           JSON.stringify({ status: "ok", authenticated: true }),

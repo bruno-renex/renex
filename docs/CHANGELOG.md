@@ -4,6 +4,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-03 — Session-Idle-TTL 24h → 30 Tage 🔑
+
+### 🐛 Fixed
+- **PWA verlangte nach ~1 Tag Inaktivität einen Re-Login**, obwohl das Cookie
+  30 Tage lebt. Ursache: Inkonsistenz zwischen Cookie-`Max-Age` (30d) und
+  KV-Session-TTL (24h) — KV ist Source-of-Truth, lief also nach einem idle Tag
+  ab. Session-Index war bereits auf 30d (`auth.js:249`), die Session selbst war
+  der Ausreißer.
+
+### ✏️ Changed
+- **Session-KV-TTL 24h → 30 Tage** (`SESSION_TTL_SEC` in `auth.js`; Login
+  `loginFinish.js` `exp` + `expirationTtl`; Registrierung `authRoutes.js`
+  `expirationTtl`). Jetzt konsistent mit Cookie-`Max-Age=2592000`. Sliding-
+  Refresh-Schwelle bleibt 6h (aktive User unbegrenzt eingeloggt). Idle-Logout
+  jetzt erst nach 30 Tagen Nichtnutzung. Bewusste Verlängerung des Token-
+  Zeitfensters — abgesichert durch HttpOnly + Secure + SameSite=Strict + UA-Bind.
+
+---
+
 ## 2026-06-03 — Brand-Apex `renex.id` Konsolidierung (Abschluss) ✅
 
 Schließt die offenen Punkte der Brand-Apex-Migration: alle User-facing-URLs,

@@ -2,10 +2,9 @@
   LandingShowcase — zeigt ein echtes App-Screenshot direkt nach dem Hero.
   Beantwortet die wichtigste Frage eines Erstbesuchers: "Wie sieht das aus?"
 
-  Bild liegt in frontend/public/ und ist PROVISORISCH — wird ausgetauscht,
-  sobald Pulse implementiert ist (dann mit sichtbarer Pulse-Visualisierung).
-  Die Safari-Adressleiste am unteren Bildrand wird per CSS (aspect-ratio +
-  object-position: top) zerstörungsfrei weggeschnitten.
+  Bild liegt in frontend/public/app-preview-pulse.png — echter 1:1-Chat mit
+  aktivem Pulse (✨ an, cyan Partikel im Hintergrund). Quelle: assets/.
+  Voller Screenshot (Standalone-PWA inkl. Composer) — kein Crop nötig.
 -->
 <script>
   import { i18nStore } from '../stores/i18n.svelte.js';
@@ -19,7 +18,7 @@
 
   <div class="phone-frame">
     <img
-      src="/app-preview-mobile.png"
+      src="/app-preview-pulse.png"
       alt={lang.showcaseAlt || 'RENEX App — Kontakte- und Chat-Übersicht'}
       loading="lazy"
       decoding="async"
@@ -57,12 +56,12 @@
     max-width: 520px;
   }
 
-  /* Phone-Bezel um den Screenshot. aspect-ratio schneidet die untere
-     Safari-Leiste (~256px) zerstörungsfrei weg (object-position: top). */
+  /* Phone-Bezel um den Screenshot. aspect-ratio = native Bild-Ratio → voller
+     Ausschnitt ohne Verzerrung/Crop (Standalone-PWA, kein Browser-Chrome). */
   .phone-frame {
     width: 100%;
     max-width: 280px;
-    aspect-ratio: 1179 / 2300;
+    aspect-ratio: 1179 / 2556;
     overflow: hidden;
     border-radius: 30px;
     border: 6px solid #16161c;

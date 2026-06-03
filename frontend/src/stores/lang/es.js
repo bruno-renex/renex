@@ -217,8 +217,8 @@ export default {
   heroKicker:             "Comunicación humana",
   heroOpenSource:         "Código abierto · en GitHub",
   showcaseTitle:          "Así se ve RENEX",
-  showcaseSub:            "Limpio, tranquilo, sin distracciones. Tus contactos y chats en un solo lugar.",
-  showcaseAlt:            "App RENEX — vista de contactos y chats",
+  showcaseSub:            "Un chat real — con Pulse. No solo ves palabras, ves que hay un humano al otro lado.",
+  showcaseAlt:            "App RENEX — chat 1:1 con Pulse activo",
 
   // ── Landing Marketing ──────────────────────────────
   landingSectionTitle:    "Hecho para humanos, no para bots.",

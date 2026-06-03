@@ -293,7 +293,7 @@ export default {
   captchaRequired:         "Please complete the security check first.",
   captchaFailed:           "Security check failed. Please try again.",
   captchaBlockedTitle:     "Bot protection blocked",
-  captchaBlockedBody:      "Your browser (e.g. Brave with active Shields) is blocking Cloudflare's security check. Please set Brave Shields for app.renex.id to «Standard», or use Safari/Chrome.",
+  captchaBlockedBody:      "Your browser (e.g. Brave with active Shields) is blocking Cloudflare's security check. Please set Brave Shields for renex.id to «Standard», or use Safari/Chrome.",
   joinErrorDefault:        "Error while joining.",
   successRedirecting:      "Success! Redirecting…",
   connectionError:         "Connection error",

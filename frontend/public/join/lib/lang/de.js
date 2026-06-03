@@ -293,7 +293,7 @@ export default {
   captchaRequired:         "Bitte zuerst die Sicherheitsprüfung abschliessen.",
   captchaFailed:           "Sicherheitsprüfung fehlgeschlagen. Bitte erneut versuchen.",
   captchaBlockedTitle:     "Bot-Schutz blockiert",
-  captchaBlockedBody:      "Dein Browser (z.B. Brave mit aktiven Shields) blockt die Cloudflare-Sicherheitsprüfung. Bitte Brave Shields für app.renex.id auf «Standard» senken, oder Safari/Chrome verwenden.",
+  captchaBlockedBody:      "Dein Browser (z.B. Brave mit aktiven Shields) blockt die Cloudflare-Sicherheitsprüfung. Bitte Brave Shields für renex.id auf «Standard» senken, oder Safari/Chrome verwenden.",
   joinErrorDefault:        "Fehler beim Beitreten.",
   successRedirecting:      "Erfolgreich! Leite weiter…",
   connectionError:         "Verbindungsfehler",

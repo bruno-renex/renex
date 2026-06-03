@@ -3,7 +3,7 @@
   Spec: docs/MULTI_DEVICE.md §12.1 / §12.2 ("+ Neues Gerät hinzufügen")
 
   Was zeigt der QR?
-   - URL https://app.renex.id (Onboarding-Helper, NICHT der WebAuthn-Hybrid-QR).
+   - URL https://renex.id (Onboarding-Helper, NICHT der WebAuthn-Hybrid-QR).
    - Der WebAuthn-Hybrid-QR wird vom OS auf dem NEUEN Gerät erzeugt, sobald
      der User dort "Mit Passkey anmelden" → "anderes Gerät" wählt.
    - Wir liefern nur den schnellen Sprung "Wo geh ich auf dem neuen Gerät hin?".
@@ -24,11 +24,11 @@
 
   let lang = $derived(i18nStore.lang);
 
-  // Fix-URL — App-Origin. Bewusst hartkodiert: der QR ändert sich nie und
-  // muss in BEIDEN Worlds (Production via app.renex.id und Local-Dev via
+  // Fix-URL — Brand-Apex. Bewusst hartkodiert: der QR ändert sich nie und
+  // muss in BEIDEN Worlds (Production via renex.id und Local-Dev via
   // localhost:5173) stabil das Production-Ziel zeigen, damit der gescannte
   // QR aus einem Local-Dev-Tab den User trotzdem zur richtigen App führt.
-  const APP_URL = 'https://app.renex.id';
+  const APP_URL = 'https://renex.id';
 
   let qrSvg = $state('');
   let qrError = $state(false);
@@ -87,7 +87,7 @@
       </p>
 
       <ol class="add-steps">
-        <li>{lang.addDeviceStep1 || 'Auf dem neuen Gerät app.renex.id öffnen.'}</li>
+        <li>{lang.addDeviceStep1 || 'Auf dem neuen Gerät renex.id öffnen.'}</li>
         <li>{lang.addDeviceStep2 || 'Deinen Handle eingeben und einloggen — der Browser zeigt dort einen QR-Code.'}</li>
         <li>{lang.addDeviceStep3 || 'Diesen QR-Code mit der Kamera-App dieses Geräts scannen.'}</li>
         <li>{lang.addDeviceStep4 || 'Mit Touch-ID / Face-ID bestätigen — fertig.'}</li>
@@ -95,7 +95,7 @@
 
       <div class="convenience-section">
         <p class="convenience-tip">
-          {lang.addDeviceConvenienceTip || '💡 Tipp: Scanne diesen QR mit der Kamera deines neuen Geräts, um app.renex.id direkt zu öffnen (spart das URL-Eintippen).'}
+          {lang.addDeviceConvenienceTip || '💡 Tipp: Scanne diesen QR mit der Kamera deines neuen Geräts, um renex.id direkt zu öffnen (spart das URL-Eintippen).'}
         </p>
         <div class="qr-wrap qr-wrap-small">
           {#if qrError}

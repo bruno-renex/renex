@@ -13,6 +13,9 @@
   import ChatHeader from './ChatHeader.svelte';
   import MessageBubble from './MessageBubble.svelte';
   import ChatInput from './ChatInput.svelte';
+  import PulseCanvas from './PulseCanvas.svelte';
+  import PulseController from './PulseController.svelte';
+  import { pulseStore } from '../stores/pulseStore.svelte.js';
 
   let lang_for_delete = $derived(i18nStore.lang);
   let myHandle = $derived(userStore.myUser);
@@ -93,6 +96,23 @@
   let messages = $derived(chatStore.messages);
   let isLoading = $derived(chatStore.isLoading);
   let pendingJumpTo = $derived(chatStore.pendingJumpTo);
+
+  // ── Pulse (Phase 6.5): beim Öffnen eines 1:1-Chats aktivieren (liest das
+  // Per-Chat-Opt-in), beim Schließen/Wechsel deaktivieren. Setzt activePeer +
+  // enabled im pulseStore — Grundlage für Toggle, Empfang-Gating und Canvas. ──
+  $effect(() => {
+    if (chat?.type === 'dm' && chat?.peer) {
+      pulseStore.activate(chat.peer);
+    } else {
+      pulseStore.deactivate();
+    }
+    return () => pulseStore.deactivate();
+  });
+
+  // Pulse für den offenen Chat aktiv? (eingeschaltet + 1:1)
+  let pulseActive = $derived(
+    chat?.type === 'dm' && !!chat?.peer && pulseStore.enabled
+  );
 
   // ── Decrypt-Pending-Banner ───────────────────────────────
   // Zeigt einen Hinweis wenn Messages persistent verschlüsselt bleiben.
@@ -229,6 +249,13 @@
       </div>
     {/if}
 
+    <div class="messages-region">
+      {#if pulseActive}
+        <!-- Peer-Pulse als ambient Hintergrund (hinter den Nachrichten) -->
+        <div class="pulse-layer"><PulseCanvas /></div>
+        <!-- unsichtbar: erfasst eigenen Pulse + sendet ihn an den Peer -->
+        <PulseController peer={chat.peer} />
+      {/if}
     <div class="messages-wrapper" bind:this={messagesEl}>
       {#if isLoading}
         <div class="loading">
@@ -262,6 +289,7 @@
           {/if}
         {/each}
       {/if}
+    </div>
     </div>
 
     <ChatInput />
@@ -308,7 +336,26 @@
     max-width: 320px;
   }
 
+  /* Region umschließt Canvas-Layer + scrollende Messages, damit der Pulse-
+     Hintergrund NUR die Nachrichten-Fläche bedeckt (nicht Header/Composer). */
+  .messages-region {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .pulse-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
   .messages-wrapper {
+    position: relative;
+    z-index: 1;
     flex: 1;
     overflow-y: auto;
     padding: 14px 0 6px;

@@ -26,7 +26,8 @@
   import { heartbeat } from './lib/multidevice.js';
   import { getRecoveryStatus } from './lib/recovery.js';
   import { uploadInboxKeyIfNeeded } from './lib/e2eKeys.js';
-  import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer, ensureSecureDmSession, republishCMKForPeer } from './lib/chatPipeline.js';
+  import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer, ensureSecureDmSession, republishCMKForPeer, decryptPulse } from './lib/chatPipeline.js';
+  import { pulseStore } from './stores/pulseStore.svelte.js';
   import { isGuestHandle } from './lib/guestNames.js';
   import { isGuestConvertPending, performGuestConvert, readPendingGuestConvert } from './lib/guestConvert.js';
   import { migratePeerHandle, migrateMyHandle } from './lib/handleMigration.js';
@@ -719,6 +720,18 @@
           void handleIncomingRequestGSK(msg).then(ok => {
             if (ok) console.log(`📨 request_gsk von ${msg.from} → eigene GSK gesendet`);
           });
+          return;
+        }
+        // Pulse (Phase 6.5): ambient Presence-Frame. Nur entschlüsseln wenn Pulse
+        // aktiv UND vom gerade offenen Chat — spart Decrypt-CPU bei 5-10Hz.
+        if (msg.type === "pulse") {
+          const me = userStore.myUser;
+          const from = String(msg.from || '').toLowerCase();
+          if (me && pulseStore.enabled && pulseStore.activePeer === from) {
+            void decryptPulse(msg, me).then((p) => {
+              if (p) pulseStore.onPeerFrame(from, p.energy, p.mode, performance.now());
+            });
+          }
           return;
         }
         if (!msg.type || msg.type === "message") {

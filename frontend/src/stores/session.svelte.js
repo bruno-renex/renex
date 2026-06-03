@@ -13,6 +13,7 @@
 
 import { apiFetch } from '../lib/api.js';
 import { userStore } from './user.svelte.js';
+import { pulseStore } from './pulseStore.svelte.js';
 import { captureException } from '../lib/sentry.js';
 
 const STATES = {
@@ -86,6 +87,7 @@ export const sessionStore = {
       await apiFetch("/auth/logout", { method: "POST" });
     } catch { /* logout darf nicht fehlschlagen */ }
     userStore.clear();
+    pulseStore.wipe();  // Pulse-Opt-in-Flags + RAM löschen (Privacy, PULSE.md §8.1)
     _state = STATES.ANONYMOUS;
     // Harter, vollständiger State-Wipe: alle Per-Account-Stores leben im
     // Modul-Scope und überleben sonst Logout→Login (Cross-Account-Leak, z.B.

@@ -12,6 +12,7 @@
   import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
   import ChatHeaderMenu from './ChatHeaderMenu.svelte';
   import GroupMembersModal from './GroupMembersModal.svelte';
+  import PulseToggle from './PulseToggle.svelte';
 
   // Group-/Channel-Mitglieder-Modal — wird durch Klick auf den Info-Bereich
   // des Headers (Name / Mitglieder-Count) geöffnet. Bei Channels lädt das
@@ -174,6 +175,7 @@
             <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
           </svg>
         </button>
+        <PulseToggle peer={chat.peer} />
       {/if}
       <!-- Gäste haben kein 3-Punkte-Menu: Settings (Mute, Auto-Delete) brauchen
            Persistenz, Admin-Aktionen sind nicht zugänglich, "Kontakt entfernen"

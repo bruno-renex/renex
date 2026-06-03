@@ -155,6 +155,42 @@ export async function handleChatSend(request, env) {
     return json(request, { error: "deviceId invalid" }, 400);
   }
 
+  // ── PULSE (Phase 6.5) — ambient Presence-Frame ──────────────────────────
+  // type:"pulse" ist ein transienter, E2E-verschlüsselter Skalar (PULSE.md §10).
+  // KEIN D1-Write, KEIN Unread-Counter, KEIN Self-Mirror — nur Forward an den
+  // Empfänger. Eigenes RL-Bucket (15 Frames/s, §7.4). Vertraulichkeit über die
+  // Session-CMK-Pipeline: nur ein etablierter Kontakt (gemeinsamer CMK) kann ein
+  // entschlüsselbares Frame senden → kein Contact-Check pro Frame nötig. Früher
+  // Short-Circuit, damit die normale Chat-/Control-Logik unangetastet bleibt.
+  if (type === "pulse") {
+    if (e2e !== true || v !== 2 || typeof ivB64 !== "string" || typeof ctB64 !== "string" || typeof sid !== "string") {
+      return json(request, { error: "pulse requires e2e v2 payload" }, 400);
+    }
+    const prlKey = senderDeviceId ? `pulse_send:${me}:${senderDeviceId}` : `pulse_send:${me}`;
+    const ok = await rateLimit(env, prlKey, 1000, 15, { failOpen: true });
+    if (!ok) {
+      // Silent throttle — Pulse-Drop ist akzeptabel, kein Error an den Client
+      return json(request, { ok: true, throttled: true, delivered: 0 }, 200);
+    }
+    const pmsg = {
+      id: crypto.randomUUID(),
+      from: me,
+      to: other,
+      ts: Date.now(),
+      type: "pulse",
+      v: 2,
+      e2e: true,
+      sid,
+      epoch: (typeof epoch === "number" ? epoch : 0),
+      ivB64,
+      ctB64,
+      deviceId: senderDeviceId || null,
+    };
+    // pushToUserDO MUSS awaited werden (memory: CF-Workers sub-fetch sonst gekillt)
+    const delivered = await pushToUserDO(env, other, pmsg);
+    return json(request, { ok: true, delivered }, 200);
+  }
+
   // Rotation-Index aus Body. Upper-Bound 1_000_000 = ca. 1000 Rotationen pro
   // Tag über 3 Jahre — astronomisch über jedem realen Use-Case.
   const ROT_MAX = 1_000_000;

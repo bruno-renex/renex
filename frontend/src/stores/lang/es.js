@@ -243,6 +243,17 @@ export default {
   landingManifestoBody:    "Internet se ahoga en bots, las plataformas venden tu atención, la IA imita a las personas. RENEX es el contramovimiento: un lugar de personas, para personas. Lee lo que defendemos.",
   landingManifestoCta:     "Leer el Manifiesto →",
 
+  // ── Pulse (Phase 6.5) ──────────────────────────────
+  pulseOn:                 "Activar Pulse",
+  pulseOff:                "Desactivar Pulse",
+  pulsePermTitle:          "Activar Pulse",
+  pulsePermBody:           "RENEX usa el movimiento sutil de tu dispositivo para hacer visible tu presencia a la otra persona.",
+  pulsePermPoint1:         "Totalmente en tu dispositivo",
+  pulsePermPoint2:         "No se guarda nada",
+  pulsePermPoint3:         "Solo lo ve la otra persona",
+  pulsePermHint:           "iOS pedirá permiso de movimiento en el siguiente paso.",
+  pulsePermAllow:          "Permitir →",
+
   attachmentTooLarge:      "Archivo demasiado grande (máx. 10 MB).",
   attachmentMimeBlocked:   "Tipo de archivo no permitido.",
   attachmentExtBlocked:    "Extensión no permitida.",

@@ -31,6 +31,7 @@ let _selfMode = $state(MODES.CALM);
 let _peerEnergy = $state(0);        // geglättet (für Render)
 let _peerMode = $state(MODES.CALM);
 let _peerActive = $state(false);    // kürzlich ein Frame empfangen?
+let _motionGranted = $state(false); // DeviceMotion-Permission erteilt (Session)
 
 // ── Nicht-reaktiver Receiver-State ──
 let _peerTarget = 0;                // zuletzt empfangener Zielwert
@@ -57,6 +58,8 @@ export const pulseStore = {
   get peerEnergy() { return _peerEnergy; },
   get peerMode()   { return _peerMode; },
   get peerActive() { return _peerActive; },
+  get motionGranted() { return _motionGranted; },
+  setMotionGranted(on) { _motionGranted = !!on; },
 
   // ── Per-Chat-Opt-in (localStorage) ──
   isEnabledFor(peer) {

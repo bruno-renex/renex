@@ -745,6 +745,81 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo =
   }
 }
 
+// ── PULSE (Phase 6.5) — E2E-verschlüsselter Presence-Skalar ──────────────
+// Sendet/empfängt {energy, mode} über die GLEICHE Session-CMK-Pipeline wie DMs,
+// aber als type:"pulse": kein D1-Write (Backend-Short-Circuit), KEINE Signatur
+// (Pulse hat keine Authority — Belief-Layer, PULSE.md §8.2). Der Message-Key
+// wird pro (sid, epoch, rotationIndex) gecacht, weil Frames mit bis zu 10 Hz
+// kommen — sonst würde jede Frame HKDF + ggf. ensureSecureDmSession triggern.
+
+let _pulseSendMk = null, _pulseSendKey = '';
+let _pulseDecMk = null,  _pulseDecKey = '';
+
+async function _pulseMk(myHandle, peerHandle, sid, epoch, rotationIndex, which) {
+  const cacheKey = `${sid}|${epoch}|${rotationIndex}`;
+  if (which === 'send' && _pulseSendKey === cacheKey && _pulseSendMk) return _pulseSendMk;
+  if (which === 'dec'  && _pulseDecKey  === cacheKey && _pulseDecMk)  return _pulseDecMk;
+  const cmk = await ensureSecureDmSession(myHandle, peerHandle);
+  if (!cmk) return null;
+  let skBytes = _skCacheGet(sid, rotationIndex);
+  if (!skBytes) {
+    skBytes = rotationIndex > 0
+      ? await deriveSessionKeyBytesForRotation(cmk, sid, rotationIndex)
+      : await deriveSessionKeyBytes(cmk, sid);
+    _skCacheSet(sid, rotationIndex, skBytes);
+  }
+  const mk = await deriveMessageKey(skBytes, sid, epoch);
+  if (which === 'send') { _pulseSendMk = mk; _pulseSendKey = cacheKey; }
+  else { _pulseDecMk = mk; _pulseDecKey = cacheKey; }
+  return mk;
+}
+
+/**
+ * Sendet einen Pulse-Frame {energy, mode} an einen Peer. Throttling (≤10Hz)
+ * macht der Aufrufer. Keine Signatur, kein D1. Fehler werden geschluckt —
+ * Pulse-Drop ist akzeptabel, niemals den Chat stören.
+ */
+export async function sendPulse(myHandle, peerHandle, energy, mode) {
+  try {
+    const sid = dmSessionId(myHandle, peerHandle);
+    const map = await getRotationMap(sid);
+    const rotationIndex = map.length > 0 ? map[map.length - 1].fromIndex : 0;
+    const epoch = Math.floor(Date.now() / EPOCH_MS);
+    const mk = await _pulseMk(myHandle, peerHandle, sid, epoch, rotationIndex, 'send');
+    if (!mk) return { ok: false, error: 'no_cmk' };
+    const payload = JSON.stringify({ energy: Math.round(energy * 100) / 100, mode });
+    const { ivB64, ctB64 } = await e2eEncrypt(mk, payload);
+    const body = { to: peerHandle, e2e: true, v: 2, type: 'pulse', sid, epoch, ivB64, ctB64, deviceId: getDeviceId() };
+    if (rotationIndex > 0) body.rotationIndex = rotationIndex;
+    const r = await apiFetch('/chat/send', { method: 'POST', body });
+    return r.ok ? { ok: true } : { ok: false, error: r.error || 'send_failed' };
+  } catch (e) {
+    return { ok: false, error: e.message || 'unknown' };
+  }
+}
+
+/**
+ * Entschlüsselt einen eingehenden Pulse-Frame. `msg` = WS-Event
+ * {from, sid, epoch, rotationIndex, ivB64, ctB64}. Gibt {energy, mode} oder null.
+ */
+export async function decryptPulse(msg, myHandle) {
+  try {
+    const peer = String(msg.from || '').toLowerCase();
+    if (!peer || !msg.ivB64 || !msg.ctB64) return null;
+    const sid = msg.sid || dmSessionId(myHandle, peer);
+    const rotationIndex = (typeof msg.rotationIndex === 'number' && msg.rotationIndex > 0) ? msg.rotationIndex : 0;
+    const epoch = (typeof msg.epoch === 'number') ? msg.epoch : Math.floor((msg.ts || Date.now()) / EPOCH_MS);
+    const mk = await _pulseMk(myHandle, peer, sid, epoch, rotationIndex, 'dec');
+    if (!mk) return null;
+    const plain = await e2eDecrypt(mk, msg.ivB64, msg.ctB64);
+    const parsed = JSON.parse(plain);
+    if (typeof parsed.energy !== 'number') return null;
+    return { energy: parsed.energy, mode: parsed.mode };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Editiert eine eigene E2E-DM-Message: encrypted neuen Plaintext mit der mk
  * der Original-Message (gleiche sid + epoch + rotationIndex) und schickt

@@ -36,6 +36,13 @@
   const ENERGY_FLOOR = 0.04;               // "calm hat Lebenszeichen" (PULSE.md §9.6)
   const FOAM_MS = 420;                      // Gold-Spike-Dauer
 
+  // Touch-Geräte (kein Hover): pointermove ist beim Scrollen unzuverlässig und
+  // ein Erstbesucher zieht selten den Finger über den Hero. Darum empfindlicher
+  // (niedrigerer Speed-Schwellwert) + autonomer "Heartbeat" (s. step()).
+  const isCoarse = typeof window !== 'undefined'
+    && window.matchMedia('(hover: none), (pointer: coarse)').matches;
+  const SPEED_MAX_TOUCH = 0.9;              // px/ms — Touch erreicht schneller hohe Energy
+
   // ── Laufzeit-State (kein $state nötig — alles in der rAF-Loop) ──
   let energy = ENERGY_FLOOR;
   let particles = [];
@@ -48,6 +55,10 @@
   let lastX = 0, lastY = 0, lastT = 0;
   let pointerInside = false;
   let ptrCanvasX = 0, ptrCanvasY = 0;
+
+  // Touch-Tracking (eigene Handler) + autonomer Heartbeat-Timer
+  let lastTX = 0, lastTY = 0, lastTT = 0;
+  let nextBeat = 0;
 
   let dim = { dpr: 1, w: 0, h: 0 };
 
@@ -120,6 +131,21 @@
   function step(ctx, now) {
     // Energy-Decay
     energy = Math.max(ENERGY_FLOOR, energy * ENERGY_DECAY);
+
+    // Autonomer "Heartbeat" auf Touch-Geräten: ohne Maus-Hover bliebe der Hero
+    // sonst fast statisch. Alle ~1.6–2.8s ein sanfter Energie-Schlag + Burst,
+    // sodass der Puls sichtbar "atmet" — auch ganz ohne Interaktion. Auf Desktop
+    // (Hover) aus, dort treibt die Maus den Effekt.
+    if (isCoarse && !reducedMotion) {
+      if (nextBeat === 0) nextBeat = now + 700;
+      if (now >= nextBeat) {
+        energy = Math.max(energy, 0.5 + Math.random() * 0.18);
+        const bx = dim.w * (0.28 + Math.random() * 0.44);
+        const by = dim.h * (0.30 + Math.random() * 0.40);
+        spawnBurst(bx, by, isMobile ? 5 : 7);
+        nextBeat = now + 1600 + Math.random() * 1200;
+      }
+    }
 
     adjustAmbient();
 
@@ -220,6 +246,8 @@
     }
 
     function onPointerMove(e) {
+      // Touch wird von onTouch* behandelt (stärker + scroll-robust)
+      if (e.pointerType === 'touch') return;
       const now = performance.now();
       const x = e.clientX, y = e.clientY;
       if (lastT) {
@@ -240,6 +268,45 @@
         }
       }
       lastX = x; lastY = y; lastT = now;
+    }
+
+    // Touch: eigener, empfindlicherer Pfad. Tippen = sofortiger Burst (Feedback),
+    // Wischen = starker Energie-Schub. Bursts immer am Finger.
+    function touchPoint(e) {
+      const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
+      return t ? { x: t.clientX, y: t.clientY } : null;
+    }
+    function onTouchStart(e) {
+      const p = touchPoint(e);
+      if (!p) return;
+      const now = performance.now();
+      lastTX = p.x; lastTY = p.y; lastTT = now;
+      const cx = p.x - dim.left, cy = p.y - dim.top;
+      if (cy >= 0 && cy <= dim.h && cx >= 0 && cx <= dim.w) {
+        energy = Math.max(energy, 0.72);
+        foamUntil = now + FOAM_MS;
+        spawnBurst(cx, cy, isMobile ? 6 : 9);
+      }
+    }
+    function onTouchMove(e) {
+      const p = touchPoint(e);
+      if (!p) return;
+      const now = performance.now();
+      if (lastTT) {
+        const dt = now - lastTT;
+        if (dt > 0) {
+          const dist = Math.hypot(p.x - lastTX, p.y - lastTY);
+          const inst = clamp01((dist / dt) / SPEED_MAX_TOUCH);
+          // Touch gibt einen kräftigen Energie-Boden, damit es deutlich "wowt"
+          energy = Math.max(energy, 0.4 + inst * 0.6);
+          if (inst > 0.6) foamUntil = now + FOAM_MS;
+          const cx = p.x - dim.left, cy = p.y - dim.top;
+          if (cy >= 0 && cy <= dim.h && cx >= 0 && cx <= dim.w) {
+            spawnBurst(cx, cy, 2 + Math.floor(inst * 3));
+          }
+        }
+      }
+      lastTX = p.x; lastTY = p.y; lastTT = now;
     }
 
     function onVisibility() {
@@ -263,6 +330,8 @@
     } else {
       start();
       window.addEventListener('pointermove', onPointerMove, { passive: true });
+      window.addEventListener('touchstart', onTouchStart, { passive: true });
+      window.addEventListener('touchmove', onTouchMove, { passive: true });
     }
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('resize', onResize);
@@ -271,6 +340,8 @@
     return () => {
       stop();
       window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('resize', onResize);
       mqReduced.removeEventListener?.('change', onReducedChange);

@@ -42,6 +42,7 @@
   const isCoarse = typeof window !== 'undefined'
     && window.matchMedia('(hover: none), (pointer: coarse)').matches;
   const SPEED_MAX_TOUCH = 0.9;              // px/ms — Touch erreicht schneller hohe Energy
+  const SPARKLE_RATIO = 0.24;               // Anteil ✦-Funken
 
   // ── Laufzeit-State (kein $state nötig — alles in der rAF-Loop) ──
   let energy = ENERGY_FLOOR;
@@ -50,6 +51,7 @@
   let running = false;
   let raf = null;
   let reducedMotion = false;
+  let cyanSprite = null, goldSprite = null;  // vorgerenderte Glow-Sprites
 
   // Pointer-Tracking
   let lastX = 0, lastY = 0, lastT = 0;
@@ -65,6 +67,38 @@
   function lerp(a, b, t) { return a + (b - a) * t; }
   function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
+  // Vorgerenderter Glow-Sprite (Perf: drawImage statt shadowBlur pro Frame)
+  function makeGlow(rgb) {
+    const s = document.createElement('canvas');
+    const size = 64; s.width = s.height = size;
+    const g = s.getContext('2d');
+    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0,   `rgba(${rgb},0.95)`);
+    grad.addColorStop(0.3, `rgba(${rgb},0.45)`);
+    grad.addColorStop(1,   `rgba(${rgb},0)`);
+    g.fillStyle = grad; g.fillRect(0, 0, size, size);
+    return s;
+  }
+
+  // 4-Punkt-✦ (8 Vertices, scharfer Innenradius → Funke statt Blob)
+  function drawSparkle(ctx, x, y, r, color, alpha) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.globalAlpha = Math.min(1, alpha);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    const inner = r * 0.34;
+    for (let i = 0; i < 8; i++) {
+      const ang = (Math.PI / 4) * i - Math.PI / 2;
+      const rad = i % 2 === 0 ? r : inner;
+      const px = Math.cos(ang) * rad, py = Math.sin(ang) * rad;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   function resize(canvas) {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = canvas.getBoundingClientRect();
@@ -79,9 +113,12 @@
       y: Math.random() * dim.h,
       vx: (Math.random() - 0.5) * 0.4,
       vy: (Math.random() - 0.5) * 0.4,
-      r: 1.1 + Math.random() * 1.1,
+      r: 1.2 + Math.random() * 1.4,
       ambient: true,
       life: Infinity,
+      tp: Math.random() * Math.PI * 2,       // Twinkle-Phase
+      ts: 0.6 + Math.random() * 1.3,         // Twinkle-Speed
+      sparkle: Math.random() < SPARKLE_RATIO,
     };
   }
 
@@ -98,6 +135,9 @@
         life: 1,            // 1 → 0 über maxLife
         maxLife: 520 + Math.random() * 520, // ms
         born: performance.now(),
+        tp: Math.random() * Math.PI * 2,
+        ts: 1.0 + Math.random() * 1.5,
+        sparkle: true,      // Bursts sind immer Funken (die „aktive" Energie)
       });
     }
   }
@@ -178,7 +218,13 @@
       }
     }
 
-    // ── Partikel ──
+    // ── Sterne (Glow-Bokeh + ✦-Funken, Per-Partikel-Twinkle) ──
+    const foam = c.foamFactor > 0.22;
+    const sprite = foam ? goldSprite : cyanSprite;
+    const coreColor = foam ? '#ffd36b' : '#bdf0ff';
+    const nowSec = now / 1000;
+
+    ctx.globalCompositeOperation = 'lighter';
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
 
@@ -197,14 +243,22 @@
         if (p.life <= 0) { particles.splice(i, 1); continue; }
       }
 
-      const alpha = p.ambient ? (0.28 + energy * 0.42) : (p.life * 0.85);
-      const col = currentColor(now, p.ambient ? 0 : 10);
-      ctx.fillStyle = `hsla(${col.hue}, ${col.sat}%, ${col.light}%, ${alpha})`;
-      ctx.beginPath();
-      const rr = p.ambient ? p.r * (0.85 + energy * 0.6) : p.r * (0.5 + p.life * 0.8);
-      ctx.arc(p.x, p.y, rr, 0, Math.PI * 2);
-      ctx.fill();
+      const tw = 0.7 + 0.3 * Math.sin(nowSec * p.ts + p.tp);
+      const baseAlpha = p.ambient ? (0.14 + energy * 0.5) : (p.life * 0.9);
+      const alpha = baseAlpha * tw;
+      const size = (p.ambient ? p.r * (0.85 + energy * 0.7) : p.r * (0.5 + p.life * 0.9))
+                   * tw * (p.sparkle ? 1.4 : 1) * (foam && p.sparkle ? 1.4 : 1);
+
+      ctx.globalAlpha = Math.min(1, alpha);
+      const glowD = size * (p.sparkle ? 7 : 5);
+      ctx.drawImage(sprite, p.x - glowD / 2, p.y - glowD / 2, glowD, glowD);
+
+      if (p.sparkle) {
+        drawSparkle(ctx, p.x, p.y, size * 1.25, coreColor, alpha * 2.2);
+      }
     }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
 
     ctx.restore();
   }
@@ -223,6 +277,9 @@
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    cyanSprite = makeGlow('150,225,255');
+    goldSprite = makeGlow('255,205,110');
 
     resize(canvas);
 

@@ -101,12 +101,14 @@
   // Per-Chat-Opt-in), beim Schließen/Wechsel deaktivieren. Setzt activePeer +
   // enabled im pulseStore — Grundlage für Toggle, Empfang-Gating und Canvas. ──
   $effect(() => {
+    // Nur primitive Werte lesen; activate/deactivate sind idempotent (kein
+    // Schreib-Storm). KEIN Cleanup-deactivate hier — das lief sonst bei jedem
+    // Flush und thrashte mit dem Body (effect_update_depth_exceeded).
     if (chat?.type === 'dm' && chat?.peer) {
       pulseStore.activate(chat.peer);
     } else {
       pulseStore.deactivate();
     }
-    return () => pulseStore.deactivate();
   });
 
   // Pulse für den offenen Chat aktiv? (eingeschaltet + 1:1)

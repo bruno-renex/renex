@@ -75,14 +75,24 @@ export const pulseStore = {
 
   // ── Aktivierung beim Öffnen/Schließen eines 1:1-Chats ──
   activate(peer) {
-    _activePeer = peer ? String(peer).toLowerCase() : null;
-    _enabled = _activePeer ? this.isEnabledFor(_activePeer) : false;
+    const norm = peer ? String(peer).toLowerCase() : null;
+    // IDEMPOTENT: schon aktiv für diesen Peer → höchstens Opt-in refreshen, kein
+    // unbedingtes Schreiben. Verhindert effect_update_depth (Svelte 5: ein Effect
+    // darf nicht bei jedem Flush State schreiben, den die Reaktiv-Kette liest).
+    if (norm === _activePeer) {
+      const en = norm ? this.isEnabledFor(norm) : false;
+      if (en !== _enabled) _enabled = en;
+      return;
+    }
+    _activePeer = norm;
+    _enabled = norm ? this.isEnabledFor(norm) : false;
     resetPeer();
     // Cold-Start: eigener Pulse startet ruhig (Lebenszeichen), nie gecacht.
     _selfEnergy = 0.05;
     _selfMode = MODES.CALM;
   },
   deactivate() {
+    if (_activePeer === null && _enabled === false && !_peerActive) return; // no-op
     _activePeer = null;
     _enabled = false;
     resetPeer();

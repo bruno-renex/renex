@@ -4,6 +4,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-03 — Logout Cross-Account-State-Leak behoben 🔒
+
+### 🐛 Fixed
+- **Nach Account-Wechsel blitzten kurz Daten des Vor-Accounts auf** (Symptom im
+  Smoke-Test vom 2026-05-28: `/servers/list` zeigte für einen non-Owner
+  kurzzeitig `is_owner=true`, dann konsistent `false`). Root-Cause war **kein**
+  Backend-Bug — Query, Schema (`PK(server_id,user_handle)`, `is_owner NOT NULL
+  DEFAULT 0`) und Daten sind korrekt. Ursache: `logout()` rief nur
+  `userStore.clear()` **ohne Page-Reload**. Die Per-Account-Stores (`serverStore`,
+  `inbox`, `chat`, `presence`, `profileCache`) leben im Modul-Scope und
+  überlebten Logout→Login — die Server-Liste (inkl. `isOwner`) des Vor-Accounts
+  blieb im RAM, bis `loadServers()` des neuen Accounts überschrieb.
+
+### ✏️ Changed
+- **`logout()` macht jetzt `window.location.reload()`** (`session.svelte.js`):
+  struktureller, vollständiger RAM-State-Wipe aller Stores. IndexedDB
+  (CMKs/Passkey-Bindung) bleibt absichtlich erhalten, damit der Re-Login ohne
+  Recovery-Phrase funktioniert. Eliminiert die Bug-*Klasse* statt nur der
+  Instanz — künftige Per-Account-Stores sind automatisch sauber, ohne manuelles
+  `reset()`-Wiring. *(v2026-06-03-3)*
+
+### 🧹 Cleanup
+- Ungenutztes `serverStore.reset()` (toter Code, nie aufgerufen) entfernt +
+  Doc-Kommentar ergänzt, warum Logout via Reload statt reset() wischt.
+
+---
+
 ## 2026-06-03 — Session-Idle-TTL 24h → 30 Tage 🔑
 
 ### 🐛 Fixed

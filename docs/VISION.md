@@ -493,7 +493,7 @@ Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 - Demo-Video + GIF für PWA-Install-Onboarding (Product-Demo Screen-Recording, kein on-camera)
 - Press-Kit
 - **AGB-Update** (NICHT neu — existierende `/agb`, `/datenschutz`, `/terms`, `/privacy`, `/impressum` Pages schon da): Anti-AI Best-Effort-Klausel hinzufügen + DSG-Auftragsdatenverarbeiter-Liste reviewen (Cloudflare, Sentry, Turnstile)
-- Manifesto öffentlich machen (Static-Site Vanilla-HTML auf `renex.id/manifesto`, plus Landing-Section, plus In-App Settings→About) — neu: "Why Pulse" + "Anti-AI Best-Effort Transparency" Sections
+- ✅ **Manifesto öffentlich machen** *(erledigt 2026-06-03, live `2026-06-03-4`)* — Static-Site live auf `renex.id/manifesto` (EN) + `renex.id/manifest-de` (DE), aus EN/DE-Markdown gebaut (`scripts/build-manifesto.js`, shared OG-Image). Erreichbar aus der App: neue `LandingManifesto`-Call-out-Section auf der Landing (zwischen Features und Footer) + Footer-Link + In-App-Link "📜 Manifest" im ProfileDropdown. Sprach-abhängige URL (DE → `/manifest-de/`, sonst `/manifesto/`), i18n de/en/es. **Offen/Follow-up:** zusätzliche "Why Pulse" + "Anti-AI Best-Effort Transparency" Sections im Manifest-Content selbst (Markdown-Erweiterung, separater Schritt).
 
 **Bewusst NICHT in Phase 6:** Founder's Pass / Stripe-Integration. Per Monetization-Plan §6 ist **Phase 1 (Monat 0-6 nach Beta-Launch) komplett kostenlos**. Founder's Pass startet in **Phase 2 Monetization-Tier (~Dezember 2026 / Januar 2027)**, separates Build-Window, eigener Sprint. Vorteil: kein Schweizer Business-Stripe-Konto-Setup als Phase-7-Blocker, Tier-Limits-KV-Foundation (Phase 3A.5) ist eh schon ready, der Webhook-Bau ist in 2 Tagen machbar wenn Zeit reif.
 

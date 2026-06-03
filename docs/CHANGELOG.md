@@ -4,6 +4,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-03 — Manifest aus der App verlinkt 📜
+
+Phase 6: Die öffentliche Manifest-Static-Site (`renex.id/manifesto` EN,
+`renex.id/manifest-de` DE) ist jetzt aus der App erreichbar.
+
+### ✨ Added
+- **`LandingManifesto`-Section** auf der Landing (zwischen Features und Footer):
+  Call-out-Card mit Titel/Body + CTA-Button "Manifest lesen".
+- **Footer-Link "Manifest"** auf der Landing (`LandingFooter`).
+- **In-App-Link "📜 Manifest"** im `ProfileDropdown` (neben Feedback).
+- Sprach-abhängige Ziel-URL: DE → `/manifest-de/`, sonst `/manifesto/`.
+- i18n DE/EN/ES für 4 neue Strings (`manifestoLabel`, `landingManifestoTitle`,
+  `landingManifestoBody`, `landingManifestoCta`). *(v2026-06-03-4)*
+
+---
+
 ## 2026-06-03 — Logout Cross-Account-State-Leak behoben 🔒
 
 ### 🐛 Fixed

@@ -867,6 +867,40 @@ Wenn neue offene Punkte beim Phase-6.5-Sprint auftauchen, hier dokumentieren —
 
 ---
 
+## 20. Pulse vNext — Backlog (Post-MVP)
+
+**Status:** Ideen-Backlog aus Brainstorm Bruno ↔ Claude (2026-06-03), nach Pulse-MVP-Ship. Leitstern-Reframe: **Pulse ist digitale Körpersprache** („Da sitzt wirklich jemand") — das *Gefühl* führt, Anti-AI ist die *Tiefenschicht*. Alles hier ist 1:1-DM, baut auf dem MVP auf, jedes Item einzeln shippbar.
+
+### 20.1 Baureihenfolge (empfohlen)
+
+1. **Silent Together** + **Live Presence** — fast gratis (Pulse beider Seiten ist schon da), sofort spürbar. *(in Arbeit als erstes Doppel mit #2)*
+2. **Handshake / Sync** — der virale Moment. *(in Arbeit)*
+3. **Tap = Nicken** — genau EINE Geste.
+4. **Thinking Pulse** — Verfeinerung der Tipp-Erfassung.
+5. *(Phase 8)* Ambient Voice, mutual „Sternenfusion"-Easter-Egg.
+
+### 20.2 Feature-Specs
+
+- **Silent Together:** Beide im Chat, beide Pulse sichtbar, niemand tippt → „wie zusammen in einem Raum sitzen". Entsteht emergent, sobald `peerActive` (Peer sendet live). Kein neues Protokoll. Emotionalster Effekt der Liste.
+- **Handshake / Sync:** Wenn Eigen- UND Peer-Energie gleichzeitig erhöht sind (Schwelle, ~1–1.5s gehalten) → für 2–3s synchronisieren sich beide Pulse (gemeinsame Ripple/Bloom), danach Cooldown (selten halten = magisch). **Rein client-seitig** — jede Seite erkennt die Bedingung selbst, triggert ~gleichzeitig (WS-Latenz). Kein Server-State.
+- **Live Presence statt „tippt…":** Der Pulse *ist* der Indikator — man sieht greifen/tippen/stoppen/nachdenken ohne Worte. Additiv, kein „tippt…"-Text.
+- **Thinking Pulse:** Beim langen Formulieren steigt/fällt die Energie → erkennbar „die Person formuliert gerade". Verfeinerung über Composer-Fokus + Keystroke-Kadenz.
+- **Lebendiger Avatar / „● Max ist gerade da":** Presence als sanfte Animation (ruhig/fokussiert/aktiv/aufgeregt) statt Text. **Hardrule:** nur **additiver Layer ÜBER** einer neutralen „da/weg"-Anzeige — nie Ersatz, der urteilt (Accessibility §8.3).
+- **Tap = Nicken (Pulse-Reaktion):** Tap auf den Peer-Puls → kurzes warmes Aufleuchten beim Gegenüber („digitaler Blickkontakt"). **Bewusst EINE Geste** (kein 1×/2×/3×-Combo — Auffindbarkeit + Konflikt mit Chat-Tap-Gesten + Anti-Gamification). Später optional EINE zweite (langes Halten = „Herz").
+- **Ambient Voice (Phase 8):** Im Call reagiert der Pulse auf Mikro-*Aktivität* (nicht Audio-Inhalt, nicht Lautstärke). Passt zu §15-Decision „Voice-Pulse deferred Phase 8".
+- **Mutual „Sternenfusion" (Phase 8, Easter-Egg):** Supernova **nur wenn beide gleichzeitig** kräftig schütteln (nicht solo — vermeidet versehentliches Auslösen via Drop-Filter + Gamification). Eskalation des Handshakes.
+
+### 20.3 Bewusst verworfen / mit Auflagen
+
+- **❌ Pulse Memory** („47 Min zusammen aktiv heute") — **verworfen.** Bricht Hardrule §8.1 („keine Pulse-Historie, niemals; jede Session bei null"). Selbst lokal-only wäre es ein Spagat. Nicht bauen.
+- **⚠️ Presence-nur-als-Pulse** — verboten als *Ersatz* für „online/zuletzt gesehen" (Accessibility §8.3, motor-eingeschränkte / Pulse-aus-User dürfen nicht „leer" wirken). Nur als additiver Schmuck-Layer.
+
+### 20.4 Marketing-Notiz
+
+Tester erinnern sich nicht an „noch ein E2E-Messenger" — sie erinnern sich an das *Gefühl*, dass ein Chat plötzlich lebendig wurde. Handshake + Silent Together sind die TikTok-/HN-Momente. Demo-Clips (§13) sollten genau diese zeigen, nicht Feature-Bullets.
+
+---
+
 **Dieses Dokument ist die Bibel für Pulse.**
 **Vor jedem Pulse-Implementation-Schritt: hier reinschauen.**
 **Wenn das Dokument falsch ist: korrigiere es bewusst, nicht beiläufig.**

@@ -216,6 +216,9 @@ export default {
   heroBack:               "← Zurück",
   heroKicker:             "Menschliche Kommunikation",
   heroOpenSource:         "Open Source · Code auf GitHub",
+  showcaseTitle:          "So sieht RENEX aus",
+  showcaseSub:            "Klar, ruhig, ohne Ablenkung. Deine Kontakte und Chats an einem Ort.",
+  showcaseAlt:            "RENEX App — Kontakte- und Chat-Übersicht",
 
   // ── Landing Marketing ──────────────────────────────
   landingSectionTitle:    "Gebaut für Menschen, nicht für Bots.",

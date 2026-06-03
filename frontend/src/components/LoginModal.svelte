@@ -10,6 +10,7 @@
   import { captureException } from '../lib/sentry.js';
   import { renderTurnstile, preloadTurnstileScript } from '../lib/turnstile.js';
   import { isGuestConvertPending, performGuestConvert, clearPendingGuestConvert } from '../lib/guestConvert.js';
+  import LandingShowcase from './LandingShowcase.svelte';
   import LandingFeatures from './LandingFeatures.svelte';
   import LandingManifesto from './LandingManifesto.svelte';
   import LandingFooter from './LandingFooter.svelte';
@@ -294,6 +295,7 @@
   </div>
 
   <!-- Marketing-Sections (scrollen unter dem Hero) -->
+  <LandingShowcase />
   <LandingFeatures />
   <LandingManifesto />
   <LandingFooter />

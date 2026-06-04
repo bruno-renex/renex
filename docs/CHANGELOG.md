@@ -4,6 +4,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-04 — Login gegen Turnstile-Störungen gehärtet 🔒
+
+### 🐛 Fixed
+- **Transientes „Login abgebrochen" behoben.** Cloudflare-Turnstile wurde eager beim
+  Modal-Open geladen und konnte (bei einer Cloudflare-Challenge / IP-Flag) den
+  WebAuthn-Passkey-Flow stören → `NotAllowedError`. Turnstile (Script + Widget) lädt
+  jetzt **erst bei Neu-Registrierung** (`login/start` → „nicht registriert"). Bestehende
+  User loggen sich komplett **ohne Turnstile-iframe** ein → ein Turnstile-Ausfall kann
+  den Login nicht mehr blockieren. Bot-Schutz bei der Registrierung unverändert.
+  *(`LoginModal`, v2026-06-04-1)*
+
+---
+
 ## 2026-06-03 — Pulse MVP: ambient Presence-Layer für 1:1-DMs ✨ (Phase 6.5)
 
 RENEX' brand-definierendes Anti-AI-Feature ist live (`2026-06-03-13`) — **~2 Wochen

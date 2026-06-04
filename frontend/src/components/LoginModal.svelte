@@ -40,6 +40,11 @@
   let turnstileEl = $state(null);
   let cfTurnstileToken = $state(null);
   let _turnstileHandle = null;
+  // Login-Härtung: Turnstile (Script + Widget) wird ERST geladen/gerendert, wenn
+  // login/start „nicht registriert" meldet (→ captcha_required). Bestehende User
+  // loggen sich komplett ohne Turnstile-iframe ein — ein Turnstile-Ausfall oder
+  // eine Cloudflare-Challenge kann den Passkey-Login so nicht mehr stören.
+  let needsCaptcha = $state(false);
 
   // Derived: handle valid?
   let validation = $derived(validateHandle(handle));
@@ -47,19 +52,20 @@
     validation.ok && consentChecked && !isSubmitting
   );
 
-  // Turnstile-API-Skript schon beim Modal-Open vorladen (im Hintergrund).
-  // Render des Widgets bleibt lazy (s.u.) — aber wenn das Skript dann gebraucht
-  // wird, ist es bereits im Browser-Cache: spart 300-800 ms beim ersten Render.
-  // Idempotent: zweiter Aufruf returnt die existierende Promise.
+  // Turnstile-API-Skript NICHT mehr eager beim Modal-Open laden — sonst startet
+  // Cloudflare schon auf dem Login-Screen Challenge-/PAT-Aktivität, die den
+  // WebAuthn-Flow stören kann. Erst laden, wenn Registrierung nötig ist
+  // (needsCaptcha) — dann ist es bereit, während der User die Challenge liest.
   $effect(() => {
+    if (!needsCaptcha) return;
     void preloadTurnstileScript().catch((e) => {
       captureException(e, { context: 'turnstile.preload' });
     });
   });
 
-  // Turnstile lazy rendern — erst wenn Handle valid + Consent gesetzt.
-  // So bleibt das Widget unsichtbar solange der User nicht submitten will.
-  // Dank Preload (oben) ist der eigentliche render() dann instant.
+  // Turnstile rendern, sobald der turnstileEl im DOM ist — der erscheint nur noch
+  // bei needsCaptcha (Neu-Registrierung). Beim Login bestehender User existiert
+  // das Widget nie, also kann es den WebAuthn-Flow nicht stören.
   $effect(() => {
     if (!turnstileEl) return;
     let cancelled = false;
@@ -136,8 +142,12 @@
         case "webauthn_failed": userMsg = lang.passkeyFailed || "Passkey-Fehler"; break;
         case "captcha_required":
         case "captcha_failed":
+          // login/start sagt: dieser Handle ist neu → Registrierung. JETZT erst
+          // Turnstile einblenden (Widget + Script via needsCaptcha), dann tippt
+          // der User erneut auf Login und die Registrierung läuft mit Token.
+          needsCaptcha = true;
           userMsg = lang.captchaRequired || "Bitte Captcha lösen";
-          // Token könnte verbraucht sein — Widget reset für neuen Versuch
+          // Falls schon gerendert (erneuter Versuch): Token könnte verbraucht sein → reset
           if (_turnstileHandle) {
             try { _turnstileHandle.reset(); cfTurnstileToken = null; } catch {}
           }
@@ -208,7 +218,7 @@
       <!-- Turnstile-Widget (Anti-Bot bei Neu-Registrierung).
            Lazy: erst rendern wenn Handle valid + AGB akzeptiert (User wird wahrscheinlich submitten).
            Existing-User-Login braucht keinen Token (Backend skipt Verifikation). -->
-      {#if validation.ok && consentChecked}
+      {#if needsCaptcha}
         <div class="turnstile-row" bind:this={turnstileEl}></div>
       {/if}
 

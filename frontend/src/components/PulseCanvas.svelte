@@ -136,7 +136,7 @@
   }
 
   function step(ctx, now) {
-    const { energy, mode, active, sync, syncT } = pulseStore.tickPeer(now);
+    const { energy, mode, active, sync, syncT, nod, nodT } = pulseStore.tickPeer(now);
 
     ctx.clearRect(0, 0, dim.w * dim.dpr, dim.h * dim.dpr);
 
@@ -145,8 +145,8 @@
     prevSync = sync;
 
     const afterglow = now < agUntil;
-    // Silent wenn Peer nicht teilt UND kein Nachglühen läuft (§9.6)
-    if (!active && energy < 0.01 && !afterglow) { particles = []; return; }
+    // Silent wenn Peer nicht teilt UND kein Nachglühen/Nicken läuft (§9.6)
+    if (!active && energy < 0.01 && !afterglow && !nod) { particles = []; return; }
 
     const env = sync ? Math.sin(Math.PI * Math.min(1, Math.max(0, syncT))) : 0;
     const hb = sync ? heartbeat(syncT) * env : 0;          // gemeinsamer Herzschlag
@@ -251,6 +251,19 @@
       const starR = (9 + 3 * shimmer + flash * 9) * (0.5 + 0.5 * eo);
       drawStar(ctx, px, py, 6, starR, starR * 0.40, rot, '#ffcf7a', (0.7 * life + flash) * shimmer);
       drawStar(ctx, px, py, 6, starR * 0.62, starR * 0.26, rot, '#fffbe9', (0.85 * life + flash) * shimmer);
+    }
+
+    // ── „Nicken" (digitaler Blickkontakt): kurzes warmes Aufblühen oben-mittig ──
+    //    Einseitig + kurz (~1.2s) → klar vom Handshake (beidseitig, 25s) unterscheidbar.
+    if (nod) {
+      const ne = Math.sin(Math.PI * Math.min(1, Math.max(0, nodT))); // 0→1→0
+      const nx = dim.w / 2, ny = Math.min(46, dim.h * 0.12);
+      const nsh = 0.85 + 0.15 * Math.sin(nowSec * 8);
+      const nsize = 12 + 6 * ne;
+      ctx.globalAlpha = Math.min(1, 0.7 * ne);
+      ctx.drawImage(warmSprite, nx - nsize * 2.2, ny - nsize * 2.2, nsize * 4.4, nsize * 4.4);
+      drawStar(ctx, nx, ny, 6, nsize * (0.9 + 0.2 * ne), nsize * 0.4, nowSec * 0.5, '#ffcf7a', 0.7 * ne * nsh);
+      drawStar(ctx, nx, ny, 6, nsize * 0.6, nsize * 0.26, nowSec * 0.5, '#fffbe9', 0.9 * ne * nsh);
     }
 
     ctx.globalAlpha = 1;

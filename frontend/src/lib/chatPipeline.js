@@ -799,8 +799,32 @@ export async function sendPulse(myHandle, peerHandle, energy, mode) {
 }
 
 /**
+ * Sendet ein „Nicken" (digitaler Blickkontakt) an den Peer — ein einmaliges
+ * Event über denselben E2E-Pulse-Kanal (Payload `{ nod: true }`). Kein D1, keine
+ * Signatur. Aufrufer drosselt (Cooldown). Fehler werden geschluckt.
+ */
+export async function sendNod(myHandle, peerHandle) {
+  try {
+    const sid = dmSessionId(myHandle, peerHandle);
+    const map = await getRotationMap(sid);
+    const rotationIndex = map.length > 0 ? map[map.length - 1].fromIndex : 0;
+    const epoch = Math.floor(Date.now() / EPOCH_MS);
+    const mk = await _pulseMk(myHandle, peerHandle, sid, epoch, rotationIndex, 'send');
+    if (!mk) return { ok: false, error: 'no_cmk' };
+    const { ivB64, ctB64 } = await e2eEncrypt(mk, JSON.stringify({ nod: true }));
+    const body = { to: peerHandle, e2e: true, v: 2, type: 'pulse', sid, epoch, ivB64, ctB64, deviceId: getDeviceId() };
+    if (rotationIndex > 0) body.rotationIndex = rotationIndex;
+    const r = await apiFetch('/chat/send', { method: 'POST', body });
+    return r.ok ? { ok: true } : { ok: false, error: r.error || 'send_failed' };
+  } catch (e) {
+    return { ok: false, error: e.message || 'unknown' };
+  }
+}
+
+/**
  * Entschlüsselt einen eingehenden Pulse-Frame. `msg` = WS-Event
- * {from, sid, epoch, rotationIndex, ivB64, ctB64}. Gibt {energy, mode} oder null.
+ * {from, sid, epoch, rotationIndex, ivB64, ctB64}. Gibt {energy, mode}, {nod:true}
+ * oder null.
  */
 export async function decryptPulse(msg, myHandle) {
   try {
@@ -813,6 +837,7 @@ export async function decryptPulse(msg, myHandle) {
     if (!mk) return null;
     const plain = await e2eDecrypt(mk, msg.ivB64, msg.ctB64);
     const parsed = JSON.parse(plain);
+    if (parsed.nod === true) return { nod: true };
     if (typeof parsed.energy !== 'number') return null;
     return { energy: parsed.energy, mode: parsed.mode };
   } catch {

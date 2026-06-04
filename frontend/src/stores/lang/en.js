@@ -254,6 +254,7 @@ export default {
   pulsePermHint:           "iOS will ask for motion permission in the next step.",
   pulsePermAllow:          "Allow →",
   pulsePresentNow:         "here right now",
+  nodTooltip:              "Tap to nod 👋",
 
   attachmentTooLarge:      "File too large (max. 10 MB).",
   attachmentMimeBlocked:   "File type not allowed.",

@@ -30,6 +30,7 @@ const SYNC_THRESHOLD = 0.40;  // beide Energien darüber
 const SYNC_HOLD_MS = 1100;    // so lange gehalten → Trigger
 const SYNC_DURATION_MS = 2600;
 const SYNC_COOLDOWN_MS = 12000;
+const NOD_MS = 1200;          // „Nicken"-Aufblüh-Dauer beim Empfänger
 
 // ── Reaktiver State ──
 let _activePeer = $state(null);     // Handle des offenen, pulse-aktiven Chats
@@ -47,6 +48,10 @@ let _bothHighSince = 0;
 let _syncStart = 0;
 let _syncUntil = 0;
 let _syncCooldownUntil = 0;
+
+// Nicht-reaktiver „Nicken"-State (eingehend)
+let _nodStart = 0;
+let _nodUntil = 0;
 
 // ── Nicht-reaktiver Receiver-State ──
 let _peerTarget = 0;                // zuletzt empfangener Zielwert
@@ -68,6 +73,8 @@ function resetPeer() {
   _syncStart = 0;
   _syncUntil = 0;
   _syncCooldownUntil = 0;
+  _nodStart = 0;
+  _nodUntil = 0;
 }
 
 export const pulseStore = {
@@ -80,6 +87,13 @@ export const pulseStore = {
   get peerActive() { return _peerActive; },
   get syncActive() { return _syncActive; },
   get motionGranted() { return _motionGranted; },
+
+  // „Nicken" vom Peer empfangen → kurzes warmes Aufblühen (von der Canvas gelesen)
+  triggerNod() {
+    const now = nowMs();
+    _nodStart = now;
+    _nodUntil = now + NOD_MS;
+  },
   setMotionGranted(on) { _motionGranted = !!on; },
 
   // ── Per-Chat-Opt-in (localStorage) ──
@@ -169,7 +183,10 @@ export const pulseStore = {
     if (syncNow !== _syncActive) _syncActive = syncNow;
     const syncT = syncNow ? (now - _syncStart) / SYNC_DURATION_MS : 0;
 
-    return { energy: _peerEnergy, mode: _peerMode, active: _peerActive, sync: syncNow, syncT };
+    const nodNow = now < _nodUntil;
+    const nodT = nodNow ? (now - _nodStart) / NOD_MS : 0;
+
+    return { energy: _peerEnergy, mode: _peerMode, active: _peerActive, sync: syncNow, syncT, nod: nodNow, nodT };
   },
 
   // ── Logout: Opt-in-Flags + RAM wipen (Privacy-Hardrule §8.1) ──

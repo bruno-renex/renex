@@ -10,6 +10,7 @@
   import { presenceStore } from '../stores/presence.svelte.js';
   import { userStore } from '../stores/user.svelte.js';
   import { pulseStore } from '../stores/pulseStore.svelte.js';
+  import { sendNod } from '../lib/chatPipeline.js';
   import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
   import ChatHeaderMenu from './ChatHeaderMenu.svelte';
   import GroupMembersModal from './GroupMembersModal.svelte';
@@ -49,6 +50,19 @@
     && pulseStore.enabled && pulseStore.peerActive
     && pulseStore.activePeer === String(chat?.peer || '').toLowerCase()
   );
+
+  // „Tap = Nicken" (digitaler Blickkontakt): Presence-Dot antippen → sendNod.
+  // Cooldown 1s (anti-spam), kurzes Sender-Feedback via nodSent-Klasse.
+  let nodSent = $state(false);
+  let _nodCooldown = false;
+  async function nodToPeer() {
+    if (!chat?.peer || _nodCooldown) return;
+    _nodCooldown = true;
+    nodSent = true;
+    setTimeout(() => { nodSent = false; }, 700);
+    try { await sendNod(userStore.myUser, chat.peer); } catch {}
+    setTimeout(() => { _nodCooldown = false; }, 1000);
+  }
 
   // Bei Chat-Open frischen Presence-Wert holen (sonst stale bis nächster Poll-Tick).
   $effect(() => {
@@ -163,8 +177,17 @@
         <div class="name">{headerName}</div>
         <div class="status">
           {#if pulsePresent}
-            <span class="pulse-present-dot"></span>
-            {lang.pulsePresentNow || "gerade da"}
+            <button
+              type="button"
+              class="nod-btn"
+              class:sent={nodSent}
+              onclick={nodToPeer}
+              title={lang.nodTooltip || 'Antippen = Nicken'}
+              aria-label={lang.nodTooltip || 'Tap to nod'}
+            >
+              <span class="pulse-present-dot"></span>
+              {lang.pulsePresentNow || "gerade da"}
+            </button>
           {:else if isPeerOnline}
             <span class="online-dot"></span>
             {lang.online || "Online"}
@@ -353,6 +376,37 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .pulse-present-dot { animation: none; opacity: 0.9; }
+  }
+
+  /* „Tap = Nicken": Presence-Anzeige wird tippbar */
+  .nod-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    padding: 2px 6px;
+    margin: -2px -6px;
+    border-radius: 10px;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .nod-btn:hover { background: var(--bg-panel-alt); }
+  .nod-btn:active { transform: scale(0.96); }
+
+  /* Sender-Feedback: kurzer warmer Blitz des Dots beim Absenden */
+  .nod-btn.sent .pulse-present-dot {
+    animation: nod-flash 0.7s ease-out;
+  }
+  @keyframes nod-flash {
+    0%   { transform: scale(1);   background: var(--accent-voice); box-shadow: 0 0 6px var(--accent-voice); }
+    35%  { transform: scale(2.1); background: #ffcf7a; box-shadow: 0 0 18px #ffcf7a; }
+    100% { transform: scale(1);   background: var(--accent-voice); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .nod-btn.sent .pulse-present-dot { animation: none; }
   }
 
   .actions {

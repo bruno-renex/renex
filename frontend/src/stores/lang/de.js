@@ -254,6 +254,7 @@ export default {
   pulsePermHint:           "iOS fragt im nächsten Schritt nach der Bewegungs-Berechtigung.",
   pulsePermAllow:          "Erlauben →",
   pulsePresentNow:         "gerade da",
+  nodTooltip:              "Antippen = Nicken 👋",
   attachmentTooLarge:      "Datei zu groß (max. 10 MB).",
   attachmentMimeBlocked:   "Dateityp nicht erlaubt.",
   attachmentExtBlocked:    "Dateiendung nicht erlaubt.",

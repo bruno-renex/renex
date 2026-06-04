@@ -27,6 +27,7 @@
   import { getRecoveryStatus } from './lib/recovery.js';
   import { uploadInboxKeyIfNeeded } from './lib/e2eKeys.js';
   import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer, ensureSecureDmSession, republishCMKForPeer, decryptPulse } from './lib/chatPipeline.js';
+  // (sendNod wird im ChatHeader genutzt, decryptPulse hier für Empfang)
   import { pulseStore } from './stores/pulseStore.svelte.js';
   import { isGuestHandle } from './lib/guestNames.js';
   import { isGuestConvertPending, performGuestConvert, readPendingGuestConvert } from './lib/guestConvert.js';
@@ -729,7 +730,9 @@
           const from = String(msg.from || '').toLowerCase();
           if (me && pulseStore.enabled && pulseStore.activePeer === from) {
             void decryptPulse(msg, me).then((p) => {
-              if (p) pulseStore.onPeerFrame(from, p.energy, p.mode, performance.now());
+              if (!p) return;
+              if (p.nod) pulseStore.triggerNod();                 // „Nicken" → warmes Aufblühen
+              else pulseStore.onPeerFrame(from, p.energy, p.mode, performance.now());
             });
           }
           return;

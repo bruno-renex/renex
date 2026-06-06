@@ -3,7 +3,9 @@
   Auto-grow textarea, Enter sendet (Shift+Enter = Zeilenumbruch).
 -->
 <script>
+  import { onDestroy } from 'svelte';
   import { chatStore } from '../stores/chat.svelte.js';
+  import { pulseStore } from '../stores/pulseStore.svelte.js';
   import { i18nStore } from '../stores/i18n.svelte.js';
   import { profileCache } from '../stores/profileCache.svelte.js';
   import { toastStore } from '../stores/toast.svelte.js';
@@ -22,6 +24,7 @@
   let text = $state(chatStore.draftText);
   let textareaEl = $state(null);
   let isSending = $state(false);
+  let _focused = $state(false);   // Composer fokussiert? (Thinking Pulse)
   // Tracking für Draft-Restore beim Edit-Cancel: Edit überschreibt draftText, beim
   // Verlassen des Edit-Modes wollen wir den vorherigen Draft wiederherstellen.
   let _draftBeforeEdit = '';
@@ -64,6 +67,15 @@
       textareaEl.style.height = Math.min(textareaEl.scrollHeight, 140) + "px";
     }
   });
+
+  // Thinking Pulse: „komponiere gerade" = Composer fokussiert + Entwurf nicht leer.
+  // Setzt nur ein lokales Flag; der Pulse-Controller hält dann den Energie-Boden,
+  // solange formuliert wird (Denkpausen sacken nicht auf calm ab). KEIN Text/Flag
+  // geht über die Leitung — nur der abstrakte Energie-Skalar (wie immer).
+  $effect(() => {
+    pulseStore.setComposing(_focused && text.trim().length > 0);
+  });
+  onDestroy(() => pulseStore.setComposing(false));
 
   let canSend = $derived(text.trim().length > 0 && !isSending);
 
@@ -449,6 +461,8 @@
     bind:this={textareaEl}
     bind:value={text}
     onkeydown={onKeydown}
+    onfocus={() => (_focused = true)}
+    onblur={() => (_focused = false)}
     placeholder={lang.messagePlaceholder || "Nachricht schreiben…"}
     rows="1"
     autocomplete="off"

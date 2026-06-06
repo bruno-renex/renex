@@ -41,6 +41,7 @@ let _peerEnergy = $state(0);        // geglättet (für Render)
 let _peerMode = $state(MODES.CALM);
 let _peerActive = $state(false);    // kürzlich ein Frame empfangen?
 let _motionGranted = $state(false); // DeviceMotion-Permission erteilt (Session)
+let _composing = $state(false);     // Thinking Pulse: tippe ich gerade im Composer?
 let _syncActive = $state(false);    // Handshake-Moment läuft gerade?
 
 // Nicht-reaktiver Handshake-State
@@ -96,6 +97,12 @@ export const pulseStore = {
   },
   setMotionGranted(on) { _motionGranted = !!on; },
 
+  // Thinking Pulse: Composer fokussiert + Entwurf nicht leer → erhöhter Energie-
+  // Boden, damit der Puls beim Formulieren „active" bleibt (Denkpausen sacken
+  // nicht auf calm ab). Nur lokal; es geht nur der abstrakte Energie-Skalar raus.
+  get composing() { return _composing; },
+  setComposing(on) { _composing = !!on; },
+
   // ── Per-Chat-Opt-in (localStorage) ──
   isEnabledFor(peer) {
     return get(OPTIN(peer)) === 'true';
@@ -130,6 +137,7 @@ export const pulseStore = {
     if (_activePeer === null && _enabled === false && !_peerActive) return; // no-op
     _activePeer = null;
     _enabled = false;
+    _composing = false;
     resetPeer();
   },
 

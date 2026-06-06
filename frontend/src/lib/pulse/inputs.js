@@ -20,6 +20,7 @@ const TOUCH_SPEED_MAX = 0.9;   // px/ms (Touch langsamer als Maus-Flicks)
 const WHEEL_MAX = 200;         // |deltaY| → energy 1
 const MOTION_MAX = 1.5;        // m/s² (Foam-Schwelle, §5.4) → energy 1
 const MOTION_DROP_CLAMP = 6;   // m/s² Phone-Drop-Filter — darüber ignorieren (§5.4)
+const THINK_FLOOR = 0.30;      // Thinking Pulse: Energie-Boden während des Komponierens
 const TYPE_WINDOW = 500;       // ms Sliding-Window für Tipprate
 
 function now() {
@@ -32,7 +33,7 @@ function now() {
  * @param {(energy:number, mode:string)=>void} opts.onUpdate  pro Frame aufgerufen
  * @returns {{start:Function, stop:Function, enableMotion:Function, disableMotion:Function, isMotionEnabled:Function}}
  */
-export function createPulseInputs({ onUpdate } = {}) {
+export function createPulseInputs({ onUpdate, getComposing } = {}) {
   const state = createPulseState(now());
   let raf = null;
   let running = false;
@@ -118,6 +119,10 @@ export function createPulseInputs({ onUpdate } = {}) {
       backspaceBoost *= 0.85;
       if (backspaceBoost < 0.02) backspaceBoost = 0;
     }
+
+    // Thinking Pulse: solange im Composer formuliert wird, steter Grundpegel →
+    // Puls bleibt „active" auch in Denkpausen (EMA rampt sanft rein/raus).
+    if (getComposing && getComposing()) bump(THINK_FLOOR);
 
     if (instMax > 0) pushInput(state, instMax, t);
     const { energy, mode } = tick(state, t);

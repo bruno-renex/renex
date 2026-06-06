@@ -38,6 +38,7 @@
     if (!me || !p) return;
 
     inputs = createPulseInputs({
+      getComposing: () => pulseStore.composing,   // Thinking Pulse: Composer-Boden
       onUpdate: (energy, mode) => {
         pulseStore.setSelf(energy, mode);
         const now = performance.now();

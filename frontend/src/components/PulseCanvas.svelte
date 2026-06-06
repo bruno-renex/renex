@@ -116,12 +116,9 @@
     const eEff = Math.min(1, energy + env * 0.4 + hb * 0.25);
     const foam = mode === MODES.FOAM;
     const baseSprite = foam ? goldSprite : cyanSprite;
-    const greenFlush = nod ? Math.sin(Math.PI * clamp01(nodT)) : 0;
     // Nachglühen jetzt VERTEILT (rosa Wash über alle Käfer) statt Mitten-Glow → auch im vollen Chat sichtbar
     const ag = afterglow ? Math.pow(1 - (now - agStart) / AFTERGLOW_MS, 1.5) : 0;
     const pinkAmt = Math.max(env, ag * 0.55);
-    // Nicken-Welle: Blink-Front wandert von oben nach unten durchs Feld
-    const waveY = greenFlush > 0 ? clamp01(nodT) * (dim.h + 160) - 80 : -9999;
     const nowSec = now / 1000;
 
     // Atem-Phase fortschreiben — Rate energie-gekoppelt (calm ~5s, erregt ~2.3s)
@@ -199,14 +196,6 @@
         ctx.globalAlpha = Math.min(1, aBase * pinkAmt);
         ctx.drawImage(pinkSprite, p.x - glowD / 2, p.y - glowD / 2, glowD, glowD);
       }
-      // Nicken: grüne Blink-Welle wandert von oben durchs Feld
-      if (greenFlush > 0) {
-        const band = Math.max(0, 1 - Math.abs(p.y - waveY) / 90);
-        if (band > 0.01) {
-          ctx.globalAlpha = Math.min(1, aBase * band * 1.8);
-          ctx.drawImage(greenSprite, p.x - glowD / 2, p.y - glowD / 2, glowD, glowD);
-        }
-      }
       // Heller runder Kern (der „Käfer") — Farbe folgt dem Moment
       const coreCol = pinkAmt > 0.4 ? '#ffd0ec' : (foam ? '#ffe6b0' : '#dffaff');
       ctx.globalAlpha = Math.min(1, (cyanA + aBase * pinkAmt) * 1.5);
@@ -219,19 +208,48 @@
     // (Rosa Nachglühen ist jetzt VERTEILT — als pinkAmt-Wash über alle Käfer oben,
     //  kein Mitten-Glow mehr, damit es im vollen Chat sichtbar bleibt.)
 
-    // ── Nicken: grüne Quelle oben (Ursprung der Blink-Welle), verglimmt schnell ──
+    // ── Nicken: EINE grüne Mote reist von oben (Peer) im Bogen zu dir (unten) ──
+    //    „ein Blick kommt an" — einzeln + gerichtet + kurz, klar anders als der
+    //    kollektive rosa Herzschlag des Handshakes.
     if (nod) {
-      const src = Math.max(0, 1 - clamp01(nodT) * 2);   // stark am Anfang, dann weg
-      if (src > 0.01) {
-        const nx = dim.w / 2, ny = Math.min(40, dim.h * 0.10);
-        const size = 16;
-        ctx.globalAlpha = Math.min(1, 0.7 * src);
-        ctx.drawImage(greenSprite, nx - size * 2.2, ny - size * 2.2, size * 4.4, size * 4.4);
-        ctx.globalAlpha = Math.min(1, 0.8 * src);
-        ctx.fillStyle = '#d8ffe9';
-        ctx.beginPath();
-        ctx.arc(nx, ny, 3 + 2 * src, 0, Math.PI * 2);
-        ctx.fill();
+      const t = clamp01(nodT);
+      const easeAt = (u) => (u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2);
+      const sx = dim.w * 0.5, sy = dim.h * 0.10;   // Start: oben (Peer)
+      const ex = dim.w * 0.5, ey = dim.h * 0.90;   // Ziel: unten (du)
+      const posAt = (u) => {
+        const e = easeAt(u);
+        return {
+          x: sx + (ex - sx) * e + Math.sin(u * Math.PI) * dim.w * 0.18,  // seitlicher Bogen
+          y: sy + (ey - sy) * e,
+        };
+      };
+      const head = posAt(t);
+      const tail = posAt(clamp01(t - 0.07));
+      const a = Math.min(1, Math.sin(Math.PI * t) * 1.5);
+
+      // Komet-Schweif head→tail (grün, ausfadend)
+      const grad = ctx.createLinearGradient(head.x, head.y, tail.x, tail.y);
+      grad.addColorStop(0, `rgba(150,255,190,${0.7 * a})`);
+      grad.addColorStop(1, 'rgba(120,255,180,0)');
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 2.4;
+      ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(head.x, head.y); ctx.lineTo(tail.x, tail.y); ctx.stroke();
+
+      // grüner Glow + heller Kern am Kopf
+      const gs = 15;
+      ctx.globalAlpha = Math.min(1, 0.85 * a);
+      ctx.drawImage(greenSprite, head.x - gs * 2, head.y - gs * 2, gs * 4, gs * 4);
+      ctx.globalAlpha = Math.min(1, a);
+      ctx.fillStyle = '#d8ffe9';
+      ctx.beginPath(); ctx.arc(head.x, head.y, 3.2, 0, Math.PI * 2); ctx.fill();
+
+      // sanftes Ankommen unten (kurzer Bloom am Ende)
+      if (t > 0.82) {
+        const land = (t - 0.82) / 0.18;
+        const ls = 14 + 10 * land;
+        ctx.globalAlpha = Math.min(1, 0.5 * (1 - land));
+        ctx.drawImage(greenSprite, ex - ls * 2, ey - ls * 2, ls * 4, ls * 4);
       }
     }
 

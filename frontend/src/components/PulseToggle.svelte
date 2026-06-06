@@ -16,8 +16,8 @@
   // Aktiv-Zustand reaktiv aus dem Store (activate(peer) wird in ChatView gesetzt)
   let active = $derived(pulseStore.enabled && pulseStore.activePeer === String(peer || '').toLowerCase());
 
-  // Mini-Self-Indicator (§9.5): das ✨ pulsiert mit der eigenen Energie — sofortiges
-  // Feedback ("mein Pulse geht raus"), auch wenn der Peer (noch) nicht teilt.
+  // Mini-Self-Indicator (§9.5): der Punkt pulsiert mit der eigenen Energie —
+  // sofortiges Feedback ("mein Pulse geht raus"), auch wenn der Peer (noch) nicht teilt.
   let selfE = $derived(active ? pulseStore.selfEnergy : 0);
 
   function toggle() {
@@ -46,10 +46,10 @@
   aria-pressed={active}
 >
   <span
-    class="pulse-spark"
-    style:transform={`scale(${1 + selfE * 0.5})`}
-    style:opacity={active ? 0.55 + selfE * 0.45 : 1}
-  >✨</span>
+    class="pulse-dot"
+    style:transform={`scale(${1 + selfE * 0.6})`}
+    style:opacity={active ? 0.5 + selfE * 0.5 : 1}
+  ></span>
 </button>
 
 <PulsePermissionModal bind:isOpen={showPermModal} {peer} />
@@ -78,9 +78,17 @@
     color: var(--accent-voice);
     box-shadow: 0 0 0 1px var(--accent-voice) inset;
   }
-  .pulse-spark {
+  /* Glühender Punkt (Leuchtkäfer/Pulse-Mark) statt ✨ — wir haben keine Sterne mehr */
+  .pulse-dot {
     display: inline-block;
-    transition: transform 0.08s linear, opacity 0.08s linear;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: currentColor;
+    transition: transform 0.08s linear, opacity 0.08s linear, box-shadow 0.15s;
     will-change: transform;
+  }
+  .pulse-toggle.active .pulse-dot {
+    box-shadow: 0 0 8px var(--accent-voice), 0 0 3px var(--accent-voice);
   }
 </style>

@@ -759,7 +759,14 @@ async function _pulseMk(myHandle, peerHandle, sid, epoch, rotationIndex, which) 
   const cacheKey = `${sid}|${epoch}|${rotationIndex}`;
   if (which === 'send' && _pulseSendKey === cacheKey && _pulseSendMk) return _pulseSendMk;
   if (which === 'dec'  && _pulseDecKey  === cacheKey && _pulseDecMk)  return _pulseDecMk;
-  const cmk = await ensureSecureDmSession(myHandle, peerHandle);
+  // WICHTIG: Pulse darf KEINE CMK-Etablierung ANSTOSSEN. ensureSecureDmSession
+  // geht bei fehlendem lokalem CMK in lange Retry-/Key-Exchange-Schleifen (17s+);
+  // der Controller würde das alle ~1.2s anhämmern → blockiert sich selbst nach
+  // Reload (CMK noch nicht warm), heilt nicht von allein (Bug: erst Toggle-Off/On
+  // hilft). Stattdessen nur einen BESTEHENDEN CMK lesen (lokal, kein Netz). Fehlt
+  // er, wird der Frame still übersprungen — sobald der CMK da ist (Bundle-Restore
+  // oder normaler Chat-Verlauf), sendet/empfängt Pulse von selbst wieder.
+  const cmk = await getCMKIfExists(peerHandle);
   if (!cmk) return null;
   let skBytes = _skCacheGet(sid, rotationIndex);
   if (!skBytes) {

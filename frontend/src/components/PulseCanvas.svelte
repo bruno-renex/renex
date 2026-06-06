@@ -228,21 +228,21 @@
       const tail = posAt(clamp01(t - 0.07));
       const a = Math.min(1, Math.sin(Math.PI * t) * 1.5);
 
-      // Komet-Schweif head→tail (grün, ausfadend)
+      // Komet-Schweif head→tail (goldig, ausfadend)
       const grad = ctx.createLinearGradient(head.x, head.y, tail.x, tail.y);
-      grad.addColorStop(0, `rgba(150,255,190,${0.7 * a})`);
-      grad.addColorStop(1, 'rgba(120,255,180,0)');
+      grad.addColorStop(0, `rgba(255,216,140,${0.7 * a})`);
+      grad.addColorStop(1, 'rgba(255,205,110,0)');
       ctx.strokeStyle = grad;
       ctx.lineWidth = 2.4;
       ctx.lineCap = 'round';
       ctx.beginPath(); ctx.moveTo(head.x, head.y); ctx.lineTo(tail.x, tail.y); ctx.stroke();
 
-      // grüner Glow + heller Kern am Kopf
+      // goldener Glow + heller Kern am Kopf
       const gs = 15;
       ctx.globalAlpha = Math.min(1, 0.85 * a);
-      ctx.drawImage(greenSprite, head.x - gs * 2, head.y - gs * 2, gs * 4, gs * 4);
+      ctx.drawImage(goldSprite, head.x - gs * 2, head.y - gs * 2, gs * 4, gs * 4);
       ctx.globalAlpha = Math.min(1, a);
-      ctx.fillStyle = '#d8ffe9';
+      ctx.fillStyle = '#fff0cf';
       ctx.beginPath(); ctx.arc(head.x, head.y, 3.2, 0, Math.PI * 2); ctx.fill();
 
       // sanftes Ankommen unten (kurzer Bloom am Ende)
@@ -250,7 +250,7 @@
         const land = (t - 0.82) / 0.18;
         const ls = 14 + 10 * land;
         ctx.globalAlpha = Math.min(1, 0.5 * (1 - land));
-        ctx.drawImage(greenSprite, ex - ls * 2, ey - ls * 2, ls * 4, ls * 4);
+        ctx.drawImage(goldSprite, ex - ls * 2, ey - ls * 2, ls * 4, ls * 4);
       }
     }
 

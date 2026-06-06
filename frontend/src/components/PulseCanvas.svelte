@@ -40,6 +40,9 @@
   let prevSync = false;
   let agStart = 0, agUntil = 0;
 
+  // Atmender-Schwarm-State: globale Atem-Phase + Frame-Timing
+  let breathPhase = 0, lastNow = 0;
+
   // Vorgerenderte Glow-Sprites (Perf: drawImage statt shadowBlur pro Frame)
   let cyanSprite = null, goldSprite = null, warmSprite = null;
 
@@ -69,11 +72,11 @@
     return {
       x: Math.random() * dim.w,
       y: Math.random() * dim.h,
-      vx: (Math.random() - 0.5) * 0.4,
-      vy: (Math.random() - 0.5) * 0.4,
+      vx: 0, vy: 0,                          // akkumulierte Geschwindigkeit (Steering)
+      ang: Math.random() * Math.PI * 2,      // Wander-Heading (Eigenleben)
       baseR: 1.3 + Math.random() * 1.6,
-      tp: Math.random() * Math.PI * 2,     // Twinkle-Phase
-      ts: 0.6 + Math.random() * 1.3,       // Twinkle-Speed
+      tp: Math.random() * Math.PI * 2,       // Twinkle-Phase
+      ts: 0.6 + Math.random() * 1.3,         // Twinkle-Speed
       sparkle: Math.random() < SPARKLE_RATIO,
     };
   }
@@ -157,11 +160,44 @@
     const coreColor = foam ? '#ffd36b' : '#bdf0ff';
     const nowSec = now / 1000;
 
+    // Atem-Phase fortschreiben — Rate energie-gekoppelt (calm ~5s, erregt ~2.3s)
+    const dt = lastNow ? Math.min(64, now - lastNow) : 16;
+    lastNow = now;
+    breathPhase += dt * (0.0013 + eEff * 0.0017);
+
     ctx.save();
     ctx.scale(dim.dpr, dim.dpr);
 
     const target = Math.round(lerp(P_MIN, P_MAX, eEff));
     adjustCount(target);
+
+    // ── Atmender Schwarm: Wander (Eigenleben) + energie-gekoppelte Kohäsion zur
+    //    Mitte. Im Sync rückt der Schwarm stark zusammen ("Verschmelzen" → Reststern). ──
+    const ax = dim.w / 2, ay = dim.h / 2;
+    const wander = 0.014 + eEff * 0.05;
+    const coh = lerp(0.0007, 0.004, eEff) + env * 0.02;
+    const nLean = nod ? Math.sin(Math.PI * Math.min(1, Math.max(0, nodT))) : 0; // Nicken: Lehnen
+    const nodX = dim.w / 2, nodY = Math.min(46, dim.h * 0.12);
+    for (const p of particles) {
+      p.ang += (Math.random() - 0.5) * 0.6;            // Wander: Richtung dreht sanft
+      p.vx += Math.cos(p.ang) * wander;
+      p.vy += Math.sin(p.ang) * wander;
+      p.vx += (ax - p.x) * coh;                         // Kohäsion zur Mitte
+      p.vy += (ay - p.y) * coh;
+      if (nLean > 0) {                                   // obere Motes lehnen zum Peer
+        p.vx += (nodX - p.x) * 0.003 * nLean;
+        p.vy += (nodY - p.y) * 0.006 * nLean;
+      }
+      p.vx *= 0.90; p.vy *= 0.90;                        // Dämpfung → weiche Bahnen
+      p.x += p.vx; p.y += p.vy;
+    }
+
+    // Atem: das ganze Feld dehnt/zieht sich sanft um die Mitte (Render-Skala)
+    const bScale = 1 + lerp(0.04, 0.09, eEff) * Math.sin(breathPhase);
+    for (const p of particles) {
+      p._dx = ax + (p.x - ax) * bScale;
+      p._dy = ay + (p.y - ay) * bScale;
+    }
 
     // ── Konstellations-Linien (unter den Sternen). Herzschlag hellt sie auf. ──
     const lineBase = (0.025 + eEff * 0.11) * (1 + hb * 3);
@@ -171,14 +207,14 @@
         const a = particles[i];
         for (let j = i + 1; j < particles.length; j++) {
           const b = particles[j];
-          const dx = a.x - b.x, dy = a.y - b.y;
+          const dx = a._dx - b._dx, dy = a._dy - b._dy;
           const d = Math.hypot(dx, dy);
           if (d < LINK_DIST) {
             const alpha = (1 - d / LINK_DIST) * lineBase;
             ctx.strokeStyle = `hsla(${lineHue}, 90%, 70%, ${alpha})`;
             ctx.beginPath();
-            ctx.moveTo(a.x, a.y);
-            ctx.lineTo(b.x, b.y);
+            ctx.moveTo(a._dx, a._dy);
+            ctx.lineTo(b._dx, b._dy);
             ctx.stroke();
           }
         }
@@ -188,21 +224,16 @@
     // ── Sterne (additives Glow + ✦-Funken, Per-Partikel-Twinkle) ──
     ctx.globalCompositeOperation = 'lighter';
     for (const p of particles) {
-      p.x += p.vx * (0.4 + eEff * 2.0);
-      p.y += p.vy * (0.4 + eEff * 2.0);
-      if (p.x < 0 || p.x > dim.w) p.vx = -p.vx;
-      if (p.y < 0 || p.y > dim.h) p.vy = -p.vy;
-
       const tw = 0.7 + 0.3 * Math.sin(nowSec * p.ts + p.tp);
       const size = p.baseR * (0.9 + eEff * 0.9) * tw * (p.sparkle ? 1.5 : 1) * (foam && p.sparkle ? 1.5 : 1);
       const alpha = (0.10 + eEff * 0.42) * MAX_OPACITY * tw * (1 + hb * 0.8);
 
       ctx.globalAlpha = Math.min(1, alpha);
       const glowD = size * (p.sparkle ? 7 : 5);
-      ctx.drawImage(sprite, p.x - glowD / 2, p.y - glowD / 2, glowD, glowD);
+      ctx.drawImage(sprite, p._dx - glowD / 2, p._dy - glowD / 2, glowD, glowD);
 
       if (p.sparkle) {
-        drawSparkle(ctx, p.x, p.y, size * 1.3, coreColor, alpha * 2.4);
+        drawSparkle(ctx, p._dx, p._dy, size * 1.3, coreColor, alpha * 2.4);
       }
     }
 

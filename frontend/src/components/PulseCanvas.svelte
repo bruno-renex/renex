@@ -111,11 +111,17 @@
     if (!active && energy < 0.01 && !afterglow && !nod) { particles = []; return; }
 
     const env = sync ? Math.sin(Math.PI * clamp01(syncT)) : 0;   // Handshake-Hüllkurve
-    const hb = sync ? heartbeat(syncT) * env : 0;                // gemeinsamer Herzschlag
+    const hbRaw = sync ? heartbeat(syncT) : 0;                   // roher Herzschlag (0..1)
+    const hb = hbRaw * env;
     const eEff = Math.min(1, energy + env * 0.4 + hb * 0.25);
     const foam = mode === MODES.FOAM;
     const baseSprite = foam ? goldSprite : cyanSprite;
     const greenFlush = nod ? Math.sin(Math.PI * clamp01(nodT)) : 0;
+    // Nachglühen jetzt VERTEILT (rosa Wash über alle Käfer) statt Mitten-Glow → auch im vollen Chat sichtbar
+    const ag = afterglow ? Math.pow(1 - (now - agStart) / AFTERGLOW_MS, 1.5) : 0;
+    const pinkAmt = Math.max(env, ag * 0.55);
+    // Nicken-Welle: Blink-Front wandert von oben nach unten durchs Feld
+    const waveY = greenFlush > 0 ? clamp01(nodT) * (dim.h + 160) - 80 : -9999;
     const nowSec = now / 1000;
 
     // Atem-Phase fortschreiben — Rate energie-gekoppelt (calm ~5s, erregt ~2.3s)
@@ -134,9 +140,8 @@
     //    sanfte Rand-Abstoßung. Konvergenz zur Mitte NUR beim Handshake. ──
     const ax = dim.w / 2, ay = dim.h / 2;
     const wander = 0.014 + eEff * 0.05;
-    const cohSync = env * 0.03;                              // Verschmelzen nur im Sync
+    const cohSync = env * 0.004;                            // nur ein Hauch Zueinanderlehnen (KEIN Knoten)
     const M = 38;                                           // Rand-Margin
-    const nodX = dim.w / 2, nodY = Math.min(46, dim.h * 0.12);
     for (const p of particles) {
       p.ang += (Math.random() - 0.5) * 0.6;
       p.vx += Math.cos(p.ang) * wander;
@@ -146,13 +151,9 @@
       else if (p.x > dim.w - M) p.vx -= (p.x - (dim.w - M)) * 0.004;
       if (p.y < M) p.vy += (M - p.y) * 0.004;
       else if (p.y > dim.h - M) p.vy -= (p.y - (dim.h - M)) * 0.004;
-      if (cohSync > 0) {                                     // Handshake: zur Mitte verschmelzen
+      if (cohSync > 0) {                                     // Handshake: minimal Zueinanderlehnen
         p.vx += (ax - p.x) * cohSync;
         p.vy += (ay - p.y) * cohSync;
-      }
-      if (greenFlush > 0) {                                  // Nicken: obere Käfer lehnen hoch
-        p.vx += (nodX - p.x) * 0.003 * greenFlush;
-        p.vy += (nodY - p.y) * 0.006 * greenFlush;
       }
       p.vx *= 0.90; p.vy *= 0.90;
       p.x += p.vx; p.y += p.vy;
@@ -185,60 +186,56 @@
     // ── Leuchtkäfer (Glow-Halo + heller Kern, eigenständiges Blinken) ──
     ctx.globalCompositeOperation = 'lighter';
     for (const p of particles) {
-      const blink = 0.45 + 0.55 * Math.pow(0.5 + 0.5 * Math.sin(nowSec * p.ts + p.tp), 2);
+      // Blink: unabhängig → beim Handshake Einschwingen in gemeinsamen Herzschlag
+      const indep = 0.45 + 0.55 * Math.pow(0.5 + 0.5 * Math.sin(nowSec * p.ts + p.tp), 2);
+      const shared = 0.25 + 0.75 * hbRaw;
+      const blink = lerp(indep, shared, env);
       const size = p.baseR * (0.85 + eEff * 0.8) * (0.7 + 0.6 * blink) * (foam ? 1.25 : 1);
       const aBase = (0.12 + eEff * 0.4) * MAX_OPACITY * blink * breath * (1 + hb * 0.8);
       const glowD = size * 5;
 
-      // Cyan→Rosa-Crossfade während des Handshakes
-      const cyanA = aBase * (1 - env * 0.85);
+      // Cyan→Rosa-Crossfade (Handshake voll, Nachglühen sanft + verteilt)
+      const cyanA = aBase * (1 - pinkAmt * 0.85);
       ctx.globalAlpha = Math.min(1, cyanA);
       ctx.drawImage(baseSprite, p.x - glowD / 2, p.y - glowD / 2, glowD, glowD);
-      if (env > 0.01) {
-        ctx.globalAlpha = Math.min(1, aBase * env);
+      if (pinkAmt > 0.01) {
+        ctx.globalAlpha = Math.min(1, aBase * pinkAmt);
         ctx.drawImage(pinkSprite, p.x - glowD / 2, p.y - glowD / 2, glowD, glowD);
       }
-      // Mint-Flush übers ganze Feld beim Nicken (subtil)
+      // Nicken: grüne Blink-Welle wandert von oben durchs Feld
       if (greenFlush > 0) {
-        ctx.globalAlpha = Math.min(1, aBase * greenFlush * 0.4);
-        ctx.drawImage(greenSprite, p.x - glowD / 2, p.y - glowD / 2, glowD, glowD);
+        const band = Math.max(0, 1 - Math.abs(p.y - waveY) / 90);
+        if (band > 0.01) {
+          ctx.globalAlpha = Math.min(1, aBase * band * 1.8);
+          ctx.drawImage(greenSprite, p.x - glowD / 2, p.y - glowD / 2, glowD, glowD);
+        }
       }
       // Heller runder Kern (der „Käfer") — Farbe folgt dem Moment
-      const coreCol = env > 0.4 ? '#ffd0ec' : (foam ? '#ffe6b0' : '#dffaff');
-      ctx.globalAlpha = Math.min(1, (cyanA + aBase * env) * 1.5);
+      const coreCol = pinkAmt > 0.4 ? '#ffd0ec' : (foam ? '#ffe6b0' : '#dffaff');
+      ctx.globalAlpha = Math.min(1, (cyanA + aBase * pinkAmt) * 1.5);
       ctx.fillStyle = coreCol;
       ctx.beginPath();
       ctx.arc(p.x, p.y, size * 0.5, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    // ── Rosa Nachglühen: sanfter lingernder Licht-Glow in der Mitte (~22s) ──
-    if (afterglow) {
-      const agT = Math.min(1, (now - agStart) / AFTERGLOW_MS);
-      const life = Math.pow(1 - agT, 1.5);
-      const breath = 0.6 + 0.4 * Math.sin(nowSec * 1.1);
-      const size = 30 + 12 * breath;
-      ctx.globalAlpha = Math.min(1, 0.5 * life * breath);
-      ctx.drawImage(pinkSprite, ax - size * 2, ay - size * 2, size * 4, size * 4);
-      ctx.globalAlpha = Math.min(1, 0.55 * life);
-      ctx.fillStyle = '#ffd0ec';
-      ctx.beginPath();
-      ctx.arc(ax, ay, 4 + 4 * breath, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // (Rosa Nachglühen ist jetzt VERTEILT — als pinkAmt-Wash über alle Käfer oben,
+    //  kein Mitten-Glow mehr, damit es im vollen Chat sichtbar bleibt.)
 
-    // ── Nicken: grüner Bloom oben-mittig (~1.2s, kurz & vivid) ──
+    // ── Nicken: grüne Quelle oben (Ursprung der Blink-Welle), verglimmt schnell ──
     if (nod) {
-      const ne = greenFlush;
-      const nx = dim.w / 2, ny = Math.min(46, dim.h * 0.12);
-      const size = 14 + 9 * ne;
-      ctx.globalAlpha = Math.min(1, 0.8 * ne);
-      ctx.drawImage(greenSprite, nx - size * 2.2, ny - size * 2.2, size * 4.4, size * 4.4);
-      ctx.globalAlpha = Math.min(1, ne);
-      ctx.fillStyle = '#d8ffe9';
-      ctx.beginPath();
-      ctx.arc(nx, ny, 3 + 3 * ne, 0, Math.PI * 2);
-      ctx.fill();
+      const src = Math.max(0, 1 - clamp01(nodT) * 2);   // stark am Anfang, dann weg
+      if (src > 0.01) {
+        const nx = dim.w / 2, ny = Math.min(40, dim.h * 0.10);
+        const size = 16;
+        ctx.globalAlpha = Math.min(1, 0.7 * src);
+        ctx.drawImage(greenSprite, nx - size * 2.2, ny - size * 2.2, size * 4.4, size * 4.4);
+        ctx.globalAlpha = Math.min(1, 0.8 * src);
+        ctx.fillStyle = '#d8ffe9';
+        ctx.beginPath();
+        ctx.arc(nx, ny, 3 + 2 * src, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     ctx.globalAlpha = 1;

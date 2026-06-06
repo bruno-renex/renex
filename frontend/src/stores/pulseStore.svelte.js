@@ -30,7 +30,7 @@ const SYNC_THRESHOLD = 0.40;  // beide Energien darüber
 const SYNC_HOLD_MS = 1100;    // so lange gehalten → Trigger
 const SYNC_DURATION_MS = 2600;
 const SYNC_COOLDOWN_MS = 12000;
-const NOD_MS = 1200;          // „Nicken"-Aufblüh-Dauer beim Empfänger
+const NOD_MS = 2000;          // „Nicken"-Reisedauer beim Empfänger (langsamere Welle)
 
 // ── Reaktiver State ──
 let _activePeer = $state(null);     // Handle des offenen, pulse-aktiven Chats

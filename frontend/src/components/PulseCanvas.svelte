@@ -220,7 +220,7 @@
         const e = easeAt(u);
         return {
           // seitliche Welle (mehrere Schwünge), Amplitude per sin(uπ) eingefasst → 0 an den Enden
-          x: sx + (ex - sx) * e + Math.sin(u * Math.PI * 4) * Math.sin(u * Math.PI) * dim.w * 0.20,
+          x: sx + (ex - sx) * e + Math.sin(u * Math.PI * 3) * Math.sin(u * Math.PI) * dim.w * 0.20,
           y: sy + (ey - sy) * e,
         };
       };

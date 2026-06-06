@@ -89,6 +89,8 @@
     will-change: transform;
   }
   .pulse-toggle.active .pulse-dot {
+    /* goldene Mitte → blauer Rand, dazu cyan-Glow außen */
+    background: radial-gradient(circle, #ffe1a8 0%, #ffcf7a 36%, var(--accent-voice) 100%);
     box-shadow: 0 0 8px var(--accent-voice), 0 0 3px var(--accent-voice);
   }
 </style>

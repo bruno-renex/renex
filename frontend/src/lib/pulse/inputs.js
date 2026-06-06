@@ -43,6 +43,7 @@ export function createPulseInputs({ onUpdate } = {}) {
   let lastTx = 0, lastTy = 0, lastTt = 0;   // Touch
   let typeTimes = [];       // keydown-Timestamps (Sliding-Window)
   let backspaceBoost = 0;   // Backspace als emotional-marker (§5.1)
+  let typeKick = 0;         // kleiner Blip pro Tastendruck (etwas mehr Aktivität beim Tippen)
 
   function bump(v) {
     if (v > instMax) instMax = v;  // Engine clampt selbst auf [0,1]
@@ -68,6 +69,7 @@ export function createPulseInputs({ onUpdate } = {}) {
     typeTimes.push(t);
     const cutoff = t - TYPE_WINDOW;
     while (typeTimes.length && typeTimes[0] < cutoff) typeTimes.shift();
+    typeKick = Math.min(1, typeKick + 0.12);   // jeder Tastendruck = kleiner Aktivitäts-Blip
     if (e.key === 'Backspace') backspaceBoost = Math.min(1, backspaceBoost + 0.18);
   }
 
@@ -105,6 +107,12 @@ export function createPulseInputs({ onUpdate } = {}) {
     while (typeTimes.length && typeTimes[0] < cutoff) typeTimes.shift();
     if (typeTimes.length) bump(typeTimes.length / 5);
 
+    if (typeKick > 0) {
+      bump(typeKick);
+      typeKick *= 0.82;
+      if (typeKick < 0.02) typeKick = 0;
+    }
+
     if (backspaceBoost > 0) {
       bump(backspaceBoost);
       backspaceBoost *= 0.85;
@@ -126,6 +134,7 @@ export function createPulseInputs({ onUpdate } = {}) {
       lastMt = lastTt = 0;
       typeTimes = [];
       backspaceBoost = 0;
+      typeKick = 0;
       window.addEventListener('mousemove', onMouseMove, { passive: true });
       window.addEventListener('wheel', onWheel, { passive: true });
       window.addEventListener('touchmove', onTouchMove, { passive: true });

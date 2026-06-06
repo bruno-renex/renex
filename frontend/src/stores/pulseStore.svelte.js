@@ -28,7 +28,7 @@ const RECV_LERP = 0.18;       // Receiver-Side Smoothing-Faktor
 // ~gleichzeitig (WS-Latenz). Selten halten = magisch (Cooldown).
 const SYNC_THRESHOLD = 0.40;  // beide Energien darüber
 const SYNC_HOLD_MS = 1100;    // so lange gehalten → Trigger
-const SYNC_DURATION_MS = 2600;
+const SYNC_DURATION_MS = 2900;   // etwas länger → „voll pink"-Phase spürbar länger
 const SYNC_COOLDOWN_MS = 12000;
 const NOD_MS = 2000;          // „Nicken"-Reisedauer beim Empfänger (langsamere Welle)
 

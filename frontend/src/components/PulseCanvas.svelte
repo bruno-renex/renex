@@ -110,7 +110,8 @@
     // Silent wenn Peer nicht teilt UND kein Nachglühen/Nicken läuft (§9.6)
     if (!active && energy < 0.01 && !afterglow && !nod) { particles = []; return; }
 
-    const env = sync ? Math.sin(Math.PI * clamp01(syncT)) : 0;   // Handshake-Hüllkurve
+    // Handshake-Hüllkurve: sin^0.6 → flacher Scheitel = „voll pink" hält länger an
+    const env = sync ? Math.pow(Math.sin(Math.PI * clamp01(syncT)), 0.6) : 0;
     const hbRaw = sync ? heartbeat(syncT) : 0;                   // roher Herzschlag (0..1)
     const hb = hbRaw * env;
     const eEff = Math.min(1, energy + env * 0.4 + hb * 0.25);

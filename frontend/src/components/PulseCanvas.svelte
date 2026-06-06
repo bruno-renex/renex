@@ -138,9 +138,7 @@
     // ── Freies Wandern, gleichmäßig verteilt. KEINE Mitten-Kohäsion (sonst
     //    verstecken sich die Käfer hinter den Nachrichten-Bubbles). Stattdessen
     //    sanfte Rand-Abstoßung. Konvergenz zur Mitte NUR beim Handshake. ──
-    const ax = dim.w / 2, ay = dim.h / 2;
     const wander = 0.014 + eEff * 0.05;
-    const cohSync = env * 0.004;                            // nur ein Hauch Zueinanderlehnen (KEIN Knoten)
     const M = 38;                                           // Rand-Margin
     for (const p of particles) {
       p.ang += (Math.random() - 0.5) * 0.6;
@@ -151,10 +149,9 @@
       else if (p.x > dim.w - M) p.vx -= (p.x - (dim.w - M)) * 0.004;
       if (p.y < M) p.vy += (M - p.y) * 0.004;
       else if (p.y > dim.h - M) p.vy -= (p.y - (dim.h - M)) * 0.004;
-      if (cohSync > 0) {                                     // Handshake: minimal Zueinanderlehnen
-        p.vx += (ax - p.x) * cohSync;
-        p.vy += (ay - p.y) * cohSync;
-      }
+      // KEIN Zusammenrücken zur Mitte — die „Verschmelzung" beim Handshake ist rein
+      // rhythmisch (synchrones rosa Blinken + rosa Linien). Käfer bleiben verteilt
+      // → überall sichtbar, auch im vollen Chat hinter den Bubbles.
       p.vx *= 0.90; p.vy *= 0.90;
       p.x += p.vx; p.y += p.vy;
     }

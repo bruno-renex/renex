@@ -1,15 +1,25 @@
 <!--
-  LandingShowcase — zeigt ein echtes App-Screenshot direkt nach dem Hero.
+  LandingShowcase — zeigt RENEX direkt nach dem Hero in Aktion.
   Beantwortet die wichtigste Frage eines Erstbesuchers: "Wie sieht das aus?"
 
-  Bild liegt in frontend/public/app-preview-pulse.png — echter 1:1-Chat mit
-  aktivem Pulse (✨ an, cyan Partikel im Hintergrund). Quelle: assets/.
-  Voller Screenshot (Standalone-PWA inkl. Composer) — kein Crop nötig.
+  Loop-Video (frontend/public/landing-pulse.mp4, H.264, stumm) eines echten
+  1:1-Chats mit aktivem Pulse. Poster + prefers-reduced-motion-Fallback =
+  Standbild (app-preview-pulse.png). Quellen in assets/. Autoplay nur wenn keine
+  Bewegungsreduktion gewünscht (stummes Video → Autoplay browserseitig erlaubt).
 -->
 <script>
+  import { onMount } from 'svelte';
   import { i18nStore } from '../stores/i18n.svelte.js';
 
   let lang = $derived(i18nStore.lang);
+  let videoEl = $state(null);
+
+  onMount(() => {
+    if (!videoEl) return;
+    videoEl.muted = true;   // muted ist Pflicht für Autoplay (Attribut allein ist in Svelte unzuverlässig)
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!reduce) videoEl.play().catch(() => { /* Autoplay blockiert → Poster bleibt */ });
+  });
 </script>
 
 <section class="landing-showcase">
@@ -17,14 +27,16 @@
   <p class="showcase-sub">{lang.showcaseSub || 'Klar, ruhig, ohne Ablenkung. Deine Kontakte und Chats an einem Ort.'}</p>
 
   <div class="phone-frame">
-    <img
-      src="/app-preview-pulse.png"
-      alt={lang.showcaseAlt || 'RENEX App — Kontakte- und Chat-Übersicht'}
-      loading="lazy"
-      decoding="async"
-      width="1179"
-      height="2556"
-    />
+    <video
+      bind:this={videoEl}
+      src="/landing-pulse.mp4"
+      poster="/app-preview-pulse.png"
+      loop
+      muted
+      playsinline
+      preload="metadata"
+      aria-label={lang.showcaseAlt || 'RENEX App — 1:1-Chat mit aktivem Pulse'}
+    ></video>
   </div>
 </section>
 
@@ -69,7 +81,8 @@
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border-subtle);
   }
 
-  .phone-frame img {
+  .phone-frame img,
+  .phone-frame video {
     width: 100%;
     height: 100%;
     object-fit: cover;

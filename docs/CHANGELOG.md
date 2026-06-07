@@ -4,6 +4,53 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-06-06 — Pulse vNext: Leuchtkäfer-Look, Handshake & Nicken ✨ (Phase 6.5)
+
+Die zweite Pulse-Iteration macht aus dem MVP-Partikelfeld einen lebendigen
+**Leuchtkäfer-Schwarm** und ergänzt die sozialen Gesten, die Pulse viral machen:
+synchroner **Handshake**, **Tap = Nicken** (digitaler Blickkontakt) und **Thinking
+Pulse** — plus ein **Farb-System**, ein Reload-Bugfix und die Landing-Showcase als
+Loop-Video. Damit ist das gesamte Pulse-Feature (MVP + vNext) live.
+*(v2026-06-04-2 … 2026-06-06-14)*
+
+### ✨ Added
+- **Leuchtkäfer-Look** — Pulse-Partikel sind jetzt weiche Glühpunkte mit hellem Kern,
+  die blinken, frei wandern und sich am Rand abstoßen (→ gleichmäßig verteilt, **keine
+  Mitten-Kohäsion**). Kollektives „Atem"-Helligkeitspulsieren statt Einzelpartikel-Chaos.
+  In-App (`PulseCanvas.svelte`) **und** Landing (`PulseLandingCanvas.svelte`,
+  cursor-/touch-getrieben). Keine ✦-Sterne und keine Ambient-Linien mehr.
+- **Farb-System:** Cyan = Präsenz · Gold = Foam · Rosa = Handshake · Gold = Nicken.
+- **Handshake** — sind beide Seiten gleichzeitig aktiv, fallen die Käfer in einen
+  **gemeinsamen rosa Herzschlag** (synchrones Blinken, `sin^0.6`-Hüllkurve hält „voll
+  pink" länger, `SYNC_DURATION_MS=2900`). Rosa Konstellations-Linien **nur** während
+  der Sync, danach verteiltes rosa Nachglühen (~22 s). Rein client-seitig, kein
+  Server-State, **kein Zusammenrücken zur Mitte**.
+- **Tap = Nicken** — den Presence-Dot „● gerade da" antippen schickt **eine goldene
+  Mote** wellenförmig (`sin·π·3`) von oben nach unten zum Gegenüber, mit Komet-Schweif
+  (`NOD_MS=2000`). „Digitaler Blickkontakt", genau EINE Geste. E2E über die
+  Session-CMK-Pipeline (`sendNod`/`decryptPulse`).
+- **Silent Together / Live Presence** — „● gerade da" im ChatHeader, sobald der Peer
+  live sendet. Additiver Layer über der neutralen da/weg-Anzeige (Accessibility).
+- **Thinking Pulse** — Composer fokussiert + Entwurf ≠ leer → Energie-Boden
+  (`THINK_FLOOR=0.30`), der Puls bleibt beim Formulieren „active". Nur lokales Flag;
+  über die Leitung geht weiterhin nur der abstrakte Skalar.
+- **Landing-Showcase = Loop-Video** (`landing-pulse.mp4`, H.264,
+  `<video autoplay loop muted playsinline>` + Poster `app-preview-pulse.png` +
+  reduced-motion-Standbild-Fallback) statt provisorischem Screenshot.
+
+### 🐛 Fixed
+- **Pulse-Reload-Sende-Bug** — Pulse nutzt jetzt `getCMKIfExists` statt
+  `ensureSecureDmSession`, etabliert also keine CMK pro Frame mehr. Nach einem Reload
+  heilt der Pulse-Versand selbst, ohne erneuten Handshake. *(v2026-06-06-9)*
+
+### ✏️ Changed
+- Nicken finalisiert auf **gold** (war zwischenzeitlich grün/mint), Toggle-Icon auf
+  Punkt (gold/cyan), Nick-Bewegung verlangsamt + wellenförmig (statt Bogen), Tipp-Blip
+  ergänzt. Handshake rein rhythmisch (ohne räumliches Zusammenrücken).
+  *(v2026-06-06-5 … -14)*
+
+---
+
 ## 2026-06-04 — Login gegen Turnstile-Störungen gehärtet 🔒
 
 ### 🐛 Fixed

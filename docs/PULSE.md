@@ -871,22 +871,37 @@ Wenn neue offene Punkte beim Phase-6.5-Sprint auftauchen, hier dokumentieren —
 
 **Status:** Ideen-Backlog aus Brainstorm Bruno ↔ Claude (2026-06-03), nach Pulse-MVP-Ship. Leitstern-Reframe: **Pulse ist digitale Körpersprache** („Da sitzt wirklich jemand") — das *Gefühl* führt, Anti-AI ist die *Tiefenschicht*. Alles hier ist 1:1-DM, baut auf dem MVP auf, jedes Item einzeln shippbar.
 
+**✅ GESHIPPT 2026-06-06 (vNext, live `2026-06-04-2 … 2026-06-06-14`).** Items 1–4 der Baureihenfolge sind live — zusammen mit einem Look-Rebuild, der bewusst vom Original-Backlog **abweicht**. Was tatsächlich gebaut wurde:
+
+- **Look = „Leuchtkäfer" statt Sterne/Partikel-Netz** — weiche Glühpunkte mit hellem Kern, blinkend, frei wandernd, mit **Rand-Abstoßung** → gleichmäßig verteilt, **KEINE Mitten-Kohäsion**, kollektives Atem-Helligkeitspulsieren. Keine ✦-Sterne, keine Ambient-Linien. Gilt in-App (`PulseCanvas.svelte`) **und** Landing (`PulseLandingCanvas.svelte`, cursor-/touch-getrieben).
+- **Farb-System:** Cyan = Präsenz · Gold = Foam · Rosa = Handshake · Gold = Nicken. (Das zwischenzeitliche Mint/Grün für Nicken/Handshake ist raus.)
+- **Reload-Fix:** Pulse nutzt `getCMKIfExists` statt `ensureSecureDmSession` → keine CMK-Etablierung pro Frame; der Versand heilt nach einem Reload selbst.
+- **Transport:** `sendPulse`/`sendNod`/`decryptPulse` (`chatPipeline.js`) über die bestehende Session-CMK-E2E-Pipeline; Backend `type:"pulse"`-Short-Circuit (`src/helpers/chatSend.js`): kein D1, RL-Bucket `pulse_send` 15/s, awaited `pushToUserDO`.
+
+**Bewusste Abweichungen vom Backlog unten:**
+1. **Leuchtkäfer** statt Sterne/Partikel-Netz.
+2. **Gleichmäßige Verteilung** (Rand-Abstoßung) statt Mitten-Kohäsion / Zusammenrücken.
+3. **Handshake = rhythmisches Synchron-Blinken, NICHT räumliches Verschmelzen.**
+4. **Nicken = eine einzelne goldene Wellen-Mote, NICHT eine grüne Feld-Welle / Top-Punkt.**
+
+Offen bleibt nur noch Phase-8-Material (Ambient Voice, mutual „Sternenfusion").
+
 ### 20.1 Baureihenfolge (empfohlen)
 
-1. **Silent Together** + **Live Presence** — fast gratis (Pulse beider Seiten ist schon da), sofort spürbar. *(in Arbeit als erstes Doppel mit #2)*
-2. **Handshake / Sync** — der virale Moment. *(in Arbeit)*
-3. **Tap = Nicken** — genau EINE Geste.
-4. **Thinking Pulse** — Verfeinerung der Tipp-Erfassung.
+1. **Silent Together** + **Live Presence** — fast gratis (Pulse beider Seiten ist schon da), sofort spürbar. **✅ geshipped** (Presence-Dot „● gerade da" im ChatHeader).
+2. **Handshake / Sync** — der virale Moment. **✅ geshipped** (synchrones rosa Blinken, rein client-seitig).
+3. **Tap = Nicken** — genau EINE Geste. **✅ geshipped** (goldene Wellen-Mote, `NOD_MS=2000`).
+4. **Thinking Pulse** — Verfeinerung der Tipp-Erfassung. **✅ geshipped** (`THINK_FLOOR=0.30`).
 5. *(Phase 8)* Ambient Voice, mutual „Sternenfusion"-Easter-Egg.
 
 ### 20.2 Feature-Specs
 
-- **Silent Together:** Beide im Chat, beide Pulse sichtbar, niemand tippt → „wie zusammen in einem Raum sitzen". Entsteht emergent, sobald `peerActive` (Peer sendet live). Kein neues Protokoll. Emotionalster Effekt der Liste.
-- **Handshake / Sync:** Wenn Eigen- UND Peer-Energie gleichzeitig erhöht sind (Schwelle, ~1–1.5s gehalten) → für 2–3s synchronisieren sich beide Pulse (gemeinsame Ripple/Bloom), danach Cooldown (selten halten = magisch). **Rein client-seitig** — jede Seite erkennt die Bedingung selbst, triggert ~gleichzeitig (WS-Latenz). Kein Server-State.
-- **Live Presence statt „tippt…":** Der Pulse *ist* der Indikator — man sieht greifen/tippen/stoppen/nachdenken ohne Worte. Additiv, kein „tippt…"-Text.
-- **Thinking Pulse:** Beim langen Formulieren steigt/fällt die Energie → erkennbar „die Person formuliert gerade". Verfeinerung über Composer-Fokus + Keystroke-Kadenz.
-- **Lebendiger Avatar / „● Max ist gerade da":** Presence als sanfte Animation (ruhig/fokussiert/aktiv/aufgeregt) statt Text. **Hardrule:** nur **additiver Layer ÜBER** einer neutralen „da/weg"-Anzeige — nie Ersatz, der urteilt (Accessibility §8.3).
-- **Tap = Nicken (Pulse-Reaktion):** Tap auf den Peer-Puls → kurzes warmes Aufleuchten beim Gegenüber („digitaler Blickkontakt"). **Bewusst EINE Geste** (kein 1×/2×/3×-Combo — Auffindbarkeit + Konflikt mit Chat-Tap-Gesten + Anti-Gamification). Später optional EINE zweite (langes Halten = „Herz").
+- **Silent Together:** Beide im Chat, beide Pulse sichtbar, niemand tippt → „wie zusammen in einem Raum sitzen". Entsteht emergent, sobald `peerActive` (Peer sendet live). Kein neues Protokoll. Emotionalster Effekt der Liste. **✅ Geshippt:** „● gerade da" im ChatHeader, sobald der Peer live sendet — additiver Layer über der neutralen da/weg-Anzeige.
+- **Handshake / Sync:** Wenn Eigen- UND Peer-Energie gleichzeitig erhöht sind (Schwelle, ~1–1.5s gehalten) → für 2–3s synchronisieren sich beide Pulse (gemeinsame Ripple/Bloom), danach Cooldown (selten halten = magisch). **Rein client-seitig** — jede Seite erkennt die Bedingung selbst, triggert ~gleichzeitig (WS-Latenz). Kein Server-State. **✅ Geshippt (abweichend):** Statt gemeinsamem Ripple/Bloom fallen die Käfer in einen **synchronen rosa Herzschlag** (Blinken, `sin^0.6`-Hüllkurve hält „voll pink" länger, `SYNC_DURATION_MS=2900`); rosa Konstellations-Linien **nur** während der Sync, danach verteiltes rosa Nachglühen (~22 s). **Kein räumliches Verschmelzen / Zusammenrücken zur Mitte.**
+- **Live Presence statt „tippt…":** Der Pulse *ist* der Indikator — man sieht greifen/tippen/stoppen/nachdenken ohne Worte. Additiv, kein „tippt…"-Text. **✅ Geshippt:** realisiert über den Presence-Dot + Thinking Pulse (kein „tippt…"-Text).
+- **Thinking Pulse:** Beim langen Formulieren steigt/fällt die Energie → erkennbar „die Person formuliert gerade". Verfeinerung über Composer-Fokus + Keystroke-Kadenz. **✅ Geshippt:** Composer fokussiert + Entwurf ≠ leer → Energie-Boden `THINK_FLOOR=0.30`, der Puls bleibt beim Formulieren „active"; über die Leitung weiterhin nur der abstrakte Skalar.
+- **Lebendiger Avatar / „● Max ist gerade da":** Presence als sanfte Animation (ruhig/fokussiert/aktiv/aufgeregt) statt Text. **Hardrule:** nur **additiver Layer ÜBER** einer neutralen „da/weg"-Anzeige — nie Ersatz, der urteilt (Accessibility §8.3). **✅ Geshippt:** „● gerade da" im ChatHeader als additiver Layer (Hardrule eingehalten — neutrale da/weg-Anzeige bleibt).
+- **Tap = Nicken (Pulse-Reaktion):** Tap auf den Peer-Puls → kurzes warmes Aufleuchten beim Gegenüber („digitaler Blickkontakt"). **Bewusst EINE Geste** (kein 1×/2×/3×-Combo — Auffindbarkeit + Konflikt mit Chat-Tap-Gesten + Anti-Gamification). Später optional EINE zweite (langes Halten = „Herz"). **✅ Geshippt (abweichend):** Den Presence-Dot „● gerade da" antippen → **eine goldene Mote** reist wellenförmig (`sin·π·3`) von oben nach unten mit Komet-Schweif (`NOD_MS=2000`). **Keine grüne Feld-Welle, kein Top-Punkt** — eine einzelne reisende Mote. E2E via `sendNod`.
 - **Ambient Voice (Phase 8):** Im Call reagiert der Pulse auf Mikro-*Aktivität* (nicht Audio-Inhalt, nicht Lautstärke). Passt zu §15-Decision „Voice-Pulse deferred Phase 8".
 - **Mutual „Sternenfusion" (Phase 8, Easter-Egg):** Supernova **nur wenn beide gleichzeitig** kräftig schütteln (nicht solo — vermeidet versehentliches Auslösen via Drop-Filter + Gamification). Eskalation des Handshakes.
 

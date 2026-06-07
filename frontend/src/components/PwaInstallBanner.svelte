@@ -90,6 +90,15 @@
   function onInstructionsKey(e) {
     if (e.key === 'Escape') closeInstructions();
   }
+
+  // Loop-Video im iOS-Anleitungs-Modal: stumm + autoplay, außer reduced-motion.
+  // Als Svelte-Action, damit play() exakt beim Mount des <video> läuft (Modal öffnet
+  // erst on-demand, daher kein onMount des Components nutzbar).
+  function loopVideo(node) {
+    node.muted = true;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (!reduce) node.play().catch(() => { /* Autoplay blockiert → Poster bleibt */ });
+  }
 </script>
 
 {#if visible}
@@ -123,6 +132,18 @@
       </div>
 
       {#if strategy === 'ios-safari'}
+        <div class="pwa-demo-frame">
+          <video
+            use:loopVideo
+            src="/install-ios.mp4"
+            poster="/install-ios-poster.png"
+            loop
+            muted
+            playsinline
+            preload="metadata"
+            aria-label={lang.pwaIosVideoAlt || 'Video: RENEX in Safari über Teilen → „Zum Home-Bildschirm" installieren'}
+          ></video>
+        </div>
         <ol class="pwa-steps">
           <li>{lang.pwaIosStep1 || 'Tippe auf das Teilen-Symbol unten in Safari'} <span class="pwa-icon">⎙</span></li>
           <li>{lang.pwaIosStep2 || 'Wähle „Zum Home-Bildschirm" aus dem Menü.'}</li>
@@ -228,7 +249,32 @@
     padding: 22px;
     width: 100%;
     max-width: 400px;
+    max-height: 90vh;
+    overflow-y: auto;
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  }
+
+  /* iOS-Install-Demo: Loop-Video im Phone-Frame (Muster aus LandingShowcase). */
+  .pwa-demo-frame {
+    width: 100%;
+    max-width: 150px;
+    aspect-ratio: 1179 / 2556;
+    margin: 0 auto 16px;
+    overflow: hidden;
+    border-radius: 22px;
+    border: 5px solid #16161c;
+    background: #000;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+  .pwa-demo-frame video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top;
+    display: block;
+  }
+  @media (max-height: 720px) {
+    .pwa-demo-frame { max-width: 118px; }
   }
   .pwa-modal-header {
     display: flex;

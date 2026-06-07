@@ -201,6 +201,7 @@ export default {
   pwaIosStep1:             "Toca el botón Compartir en la parte inferior de Safari",
   pwaIosStep2:             "Elige \"Añadir a pantalla de inicio\" en el menú.",
   pwaIosStep3:             "Confirma con \"Añadir\" arriba a la derecha.",
+  pwaIosVideoAlt:          "Vídeo: instalar RENEX en Safari mediante Compartir → \"Añadir a pantalla de inicio\"",
   pwaMacStep1:             "En Safari, abre el menú \"Archivo\".",
   pwaMacStep2:             "Elige \"Añadir al Dock…\"",
   pwaMacStep3:             "Confirma en el diálogo.",

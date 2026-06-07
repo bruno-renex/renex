@@ -201,6 +201,7 @@ export default {
   pwaIosStep1:             "Tippe auf das Teilen-Symbol unten in Safari",
   pwaIosStep2:             'Wähle „Zum Home-Bildschirm" aus dem Menü.',
   pwaIosStep3:             'Bestätige mit „Hinzufügen" oben rechts.',
+  pwaIosVideoAlt:          'Video: RENEX in Safari über Teilen → „Zum Home-Bildschirm" installieren',
   pwaMacStep1:             'Öffne in Safari das Menü „Ablage".',
   pwaMacStep2:             'Wähle „Zum Dock hinzufügen…"',
   pwaMacStep3:             "Bestätige im Dialog.",

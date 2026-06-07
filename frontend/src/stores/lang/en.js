@@ -201,6 +201,7 @@ export default {
   pwaIosStep1:             "Tap the Share button at the bottom of Safari",
   pwaIosStep2:             "Choose \"Add to Home Screen\" from the menu.",
   pwaIosStep3:             "Confirm with \"Add\" in the top right.",
+  pwaIosVideoAlt:          "Video: installing RENEX in Safari via Share → \"Add to Home Screen\"",
   pwaMacStep1:             "In Safari, open the \"File\" menu.",
   pwaMacStep2:             "Choose \"Add to Dock…\"",
   pwaMacStep3:             "Confirm in the dialog.",

@@ -536,7 +536,7 @@ Owner-Transfer, Account-Delete-Pre-Check für Server-Owner, Private Channels
 - Erste 50-1000 Beta-User
 - Reddit/HN/Twitter-Posts (realistisch: 1-2 viral)
 - 5 Streamer-Outreach mit Demo-Video
-- **Marketing-Story:** „Text-First Discord-Killer mit AI-Free-Garantie. Voice kommt in v2.0 (Q3 2026)."
+- **Marketing-Story:** „Human-first Messenger, gebaut um Automatisierung zu widerstehen — Passkey-only, E2E, ohne Bot-APIs. Voice kommt in v2.0 (Q3 2026)." — **NICHT** „AI-Free-Garantie" (Over-Claim; siehe [`PRESS_KIT.md`](./PRESS_KIT.md) §6 Honest Claim + [`LAUNCH.md`](./LAUNCH.md) §1).
 - Geduld: 6-12 Monate Network-Effects
 
 ### Post-Beta: Phase 8 — Voice + Signal Protocol *(Juli 2026 - Okt 2026, vorgezogen von Aug-Nov)*

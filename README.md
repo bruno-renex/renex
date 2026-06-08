@@ -59,7 +59,7 @@ If you want to build a RENEX-compatible implementation:
 git clone https://github.com/bruno-renex/renex.git
 cd renex
 npm install
-npm test                  # Vitest, ~17s, 460 tests
+npm test                  # Vitest, ~13s, 472 tests
 npm run dev               # Frontend dev server
 ```
 
@@ -164,7 +164,7 @@ Wenn du eine RENEX-kompatible Implementierung bauen willst:
 git clone https://github.com/bruno-renex/renex.git
 cd renex
 npm install
-npm test                  # Vitest, ~17s, 460 Tests
+npm test                  # Vitest, ~13s, 472 Tests
 npm run dev               # Frontend Dev-Server
 ```
 

@@ -142,15 +142,15 @@ Full spec: [`PULSE.md`](./PULSE.md). Live demo loop: see §7 media (`landing-pul
 
 **Pulse color system** (semantic palette of the signature feature):
 
-| Role | Color | Hex |
-|---|---|---|
-| Präsenz / Presence | Cyan | TODO |
-| Foam (high energy) | Gold | TODO |
-| Handshake | Rosa / Pink | TODO |
-| Nicken / Nod | Gold | TODO |
+| Role | Color | RGB | Hex |
+|---|---|---|---|
+| Präsenz / Presence | Cyan | `rgb(150, 225, 255)` | `#96E1FF` |
+| Foam (high energy) | Gold | `rgb(255, 205, 110)` | `#FFCD6E` |
+| Handshake | Rosa / Pink | `rgb(255, 120, 200)` | `#FF78C8` |
+| Nicken / Nod | Gold | `rgb(255, 205, 110)` | `#FFCD6E` |
 
-> TODO: exakte Hex-Werte aus dem Frontend-Theme (`--accent-*` Tokens) ziehen, sobald die
-> Palette für den Launch eingefroren ist.
+Heller Partikel-Kern (bright core accents): Cyan `#DFFAFF` · Gold `#FFE6B0` · Pink `#FFD0EC`.
+Werte = aktuelle Live-Glow-Basis der Pulse-Canvas (`PulseCanvas.svelte`) auf dunklem Grund; für den Launch ggf. einfrieren.
 
 - **Typography:** TODO (system stack / specific face).
 - **Logo usage:** TODO — clear-space + min-size rules once press logo variants exist.

@@ -1,10 +1,13 @@
 # RENEX — Press Kit
 
+<!-- internal:start -->
 > **Status: DRAFT v0.1 (2026-06-07).** Single source of truth für Presse-/Launch-Material.
 > Diese Markdown-Datei ist bewusst die Quelle — die öffentliche `renex.id/press`-Seite + der
-> ZIP-Download werden später daraus generiert (analog `MANIFESTO.md → build-manifesto.js`).
+> ZIP-Download werden daraus generiert (`scripts/build-press-kit.js`, analog `build-manifesto.js`).
+> Inhalt zwischen `<!-- internal:start/end -->` wird **nicht** auf die öffentliche Seite gerendert.
 > ⚠️ Felder mit **TODO** brauchen noch deine Freigabe/Daten (Presse-Mail, Logo-Dateien,
-> exakte Brand-Hex-Werte, Founder-Bio/-Foto). Voice/Positionierung bitte gegenlesen.
+> Founder-Bio/-Foto). Voice/Positionierung bitte gegenlesen.
+<!-- internal:end -->
 
 **Tagline:** *YOU ARE THE KEY.*
 **One-liner:** Passkey-native, bot-resistant, human-first communication — end-to-end encrypted, open standard, no email · no phone · no password.
@@ -174,9 +177,11 @@ Werte = aktuelle Live-Glow-Basis der Pulse-Canvas (`PulseCanvas.svelte`) auf dun
 
 ---
 
+<!-- internal:start -->
 ### Maintainer note (not for publication)
 
 This document is the **source of truth**. Next steps toward a public press kit:
 1. Fill the **TODO** fields (press email, logo exports, exact brand hex, founder bio).
 2. Add the pending **Android (Chrome + Brave)** and **Desktop** install clips + final screenshots.
 3. Build the generator (`scripts/build-press-kit.js`) → `renex.id/press` static page + downloadable ZIP, mirroring the manifesto pipeline. *(needs deploy — gated on Bruno's review of this copy.)*
+<!-- internal:end -->

@@ -31,3 +31,9 @@ frontend/bundle-stats.html
 .vite/
 vite.config.js.timestamp-*.mjs
 *.timestamp-*.mjs
+
+# Press-kit generated output (gated: not committed/wired until copy review).
+# Regenerate locally with: node scripts/build-press-kit.js
+frontend/public/press/index.html
+frontend/public/press/renex-press-kit.zip
+frontend/public/press/_staging/

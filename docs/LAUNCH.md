@@ -22,15 +22,15 @@
 
 > Hi HN — I'm Bruno, a solo dev (and musician) from Switzerland.
 >
-> RENEX is a messenger and open protocol built on a simple bet: as the web fills with AI-generated content and bots, talking to an actual human becomes *more* valuable, not less.
+> RENEX is built on a simple bet: as more of the web becomes automated, talking to an actual human becomes more valuable, not less.
 >
-> What's different isn't a feature you can screenshot — it's what's deliberately missing. RENEX has **no bot APIs, no webhooks, and no public integration layer.** Most platforms compete to be the easiest thing to automate; this one is built to be hard to automate. I don't claim every account is human (I can't) — I've just removed the standard tooling that makes faking one cheap and scalable.
+> What's different isn't a feature you can screenshot — it's what's deliberately missing. No bot APIs, no webhooks, no public integration layer. Most communication platforms compete to be the easiest to automate; RENEX is deliberately built to make automation expensive. I don't claim every account is human (I can't). The goal is simply to remove the tooling that makes large-scale automation cheap and scalable.
 >
-> Stack: passkey-only identity (WebAuthn/FIDO2 — no email, phone, or password), end-to-end encryption for DMs, groups, and voice signaling (the server never sees plaintext), Cloudflare Workers + a Svelte 5 PWA. Open-source under a tri-license (MIT/Apache for spec + frontend, AGPL for the reference server).
+> The project is passkey-only (WebAuthn — no email, phone number, or password), end-to-end encrypted for DMs, groups, and voice signaling, built on Cloudflare Workers with a Svelte 5 PWA frontend, and fully open source (MIT/Apache for the protocol, docs and frontend; AGPL for the reference server).
 >
-> There's also **Pulse**: an ambient presence layer that turns micro-activity into a living visual, so a chat feels less like a status indicator and more like sharing a room. Per-chat, opt-in, and only an abstract signal ever crosses the wire.
+> There's also an experimental feature called Pulse: an optional ambient presence layer that makes a chat feel less like exchanging messages and more like sharing a room.
 >
-> Honest status: **pre-beta, not externally audited** — please don't use it for high-risk scenarios yet (audit planned). I'd genuinely like feedback on the approach, the threat model, and where the "no integration layer" stance breaks down.
+> RENEX is currently pre-beta and has not undergone a third-party security audit yet. I'd especially appreciate feedback on the threat model, protocol design, passkey-only identity model, and the decision to exclude bot APIs entirely.
 >
 > Try it: https://renex.id · Code: https://github.com/bruno-renex/renex · Manifesto: https://renex.id/manifesto
 
@@ -41,18 +41,18 @@
 
 > **Titel:** I built a passkey-only messenger with no bot APIs — open-source, E2E, made in Switzerland
 >
-> No email, no phone, no password — your identity is a passkey. E2E for DMs/groups/voice-signaling. The deliberate part: no bot APIs, no webhooks, no integration layer — it's built to resist automation, not to "guarantee" anything. There's an ambient "presence" layer (Pulse) that makes a chat feel like someone's actually there.
+> No email, no phone, no password — your identity is a passkey. E2E for DMs/groups/voice-signaling. The deliberate part: no bot APIs, no webhooks, no integration layer — it's built to resist automation, not to "guarantee" anything. There's an optional ambient "presence" layer (Pulse) that makes a chat feel less like exchanging messages and more like sharing a room.
 >
 > It's **pre-beta and not audited yet** — feedback (especially on the threat model) very welcome. renex.id · Code: github.com/bruno-renex/renex
 
 ### 2c. X / @renex_app (Thread)
-> **1/** The web is filling with bots and AI-generated everything. So I built the opposite: RENEX — a messenger where there's a human on the other side. Passkey-only, E2E, open-source. 🧵
+> **1/** As more of the web becomes automated, talking to an actual human gets more valuable, not less. So I built RENEX — a messenger where there's a human on the other side. Passkey-only, E2E, open-source. 🧵
 >
 > **2/** What's different is what's *missing*: no bot APIs, no webhooks, no integration layer. Most apps want to be easy to automate. RENEX is built to be hard to automate.
 >
 > **3/** No email. No phone. No password. Your identity is a passkey on your device. The server never sees your plaintext.
 >
-> **4/** And Pulse: a subtle, living signal that lets you *feel* the other person is there — less "typing…", more sharing a room. [landing-pulse video]
+> **4/** And Pulse: an optional ambient layer that makes a chat feel less like exchanging messages and more like sharing a room. [landing-pulse video]
 >
 > **5/** Honest: it's pre-beta, not audited yet. But it's open and it has a point of view. Try it → renex.id · Code → github.com/bruno-renex/renex
 >

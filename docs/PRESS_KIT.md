@@ -12,8 +12,8 @@
 > Bots don't." aus den Presse-Key-Messages entfernt (bleibt Marketing-Slogan, im Press-Kit
 > abgeschwächt + in §6 als bewusst poetisch eingeordnet).
 >
-> ⚠️ Offene TODOs (deine Daten): Presse-Mail-Routing bestätigen, Founder-Bio + optional Founder-Foto.
-> (Logos, Brand-Hex, Typografie erledigt.) Voice ok? Gegenlesen.
+> ✅ Erledigt: Presse-Mail (press@renex.id), Founder-Bio (EN+DE), Logos, Brand-Hex, Typografie.
+> Offen: optional Founder-Foto + dein finaler Copy-Read → dann Go-live (un-gitignore + deploy.sh + Footer-Link + Deploy).
 <!-- internal:end -->
 
 **Tagline:** *YOU ARE THE KEY.*
@@ -174,11 +174,9 @@ RENEX Protocol v1 has **not** undergone third-party security review (planned for
 | Landing showcase loop | `frontend/public/landing-pulse.mp4` (+ `app-preview-pulse.png` poster) | 1:1 chat with active Pulse — the signature visual |
 | iOS install demo loop | `frontend/public/install-ios.mp4` (+ `install-ios-poster.png`) | "Add to Home Screen" flow, iPhone portrait |
 | App preview still | `frontend/public/app-preview-pulse.png` | Phone-framed screenshot |
-| Android install demo | TODO | Chrome + Brave clips pending (recording) |
-| Desktop install demo | TODO | Chrome/Edge clip pending (recording) |
 | Logo — app icon | `assets/press/renex-icon-1024.png` · `-512.png` | Rounded tile, transparent corners (dark bg baked in) |
 | Logo — wordmark | `assets/press/renex-wordmark-light.{svg,png}` (dark bg) · `-dark.{svg,png}` (light bg) | RENEX, transparent; X in cyan |
-| Founder photo | TODO | optional — Bruno provides |
+| Founder photo | — | optional |
 
 ---
 
@@ -204,7 +202,13 @@ Werte = aktuelle Live-Glow-Basis der Pulse-Canvas (`PulseCanvas.svelte`) auf dun
 
 ## 11. Founder
 
-**Bruno Hochstrasser** — solo founder and developer of RENEX. Builds RENEX bootstrap-first from Switzerland, spec-first and open-source. *(TODO: 2–3 sentence bio + preferred contact for interviews.)*
+### 🇬🇧 English
+
+Bruno Hochstrasser is the founder and developer of RENEX, and a professional musician from Switzerland. For him, music and communication are closely linked: both depend on people listening to one another, responding, and creating something together. That idea also shapes RENEX — a messenger that puts human presence, privacy, and open standards above growth, tracking, and automation.
+
+### 🇩🇪 Deutsch
+
+Bruno Hochstrasser ist Gründer und Entwickler von RENEX sowie professioneller Musiker aus der Schweiz. Für ihn sind Musik und Kommunikation eng miteinander verbunden: Beides lebt davon, dass Menschen einander zuhören, reagieren und gemeinsam etwas entstehen lassen. Diese Idee prägt auch RENEX – einen Messenger, der menschliche Präsenz, Privatsphäre und offene Standards über Wachstum, Tracking und Automatisierung stellt.
 
 ---
 

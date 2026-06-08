@@ -11,6 +11,7 @@
 <footer class="landing-footer">
   <nav class="footer-links">
     <a href={manifestoUrl} target="_blank" rel="noopener">{lang.manifestoLabel || 'Manifesto'}</a>
+    <a href="/press/" target="_blank" rel="noopener">{lang.footerPress || 'Press'}</a>
     <a href="/impressum/" target="_blank" rel="noopener">{lang.footerImprint || 'Impressum'}</a>
     <a href="/datenschutz/" target="_blank" rel="noopener">{lang.footerPrivacy || 'Datenschutz'}</a>
     <a href="/agb/" target="_blank" rel="noopener">{lang.footerTerms || 'AGB'}</a>

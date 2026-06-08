@@ -31,6 +31,12 @@ cd "$APP_DIR"
 echo "▶ Building Manifesto static-site (Markdown → HTML)…"
 node scripts/build-manifesto.js || { echo "❌ Manifesto-Build fehlgeschlagen — Deploy abgebrochen"; exit 1; }
 
+# ── 0b. Press-Kit Static-Site generieren ──────────
+# Rendert docs/PRESS_KIT.md → frontend/public/press/index.html + renex-press-kit.zip.
+# Muss VOR `vite build` laufen (Vite kopiert frontend/public/ in dist/). Idempotent.
+echo "▶ Building Press-Kit static-site (Markdown → HTML + ZIP)…"
+node scripts/build-press-kit.js || { echo "❌ Press-Kit-Build fehlgeschlagen — Deploy abgebrochen"; exit 1; }
+
 # ── 1. Tests laufen (außer --skip-tests) ──────────
 if [ "$1" != "--skip-tests" ]; then
   echo "▶ Running tests…"

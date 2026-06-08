@@ -415,6 +415,7 @@ export default {
   footerPrivacy:              "Datenschutz",
   footerTerms:                "AGB",
   footerFeedback:             "Feedback",
+  footerPress:                "Presse",
 
   // ── Terms Consent ─────────────────────────────────────
   consentPrefix:              "Ich akzeptiere die",

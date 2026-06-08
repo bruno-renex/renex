@@ -12,7 +12,8 @@
 > Bots don't." aus den Presse-Key-Messages entfernt (bleibt Marketing-Slogan, im Press-Kit
 > abgeschwächt + in §6 als bewusst poetisch eingeordnet).
 >
-> ⚠️ Offene TODOs (deine Daten): Presse-Mail, Logo-Dateien, Founder-Bio/-Foto. Voice ok? Gegenlesen.
+> ⚠️ Offene TODOs (deine Daten): Presse-Mail-Routing bestätigen, Founder-Bio + optional Founder-Foto.
+> (Logos, Brand-Hex, Typografie erledigt.) Voice ok? Gegenlesen.
 <!-- internal:end -->
 
 **Tagline:** *YOU ARE THE KEY.*
@@ -144,7 +145,7 @@ RENEX Protocol v1 has **not** undergone third-party security review (planned for
 | **Open standard** | Wire-format spec published ([`PROTOCOL.md`](./PROTOCOL.md)) |
 | **Founder** | Bruno Hochstrasser (solo, bootstrap) |
 | **Origin** | Made in Switzerland 🇨🇭 |
-| **Press contact** | TODO — press@renex.id (bestätigen) |
+| **Press contact** | press@renex.id |
 
 ---
 
@@ -175,8 +176,9 @@ RENEX Protocol v1 has **not** undergone third-party security review (planned for
 | App preview still | `frontend/public/app-preview-pulse.png` | Phone-framed screenshot |
 | Android install demo | TODO | Chrome + Brave clips pending (recording) |
 | Desktop install demo | TODO | Chrome/Edge clip pending (recording) |
-| Logo (SVG/PNG, light/dark) | TODO | `renex-logo.svg` referenced in VISION; export press variants |
-| Founder photo | TODO | optional |
+| Logo — app icon | `assets/press/renex-icon-1024.png` · `-512.png` | Rounded tile, transparent corners (dark bg baked in) |
+| Logo — wordmark | `assets/press/renex-wordmark-light.{svg,png}` (dark bg) · `-dark.{svg,png}` (light bg) | RENEX, transparent; X in cyan |
+| Founder photo | TODO | optional — Bruno provides |
 
 ---
 
@@ -194,8 +196,8 @@ RENEX Protocol v1 has **not** undergone third-party security review (planned for
 Heller Partikel-Kern (bright core accents): Cyan `#DFFAFF` · Gold `#FFE6B0` · Pink `#FFD0EC`.
 Werte = aktuelle Live-Glow-Basis der Pulse-Canvas (`PulseCanvas.svelte`) auf dunklem Grund; für den Launch ggf. einfrieren.
 
-- **Typography:** TODO (system stack / specific face).
-- **Logo usage:** TODO — clear-space + min-size rules once press logo variants exist.
+- **Typography:** System-UI-Stack (system-ui / SF Pro / Segoe UI), Bold–Black für Wortmarke & Headlines. Keine Web-Font-Abhängigkeit (CSP-safe).
+- **Logo:** App-Icon (`renex-icon-1024/512.png`, transparente Kachel) + RENEX-Wortmarke — `renex-wordmark-light.png` für dunkle, `renex-wordmark-dark.png` für helle Flächen (SVG-Quellen daneben). Regel: das **X bleibt cyan `#38BDF8`**, „RENE" in Text-/Kontrastfarbe; Clear-Space ≥ Höhe des „X".
 - **Manifesto** quoting: [`MANIFESTO.md`](./MANIFESTO.md) is **CC BY 4.0** — quotable with attribution.
 
 ---

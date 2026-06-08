@@ -43,7 +43,11 @@ const ZIP_ASSETS = [
   'frontend/public/app-preview-pulse.png',
   'frontend/public/install-ios.mp4',
   'frontend/public/install-ios-poster.png',
-  // TODO: logo exports (renex-logo.svg → press PNG variants), founder photo
+  'assets/press/renex-icon-1024.png',
+  'assets/press/renex-icon-512.png',
+  'assets/press/renex-wordmark-light.png',
+  'assets/press/renex-wordmark-dark.png',
+  // TODO: founder photo (Bruno provides)
 ];
 
 const marked = new Marked({ gfm: true, breaks: false });

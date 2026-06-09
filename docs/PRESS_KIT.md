@@ -173,6 +173,8 @@ RENEX Protocol v1 has **not** undergone third-party security review (planned for
 |---|---|---|
 | Landing showcase loop | `frontend/public/landing-pulse.mp4` (+ `app-preview-pulse.png` poster) | 1:1 chat with active Pulse — the signature visual |
 | iOS install demo loop | `frontend/public/install-ios.mp4` (+ `install-ios-poster.png`) | "Add to Home Screen" flow, iPhone portrait |
+| Android install demo (Brave) | `assets/press/install-android-brave.mp4` | "Add to Home screen" via Brave menu, portrait |
+| Desktop install demo | `assets/press/install-desktop.mp4` | Chromium address-bar install (⊕), landscape |
 | App preview still | `frontend/public/app-preview-pulse.png` | Phone-framed screenshot |
 | Logo — app icon | `assets/press/renex-icon-1024.png` · `-512.png` | Rounded tile, transparent corners (dark bg baked in) |
 | Logo — wordmark | `assets/press/renex-wordmark-light.{svg,png}` (dark bg) · `-dark.{svg,png}` (light bg) | RENEX, transparent; X in cyan |

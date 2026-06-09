@@ -43,6 +43,8 @@ const ZIP_ASSETS = [
   'frontend/public/app-preview-pulse.png',
   'frontend/public/install-ios.mp4',
   'frontend/public/install-ios-poster.png',
+  'assets/press/install-android-brave.mp4',
+  'assets/press/install-desktop.mp4',
   'assets/press/renex-icon-1024.png',
   'assets/press/renex-icon-512.png',
   'assets/press/renex-wordmark-light.png',

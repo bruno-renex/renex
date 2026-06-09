@@ -36,3 +36,5 @@ vite.config.js.timestamp-*.mjs
 frontend/public/press/index.html
 frontend/public/press/renex-press-kit.zip
 frontend/public/press/_staging/
+# Raw video masters (encoded outputs are committed; raws kept local only)
+assets/press/_sources/

@@ -107,10 +107,11 @@ Auf einem **sauberen** Gerät (echtes Phone + Desktop ideal), Prod (`renex.id` /
 
 ---
 
-## 6. Noch offen bis Launch (Stand 2026-06-08)
+## 6. Noch offen bis Launch (Stand 2026-06-09)
 
-- [ ] **Android (Chrome) + Desktop Install-Clips** — Brave liegt vor; Chrome + Desktop fehlen (→ Bruno). Danach: encoden + in Press-Kit-Media + ggf. Landing.
-- [ ] **Backend-Error-Sichtbarkeit** bestätigen (Sentry-Backend / `wrangler tail`).
-- [ ] **Smoke-Test** (§3) einmal komplett grün durchziehen.
-- [ ] **Posts** final reviewen + terminieren.
-- [x] Legal-Seiten live · Press-Kit live · Messaging entschärft · Rate-Limits + Turnstile aktiv.
+- [x] **Install-Clips** — iOS (in-App-Modal) · Android Brave + Desktop (Press-Kit-ZIP) live. *(Android Chrome bewusst weggelassen ≈ Brave.)*
+- [x] **Posts geschrieben** — Show-HN von Bruno final, Reddit/X angeglichen.
+- [ ] **Smoke-Test** (§3) einmal komplett grün durchziehen. → *Bruno*
+- [ ] **Backend-Error-Sichtbarkeit** am Launch-Tag (`npx wrangler tail` / Sentry-Backend). → *Bruno*
+- [ ] **Posts terminieren** — HN **Di–Do** vormittags PT (nicht Sa). → *Bruno*
+- [x] Legal-Seiten · Press-Kit live · Messaging entschärft · Rate-Limits + Turnstile aktiv.

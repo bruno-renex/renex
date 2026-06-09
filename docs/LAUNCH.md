@@ -60,22 +60,44 @@
 
 ---
 
-## 3. Pre-Launch-Smoke-Test (vor dem Posten, frisches Gerät/Account)
+## 3. Pre-Launch-Smoke-Test (auf Prod `renex.id`, ~20–30 Min)
 
-Auf einem **sauberen** Gerät (echtes Phone + Desktop ideal), Prod (`renex.id` / `app.renex.id`):
+**Vorbereitung**
+- **Geräte:** iPhone (Safari) + Mac (Brave/Chrome). Android-Gerät optional, nur für den Install-Check.
+- **Zwei Identitäten** (für DM/Gruppe nötig): **A** = Konto auf dem iPhone · **B** = Test-Konto auf dem Mac in **eigenem Browser-Profil / privatem Fenster** (eigene Passkey-Identität). **B** auch für Recovery nutzen — nicht das Hauptkonto riskieren.
+- Reihenfolge 1→14. **Kritische Stopper: #7 (Reload-Entschlüsselung) + #11 (Recovery)** — sind die grün, steht das Fundament.
 
-1. **Landing:** lädt, Pulse animiert, Sprachwechsel DE/EN/ES, Footer-Links (Manifesto/Press/Impressum/Datenschutz/AGB) alle 200.
-2. **Register:** neuer Handle via Passkey (Biometrie/PIN); Turnstile erscheint bei Neu-Registrierung.
-3. **Login:** ausloggen → mit bestehendem Passkey wieder rein (kein Turnstile, klappt).
-4. **Kontakt:** zweiten Account adden/akzeptieren (Invite-Flow).
-5. **DM:** E2E-Nachricht hin + zurück; Reload → History entschlüsselt korrekt.
-6. **Pulse:** in DM aktivieren → Peer-Puls sichtbar; Handshake (beide aktiv) + Tap=Nicken.
-7. **Gruppe:** erstellen, Member adden, Gruppen-Nachricht (Sender-Keys), Multi-Device.
-8. **Recovery:** BIP39-Phrase generieren → auf frischem Gerät wiederherstellen.
-9. **PWA-Install:** iOS Safari (Modal-Clip), Android Chrome/Brave (Prompt), Desktop (Install-Icon).
-10. **Account löschen:** funktioniert + räumt KV/D1 auf (DSGVO).
+**Teil 1 — Landing & Register** *(Mac, frisches Profil)*
+1. `renex.id` → Landing lädt, Pulse bewegt sich, Sprachwechsel DE/EN/ES. ✅ Footer-Links (Manifesto/Press/Impressum/Datenschutz/AGB) öffnen je eine Seite (kein 404).
+2. Konto **B** registrieren (Passkey via Touch ID/PIN). ✅ Turnstile erscheint bei Neu-Registrierung; Konto angelegt, eingeloggt.
 
-**Bei Fehler:** `cd ~/dev/renex && npx wrangler rollback` (Panik-Knopf) · Live-Logs: `npx wrangler tail` · Sentry-Dashboard checken.
+**Teil 2 — Login-Robustheit**
+3. B ausloggen → wieder einloggen (bestehender Passkey). ✅ **ohne** Turnstile, sofort drin *(06-04-Fix)*.
+
+**Teil 3 — 2-Parteien-DM (A ↔ B)**
+4. iPhone: als **A** einloggen (oder installierte PWA).
+5. A + B als **Kontakt** verbinden (Invite/Handle adden + akzeptieren).
+6. **DM:** A→B schreiben, B→A antworten — kommt beidseitig an. ✅ beide Richtungen E2E.
+7. **Reload-Test:** beide Seiten neu laden → History bleibt lesbar. ⚠️ „kann nicht entschlüsseln" = **kritisch**, melden.
+
+**Teil 4 — Pulse**
+8. Im A↔B-DM bei **beiden** Pulse einschalten (Header-Toggle). ✅ Peer-Puls sichtbar (Leuchtkäfer); beide gleichzeitig aktiv → **Handshake** (rosa Synchron-Blinken); Tap auf „● gerade da" → **goldene Nick-Mote**.
+
+**Teil 5 — Gruppe**
+9. Als A **Gruppe** erstellen, B hinzufügen, Nachricht senden. ✅ B empfängt (E2E, Sender-Keys).
+
+**Teil 6 — Recovery** *(mit Konto B!)*
+10. Bei B **12-Wort-Phrase** generieren + notieren.
+11. In frischem Profil (oder nach Logout) Recovery starten → 12 Wörter eingeben. ✅ Zugriff auf B zurück + bestehende DMs lesbar. ⚠️ Fehlschlag = **kritisch** (User würden ausgesperrt), unbedingt melden.
+
+**Teil 7 — PWA-Install**
+12. **iOS Safari:** Profil → „Als App installieren" → Modal mit Clip + Schritten.
+13. **Android (Brave/Chrome):** ⋮ → „App installieren" → Icon landet am Home-Screen.
+14. **Desktop:** Install-Icon (⊕) in der Adressleiste → eigenes Fenster.
+
+**Optional:** Account-Löschen mit Wegwerf-Konto → Konto weg, KV/D1 sauber (DSGVO).
+
+**Bei Fehler:** Rollback `cd ~/dev/renex && npx wrangler rollback` (Panik-Knopf) · Live-Logs `npx wrangler tail` · Sentry-Dashboard · Schritt + Screenshot + Browser-Konsole notieren → an Claude.
 
 ---
 

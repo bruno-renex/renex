@@ -354,7 +354,9 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 12px 14px;
+    /* iOS Notch / Dynamic Island + Querformat-Insets (wie ChatHeader/InboxList) —
+       sonst rutscht der Header unter die Statusleiste (viewport-fit=cover). */
+    padding: max(12px, var(--safe-top)) max(14px, var(--safe-right)) 12px max(14px, var(--safe-left));
     border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
   }

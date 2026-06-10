@@ -196,7 +196,7 @@ async function getVisibleChannelIds(env, serverId, userHandle) {
   const membership = await getServerMembership(env, serverId, userHandle);
   if (!membership) return new Set();
 
-  // Owner-Short-Circuit
+  // Owner-Short-Circuit (frisch, KEIN Cache → kein Sichtbarkeits-Lag beim Anlegen).
   if (membership.is_owner === 1) {
     const r = await env.RENEX_DB.prepare(
       `SELECT id FROM conversations WHERE server_id = ? AND type = 'channel'`
@@ -206,7 +206,7 @@ async function getVisibleChannelIds(env, serverId, userHandle) {
 
   const myRoles = await getUserRoles(env, serverId, userHandle);
 
-  // ADMINISTRATOR-Bit short-circuit (Owner-Bypass-Äquivalent für Admins)
+  // ADMINISTRATOR-Bit short-circuit (Owner-Bypass-Äquivalent für Admins; frisch, kein Cache)
   const baseBits = myRoles.reduce((a, r) => a | (r.permissions | 0), 0);
   if (baseBits & Permissions.ADMINISTRATOR) {
     const r = await env.RENEX_DB.prepare(
@@ -214,6 +214,17 @@ async function getVisibleChannelIds(env, serverId, userHandle) {
     ).bind(serverId).all();
     return new Set((r.results || []).map(c => c.id));
   }
+
+  // P4: TTL-Cache (30s) NUR für den nicht-privilegierten Pfad — dort lohnt der
+  // LEFT-JOIN + per-Member-Resolve. Owner/Admins (die Channels anlegen) sind oben
+  // ausgenommen → kein Anlege-Lag. C2 ist das echte Access-Gate; der Cache betrifft
+  // nur die UI-Channel-LISTE (max. ~30s Lag bei Sichtbarkeits-Änderungen), kein
+  // Security-Impact → TTL-only, kein explizites Invalidate nötig.
+  const cacheKey = `vischan:${serverId}:${userHandle}`;
+  try {
+    const cached = await env.RENEX_KV.get(cacheKey);
+    if (cached) return new Set(JSON.parse(cached));
+  } catch {}
 
   // All Channels + Overrides in einem Query
   const rows = await env.RENEX_DB.prepare(
@@ -252,6 +263,7 @@ async function getVisibleChannelIds(env, serverId, userHandle) {
       visible.add(channelId);
     }
   }
+  try { env.RENEX_KV.put(cacheKey, JSON.stringify([...visible]), { expirationTtl: 30 }).catch(() => {}); } catch {}
   return visible;
 }
 

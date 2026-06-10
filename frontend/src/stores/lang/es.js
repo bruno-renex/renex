@@ -659,7 +659,7 @@ export default {
   createServerNameTooLong:            "Nombre demasiado largo (máx. 80 caracteres)",
   createServerSuccess:                "✅ Servidor creado",
   createServerFailed:                 "Error al crear",
-  createServerLimitReached:           "Límite de servidores alcanzado (máx. 3 como propietario). Pasa a Pro para 25.",
+  createServerLimitReached:           "Límite de servidores alcanzado (máx. {limit}).",
   tooManyRequests:                    "Demasiadas solicitudes — espera un momento.",
   creating:                           "Creando…",
   leaveServerBtn:                     "Abandonar servidor",

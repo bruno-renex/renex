@@ -60,7 +60,7 @@ const MAX_SERVER_DESC       = 500;
 const MAX_SERVER_ICON_BYTES = 1024 * 1024;   // 1 MB
 const MAX_CHANNEL_NAME      = 64;
 const MAX_CHANNEL_TOPIC     = 1024;
-const MAX_OWNED_SERVERS_FREE = 3;
+const MAX_OWNED_SERVERS_FREE = 5;
 const MAX_OWNED_SERVERS_PRO  = 25;
 
 const ALLOWED_ICON_MIME     = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -512,11 +512,12 @@ async function createServer({ request, env, me }) {
   ]);
   const limit = tier === 'pro' ? MAX_OWNED_SERVERS_PRO : MAX_OWNED_SERVERS_FREE;
   if ((ownedCount?.c || 0) >= limit) {
+    // Early-Phase: nur das nackte Limit zurückgeben — KEIN tier/upgrade-Hinweis.
+    // User sollen (noch) nicht mitbekommen, dass es evtl. ein Pro-Upgrade gibt.
+    // Pro-Mechanik (getUserTier + MAX_OWNED_SERVERS_PRO) bleibt intern für später.
     return json(request, {
       error: 'server_limit_reached',
       limit,
-      tier,
-      upgradeAvailable: tier === 'free' ? { proLimit: MAX_OWNED_SERVERS_PRO } : null,
     }, 403);
   }
 

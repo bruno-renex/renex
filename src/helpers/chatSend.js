@@ -553,7 +553,14 @@ export async function handleChatSend(request, env, ctx) {
     // Bei GSK/request_gsk: bypassCache=true (Defense-in-Depth gegen stale Member-Cache,
     // damit ein kurz zuvor entfernter Member kein gsk-Event/Metadata mehr empfängt).
     const isKeyControl = msg.type === "gsk" || msg.type === "request_gsk";
-    _bgTasks.push(() => pushToGroupMembers(env, env.RENEX_DB, bodyConvoId, me, msg, isKeyControl ? { bypassCache: true } : undefined));
+    if (isKeyControl) {
+      // Key-Handshake (GSK) ist latenzsensitiv + niedrig-Volumen → SYNCHRON zustellen.
+      // P1-Defer (waitUntil) gilt nur für hochfächernde Chat-Messages; ein deferter
+      // GSK-Handshake kann den Decrypt verzögern oder verfehlen.
+      await pushToGroupMembers(env, env.RENEX_DB, bodyConvoId, me, msg, { bypassCache: true });
+    } else {
+      _bgTasks.push(() => pushToGroupMembers(env, env.RENEX_DB, bodyConvoId, me, msg));
+    }
   } else {
     // DM: an Empfänger
     if (!to || typeof to !== "string") {

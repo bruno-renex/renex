@@ -99,6 +99,20 @@ describe('resolveChannelPerms', () => {
     expect(await resolveChannelPerms(db, 'cid', 'anna')).toBe(ALL_PERMISSIONS);
   });
 
+  it('Regression-Guard: Member OHNE Rollen-Zuweisung auf normalem Channel hat trotzdem VIEW+SEND (Membership genügt)', async () => {
+    // Genau der Bug, der 2026-06-10-1 den GSK-Handshake blockierte: ohne Fast-Path
+    // resolved ein role-loser Member zu 0 → 403 auf request_gsk/gsk → undecryptbar.
+    const db = mockDb({
+      convo: { type: 'channel', server_id: 'srv1' },
+      members: { norole: { is_owner: 0 } },
+      rolesByUser: {},   // KEINE Rolle zugewiesen
+      overrides: [],     // normaler Channel
+    });
+    const eff = await resolveChannelPerms(db, 'cid', 'norole');
+    expect((eff & Permissions.VIEW_CHANNEL) === Permissions.VIEW_CHANNEL).toBe(true);
+    expect((eff & Permissions.SEND_MESSAGES) === Permissions.SEND_MESSAGES).toBe(true);
+  });
+
   it('Member mit everyone-Role ohne Overrides hat VIEW_CHANNEL', async () => {
     const db = mockDb({
       convo: { type: 'channel', server_id: 'srv1' },

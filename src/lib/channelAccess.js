@@ -30,22 +30,31 @@ export async function resolveChannelPerms(db, channelId, handle) {
   const m = await db.prepare(
     "SELECT is_owner FROM server_members WHERE server_id = ? AND user_handle = ?"
   ).bind(convo.server_id, handle).first();
-  if (!m) return 0;                       // kein Member ⇒ keine Permissions
+  if (!m) return 0;                       // kein Member ⇒ kein Zugriff
   if (m.is_owner === 1) return ALL_PERMISSIONS;
 
-  const [rolesRes, ovRes] = await Promise.all([
-    db.prepare(
-      "SELECT sr.id, sr.permissions FROM role_assignments ra JOIN server_roles sr ON ra.role_id = sr.id WHERE ra.server_id = ? AND ra.user_handle = ?"
-    ).bind(convo.server_id, handle).all(),
-    db.prepare(
-      "SELECT target_kind, target_id, allow_bits, deny_bits FROM channel_permission_overrides WHERE channel_id = ?"
-    ).bind(channelId).all(),
-  ]);
+  const ovRes = await db.prepare(
+    "SELECT target_kind, target_id, allow_bits, deny_bits FROM channel_permission_overrides WHERE channel_id = ?"
+  ).bind(channelId).all();
+  const overrides = ovRes.results || [];
+
+  // Fast-Path: Channel OHNE Overrides ist nicht eingeschränkt → Zugriff = Membership
+  // (exakt wie vor C2). KRITISCH: ein Member ohne explizite everyone-Role-Zuweisung
+  // würde sonst fälschlich VIEW/SEND verlieren — das blockiert u.a. den GSK-Handshake
+  // (request_gsk/gsk) und macht Channel-Nachrichten unentschlüsselbar. Restriktionen
+  // gelten ausschließlich über Overrides (private / read-only Channels).
+  if (overrides.length === 0) {
+    return Permissions.VIEW_CHANNEL | Permissions.SEND_MESSAGES;
+  }
+
+  const rolesRes = await db.prepare(
+    "SELECT sr.id, sr.permissions FROM role_assignments ra JOIN server_roles sr ON ra.role_id = sr.id WHERE ra.server_id = ? AND ra.user_handle = ?"
+  ).bind(convo.server_id, handle).all();
 
   return resolvePermissions({
     isOwner:    false,
     roles:      rolesRes.results || [],
-    overrides:  ovRes.results || [],
+    overrides,
     userHandle: handle,
   });
 }

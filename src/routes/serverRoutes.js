@@ -2187,9 +2187,19 @@ async function invitesHandler({ request, env, me }, serverId) {
     let initialRoleId = null;
     if (body.initialRoleId) {
       const role = await env.RENEX_DB.prepare(
-        `SELECT id, is_default FROM server_roles WHERE id = ? AND server_id = ?`
+        `SELECT id, is_default, position, permissions FROM server_roles WHERE id = ? AND server_id = ?`
       ).bind(body.initialRoleId, serverId).first();
       if (!role) return json(request, { error: 'Invalid initialRoleId' }, 400);
+      // Anti-Privilege-Escalation (C1): ein Invite darf keine Rolle vergeben, die der
+      // Ersteller nicht auch direkt via assignRole zuweisen könnte. Ohne diesen Check
+      // eskaliert INVITE_MEMBERS zu "beliebige Rolle (inkl. ADMINISTRATOR) vergeben".
+      const actorPos = await getActorMaxRolePosition(env, serverId, me);
+      if (!canManageRoleAtPosition(actorPos.position, role.position, actorPos.isOwner)) {
+        return json(request, { error: 'forbidden_role_position' }, 403);
+      }
+      if ((role.permissions & Permissions.ADMINISTRATOR) && !actorPos.isOwner) {
+        return json(request, { error: 'forbidden_administrator_bit' }, 403);
+      }
       // default-Role wird beim Join sowieso zugewiesen → nur non-default als Extra speichern
       if (role.is_default !== 1) initialRoleId = role.id;
     }

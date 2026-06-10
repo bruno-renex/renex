@@ -386,18 +386,30 @@ export async function handleE2eRoutes(request, env, path, params) {
         if (!rlInbox) return json(request, { error: "Too many requests" }, 429);
 
         // Zugriffsprüfung: eigene Keys immer erlaubt
-        // Fremde Keys: entweder Kontakt ODER gemeinsames Gruppen-Mitglied
+        // Fremde Keys: Kontakt ODER gemeinsame Gruppe ODER gemeinsamer Server (Channel)
         if (user !== me) {
           const isContact = await isAcceptedContact(env, me, user);
           if (!isContact) {
-            // Fallback: gemeinsame Gruppe prüfen (JOIN über conversation_members)
+            // Fallback 1: gemeinsame klassische Gruppe (JOIN über conversation_members)
             const sharedGroup = await env.RENEX_DB.prepare(`
               SELECT 1 FROM conversation_members cm1
               JOIN conversation_members cm2 ON cm1.convo_id = cm2.convo_id
               WHERE cm1.member_handle = ? AND cm2.member_handle = ?
               LIMIT 1
             `).bind(me, user).first();
-            if (!sharedGroup) return json(request, { devices: [] });
+            if (!sharedGroup) {
+              // Fallback 2: gemeinsamer Server (Phase 3A). Channel-Membership lebt in
+              // server_members, NICHT conversation_members — ohne das können Nicht-
+              // Kontakt-Server-Member keine Channel-GSK austauschen → Channel-Messages
+              // bleiben unentschlüsselbar. Gibt nur die Device-Key-Liste frei (kein Inhalt).
+              const sharedServer = await env.RENEX_DB.prepare(`
+                SELECT 1 FROM server_members sm1
+                JOIN server_members sm2 ON sm1.server_id = sm2.server_id
+                WHERE sm1.user_handle = ? AND sm2.user_handle = ?
+                LIMIT 1
+              `).bind(me, user).first();
+              if (!sharedServer) return json(request, { devices: [] });
+            }
           }
         }
 

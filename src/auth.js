@@ -1,4 +1,5 @@
 import { base64url } from './utils.js';
+import { getChannelViewerHandles } from './lib/channelAccess.js';
 
 // =========================
 // SESSION TOKEN REGEX
@@ -401,13 +402,15 @@ export async function getConvoMembersWithType(db, convoId) {
   if (!convo) return { type: null, serverId: null, handles: [] };
 
   if (convo.type === 'channel' && convo.server_id) {
-    const rows = await db.prepare(
-      "SELECT user_handle FROM server_members WHERE server_id = ?"
-    ).bind(convo.server_id).all();
+    // C2: Recipient-Set auf VIEW_CHANNEL-Berechtigte beschränken (private Channels).
+    // Fast-Path in getChannelViewerHandles → kein Overhead für offene Channels
+    // (ohne Overrides = alle Member). Gilt für WS-Broadcast UND Web-Push, da beide
+    // über getConvoMembersWithType/getConvoMemberHandles laufen.
+    const handles = await getChannelViewerHandles(db, convo.server_id, convoId);
     return {
       type:     'channel',
       serverId: convo.server_id,
-      handles:  (rows.results || []).map(r => r.user_handle),
+      handles,
     };
   }
 

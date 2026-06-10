@@ -1,12 +1,13 @@
 import { json, readJson, param, dmConvoId, isUUID } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit, pushToUserDO, pushToGroupMembers, isConvoMember } from '../auth.js';
 import { handleChatSend } from '../helpers/chatSend.js';
+import { canViewChannel } from '../lib/channelAccess.js';
 
 // ======================================================
 // CHAT ROUTES: /chat/send, /chat/list, /chat/unread,
 //              /chat/delivered, /chat/message/delete
 // ======================================================
-export async function handleChatRoutes(request, env, path, params) {
+export async function handleChatRoutes(request, env, path, params, ctx) {
   switch (path) {
 
     // =========================
@@ -14,7 +15,7 @@ export async function handleChatRoutes(request, env, path, params) {
     // =========================
     case "/chat/send": {
       if (request.method === "POST") {
-        return handleChatSend(request, env);
+        return handleChatSend(request, env, ctx);
       }
       break;
     }
@@ -105,6 +106,12 @@ export async function handleChatRoutes(request, env, path, params) {
               "SELECT joined_at FROM server_members WHERE server_id = ? AND user_handle = ? LIMIT 1"
             ).bind(convoInfo.server_id, me).first();
             if (!sm) return json(request, { error: "Not a member of this server" }, 403);
+            // C2: private Channels — VIEW_CHANNEL server-seitig erzwingen (nicht nur
+            // Server-Membership). canViewChannel ist hier immer boolean (channel-Zweig).
+            const canView = await canViewChannel(env.RENEX_DB, cid, me);
+            if (canView === false) {
+              return json(request, { error: "No access to this channel" }, 403);
+            }
             joinedAt = Number(sm.joined_at) || 0;
           } else {
             const memberRow = await env.RENEX_DB.prepare(

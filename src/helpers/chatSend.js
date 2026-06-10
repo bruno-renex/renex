@@ -1,12 +1,14 @@
 import { json, readJson, dmConvoId } from '../utils.js';
 import { requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, pushToGroupMembers, getConvoMemberHandles, isConvoMember, GUEST_HANDLE_RE } from '../auth.js';
 import { pushToUser, detectMentions } from './pushSend.js';
+import { resolveChannelPerms } from '../lib/channelAccess.js';
+import { Permissions } from '../lib/permissions.js';
 
 // ======================================================
 // CHAT / SEND handler (extracted for line-count budget)
 // Called from chatRoutes.js
 // ======================================================
-export async function handleChatSend(request, env) {
+export async function handleChatSend(request, env, ctx) {
   const session = await requireAnySession(request, env);
   if (!session) {
     return json(request, { error: "Not authenticated" }, 401);
@@ -237,6 +239,26 @@ export async function handleChatSend(request, env) {
     const ok = await rateLimit(env, `gsk_req:${me}`, 60_000, 60);
     if (!ok) {
       return json(request, { error: "GSK request rate limit exceeded", retryAfterMs: 60000 }, 429);
+    }
+  }
+
+  // ── C2: Channel-Zugriff server-seitig durchsetzen (VIEW_CHANNEL/SEND_MESSAGES) ──
+  // VIEW_CHANNEL ist Pflicht für JEDE Channel-Aktion (Chat + GSK/Control);
+  // SEND_MESSAGES zusätzlich für echte Chat-Nachrichten. resolveChannelPerms gibt
+  // null zurück wenn bodyConvoId KEIN Server-Channel ist (DM/Group) → kein Gate.
+  // Schützt private Channels auf der Message-Ebene (nicht nur im List-Filter).
+  if (bodyConvoId && typeof bodyConvoId === "string") {
+    const chPerms = await resolveChannelPerms(env.RENEX_DB, bodyConvoId, me);
+    if (chPerms !== null) {
+      if ((chPerms & Permissions.VIEW_CHANNEL) !== Permissions.VIEW_CHANNEL) {
+        return json(request, { error: "No access to this channel" }, 403);
+      }
+      const isControlType = type === "gsk" || type === "request_gsk" || type === "cmk" ||
+        type === "cmk_req" || type === "cmk_unavailable" || type === "epoch_rotate" ||
+        type === "cmk_rotate" || type === "cmk_reset" || type === "auto_delete_set";
+      if (!isControlType && (chPerms & Permissions.SEND_MESSAGES) !== Permissions.SEND_MESSAGES) {
+        return json(request, { error: "No permission to send in this channel" }, 403);
+      }
     }
   }
 
@@ -509,15 +531,29 @@ export async function handleChatSend(request, env) {
   // Message erst beim nächsten Reload sehen. Sender's CURRENT-Tab wird im
   // Frontend via msg.deviceId gefiltert (Tab erkennt eigene deviceId und skipt).
   // ======================================================
+  // P1: Schwere Fan-out-Arbeit (Gruppen-WS-Broadcast + Web-Push) NICHT inline
+  // awaiten — sonst skaliert die Send-Latenz mit der Member-Zahl (CF 6-Connection-
+  // Limit drosselt parallele Fetches). Stattdessen nach dem Response-ACK via
+  // ctx.waitUntil im Hintergrund. Fallback ohne ctx (Tests/alte Aufrufer): inline
+  // awaiten → Verhalten exakt wie bisher (CF tötet sonst unawaited Promises).
+  const _bgTasks = [];
+  const _flushBg = () => {
+    const run = async () => {
+      for (const t of _bgTasks) {
+        try { await t(); } catch (e) { console.error("bg fan-out failed:", e?.message); }
+      }
+    };
+    if (ctx && typeof ctx.waitUntil === "function") { ctx.waitUntil(run()); return Promise.resolve(); }
+    return run();
+  };
+
   let wsDeliveredCount = 0;
   if (bodyConvoId) {
-    // Gruppen-Nachricht: an alle Mitglieder ausser Sender (excludes self).
-    // Bei GSK/request_gsk: bypassCache=true (Defense-in-Depth). Wenn ein
-    // ex-Member kurz zuvor entfernt wurde und KV-Cache noch stale ist, würde
-    // er sonst das gsk-Event empfangen (kann's zwar nicht decrypten, aber
-    // sieht Group-Activity-Metadata). Mit bypass: aktuelle DB-Member-Liste.
+    // Gruppen-/Channel-Nachricht: an alle (VIEW-berechtigten) Mitglieder ausser Sender.
+    // Bei GSK/request_gsk: bypassCache=true (Defense-in-Depth gegen stale Member-Cache,
+    // damit ein kurz zuvor entfernter Member kein gsk-Event/Metadata mehr empfängt).
     const isKeyControl = msg.type === "gsk" || msg.type === "request_gsk";
-    await pushToGroupMembers(env, env.RENEX_DB, bodyConvoId, me, msg, isKeyControl ? { bypassCache: true } : undefined);
+    _bgTasks.push(() => pushToGroupMembers(env, env.RENEX_DB, bodyConvoId, me, msg, isKeyControl ? { bypassCache: true } : undefined));
   } else {
     // DM: an Empfänger
     if (!to || typeof to !== "string") {
@@ -590,6 +626,7 @@ export async function handleChatSend(request, env) {
   // ======================================================
   const isControlMsg = msg.type === "cmk" || msg.type === "cmk_req" || msg.type === "cmk_unavailable" || msg.type === "epoch_rotate" || msg.type === "cmk_rotate" || msg.type === "cmk_reset" || msg.type === "auto_delete_set" || msg.type === "gsk" || msg.type === "request_gsk";
   if (!isControlMsg) {
+    _bgTasks.push(async () => {
     try {
       if (isGroupMessage) {
         // Gruppe/Channel: Push an alle offline Members (type-aware)
@@ -607,11 +644,15 @@ export async function handleChatSend(request, env) {
         const mentionsAll = clientMentionsAll || serverMentionsAll;
 
         const recipients = members.filter(h => h !== me);
+        // P1: Mute-Status für ALLE Empfänger in EINER Query (statt N+1 pro Empfänger).
+        const _muteRows = await env.RENEX_DB.prepare(
+          "SELECT user_handle, level, expires_at FROM notification_mutes WHERE convo_id = ?"
+        ).bind(cid).all();
+        const _muteByHandle = new Map();
+        for (const _m of (_muteRows.results || [])) _muteByHandle.set(_m.user_handle, _m);
         await Promise.allSettled(recipients.map(async (handle) => {
-          // Mute-Check
-          const mute = await env.RENEX_DB.prepare(
-            "SELECT level, expires_at FROM notification_mutes WHERE user_handle = ? AND convo_id = ?"
-          ).bind(handle, cid).first();
+          // Mute-Check (aus vorab geladener Map statt per-Empfänger-Query)
+          const mute = _muteByHandle.get(handle);
 
           if (mute) {
             // Temporäres Mute abgelaufen?
@@ -696,7 +737,11 @@ export async function handleChatSend(request, env) {
       // Push-Fehler dürfen Chat-Send nicht blockieren
       console.error("Push notification error (non-blocking):", pushErr.message);
     }
+    });
   }
+
+  // P1: Hintergrund-Fan-out anstoßen (ctx.waitUntil) bzw. inline awaiten (kein ctx).
+  await _flushBg();
 
   // Antwort an Client
   return json(request, { ok: true, message: msg });

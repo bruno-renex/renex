@@ -94,7 +94,7 @@ async function fetch(request, env, ctx) {
       return await handleAutoDeleteRoutes(request, env, path, params);
     }
     if (path.startsWith('/chat/')) {
-      return await handleChatRoutes(request, env, path, params);
+      return await handleChatRoutes(request, env, path, params, ctx);
     }
     if (path.startsWith('/auth/') || path.startsWith('/users/') || path === '/account') {
       return await handleAuthRoutes(request, env, path, params);

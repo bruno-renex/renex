@@ -1354,6 +1354,15 @@
     // analog zum Gruppen-Pfad). Early-Out via getKnownChannels: Member, die in
     // dem Server nie gesendet haben (keine eigene GSK), machen weder Fetch noch
     // Rotation — bounded Last bei großen Servern.
+    // #6: Mehrere Removals desselben Servers werden in EINEN Rotations-Pass
+    // gebündelt (Coalesce), und der Fetch+Rotate wird per Jitter über die Clients
+    // gestreut — sonst fetchen bei einem Kick alle N verbleibenden Member
+    // gleichzeitig /servers/<id> und rotieren (Thundering-Herd / O(N^2)-GSK-Traffic
+    // bei großen Servern). Die kurze Verzögerung schwächt die Forward-Secrecy nicht:
+    // der Entfernte ist backend-seitig sofort aus server_members + Recipient-Filter
+    // raus und bekommt in dem Fenster ohnehin keinen neuen Ciphertext.
+    const _gskRotateBatches = new Map(); // serverId -> { removed:Set<handle>, timer }
+
     const serverMemberRemovedHandler = (msg) => {
       const removed  = String(msg?.handle || '').toLowerCase();
       const serverId = msg?.serverId;
@@ -1361,7 +1370,7 @@
       if (!removed || !serverId || !me) return;
 
       // Ich selbst wurde entfernt → eigene + Peer-GSKs für die Channels dieses
-      // Servers droppen (obsolet; dürfen lokal nicht weiterleben).
+      // Servers droppen (obsolet; dürfen lokal nicht weiterleben). Sofort, kein Defer.
       if (removed === me) {
         for (const ch of serverStore.getKnownChannels().filter(c => c.serverId === serverId)) {
           void deleteAllGSKsForGroup(ch.id);
@@ -1369,33 +1378,42 @@
         return;
       }
 
-      void (async () => {
-        try {
-          // Early-Out: nur rotieren, wenn ich in mind. einem (bekannten) Channel
-          // dieses Servers eine eigene GSK habe. getKnownChannels enthält alle
-          // Channels besuchter Server — wer gesendet hat, hat den Server geöffnet.
-          const knownChs = serverStore.getKnownChannels().filter(c => c.serverId === serverId);
-          let anyGsk = false;
-          for (const ch of knownChs) { if (await getMyGSK(ch.id)) { anyGsk = true; break; } }
-          if (!anyGsk) return;
+      let batch = _gskRotateBatches.get(serverId);
+      if (!batch) { batch = { removed: new Set(), timer: null }; _gskRotateBatches.set(serverId, batch); }
+      batch.removed.add(removed);
+      if (batch.timer) return; // Pass für diesen Server bereits geplant → nur sammeln
+      const jitterMs = 500 + Math.floor(Math.random() * 4500); // 0.5–5s gestreut
 
-          // Frische Member-/Channel-Liste (VIEW-gefiltert) für die Distribution.
-          const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}`);
-          if (!r.ok) return;
-          const members = (Array.isArray(r.data?.members) ? r.data.members : [])
-            .map(m => String(m.handle || '').toLowerCase())
-            .filter(h => h && h !== me && h !== removed);
-          const channels = Array.isArray(r.data?.channels) ? r.data.channels : [];
-          for (const ch of channels) {
-            await deletePeerGSK(ch.id, removed);
-            const myGsk = await getMyGSK(ch.id);
-            if (!myGsk) continue;            // nie in dem Channel gesendet → keine Rotation nötig
-            await rotateMyGSK(ch.id, members);
+      batch.timer = setTimeout(() => {
+        _gskRotateBatches.delete(serverId);
+        const removedSet = batch.removed;
+        void (async () => {
+          try {
+            // Early-Out: nur rotieren, wenn ich in mind. einem (bekannten) Channel
+            // dieses Servers eine eigene GSK habe (sonst kein Fetch/keine Rotation).
+            const knownChs = serverStore.getKnownChannels().filter(c => c.serverId === serverId);
+            let anyGsk = false;
+            for (const ch of knownChs) { if (await getMyGSK(ch.id)) { anyGsk = true; break; } }
+            if (!anyGsk) return;
+
+            // Frische Member-/Channel-Liste (VIEW-gefiltert) für die Distribution.
+            const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}`);
+            if (!r.ok) return;
+            const members = (Array.isArray(r.data?.members) ? r.data.members : [])
+              .map(m => String(m.handle || '').toLowerCase())
+              .filter(h => h && h !== me && !removedSet.has(h));
+            const channels = Array.isArray(r.data?.channels) ? r.data.channels : [];
+            for (const ch of channels) {
+              for (const rem of removedSet) await deletePeerGSK(ch.id, rem);
+              const myGsk = await getMyGSK(ch.id);
+              if (!myGsk) continue;            // nie in dem Channel gesendet → keine Rotation nötig
+              await rotateMyGSK(ch.id, members);
+            }
+          } catch (e) {
+            captureException(e, { context: 'rotate-on-server-member-removed', serverId });
           }
-        } catch (e) {
-          captureException(e, { context: 'rotate-on-server-member-removed', serverId, removed });
-        }
-      })();
+        })();
+      }, jitterMs);
     };
     _wsUnsubs.push(ws.on("server_member_kicked", serverMemberRemovedHandler));
     _wsUnsubs.push(ws.on("server_member_banned", serverMemberRemovedHandler));

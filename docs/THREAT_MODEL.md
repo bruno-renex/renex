@@ -114,6 +114,7 @@ Known design limitations that v2 will address:
 | Single-server topology (no federation) | Pre-beta | Federation spec — v3 roadmap |
 | Cloudflare-dependent reference server | Pre-beta | Documented as reference-impl lock-in, protocol portable |
 | Multi-Device CMK-Race on receiver-side device-add (see §4.1) | Pre-beta | Persistent `cmk_req` queue + sender-side device-add subscription |
+| Message signatures soft-fail: a missing/invalid sig shows a UI warning + Sentry event but is **not** hard-rejected (PROTOCOL.md §11.2). Server attests `from` from the session, so handle-spoofing is prevented; sig covers `convoId\|ts\|ctB64` (no ordering/replay coverage). | Pre-beta | Hard-fail once measured sig-coverage > 99% |
 
 ### 4.1 Multi-Device CMK Race after Guest-Convert
 

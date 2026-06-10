@@ -804,6 +804,25 @@ export async function handleAuthRoutes(request, env, path, params) {
           "DELETE FROM channel_permission_overrides WHERE target_kind = 'member' AND target_id = ?"
         ).bind(handle).run();
 
+        // 7j.2. DSGVO Art. 17: Handle-Reste in Server-Invites/Bans/Server-Creator.
+        // Server + Invites bleiben funktional — nur die Handle-Attribution wird
+        // anonymisiert (analog Audit-Log 7k). servers.created_by ist nur historisch
+        // (live-Owner = is_owner); bei transferierten Servern bliebe sonst der alte
+        // Handle stehen. Eigene Ban-Einträge des gelöschten Users sind moot
+        // (Account weg → kein Re-Join) und werden gelöscht.
+        await env.RENEX_DB.prepare(
+          "UPDATE servers SET created_by = 'deleted_user' WHERE created_by = ?"
+        ).bind(handle).run();
+        await env.RENEX_DB.prepare(
+          "UPDATE server_invites SET created_by = 'deleted_user' WHERE created_by = ?"
+        ).bind(handle).run();
+        await env.RENEX_DB.prepare(
+          "DELETE FROM server_bans WHERE user_handle = ?"
+        ).bind(handle).run();
+        await env.RENEX_DB.prepare(
+          "UPDATE server_bans SET banned_by = 'deleted_user' WHERE banned_by = ?"
+        ).bind(handle).run();
+
         // 7k. Server-Audit-Log: handle-Referenzen anonymisieren (statt löschen).
         // Audit-Integrität für andere Server-Members bewahren, aber den deleted
         // User nicht mehr namentlich nennen. Kompromiss zwischen DSGVO Art. 17

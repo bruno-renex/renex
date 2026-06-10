@@ -1345,6 +1345,62 @@
       serverStore.incrementBanEventVersion();
     }));
 
+    // ── H1: Forward-Secrecy bei Server-Kick/Ban/Leave ──────────────────────
+    // Channel-GSKs wurden — anders als bei Gruppen (group_member_left/removed) —
+    // bei Server-Membership-Verlust NICHT rotiert. Ohne Rotation behält der
+    // Entfernte die GSK und könnte zukünftige Channel-Messages entschlüsseln,
+    // sofern er Ciphertext bekommt. Hier: pro Channel des Servers die eigene GSK
+    // rotieren + an die verbleibenden Member neu verteilen (= Forward Secrecy,
+    // analog zum Gruppen-Pfad). Early-Out via getKnownChannels: Member, die in
+    // dem Server nie gesendet haben (keine eigene GSK), machen weder Fetch noch
+    // Rotation — bounded Last bei großen Servern.
+    const serverMemberRemovedHandler = (msg) => {
+      const removed  = String(msg?.handle || '').toLowerCase();
+      const serverId = msg?.serverId;
+      const me = userStore.myUser;
+      if (!removed || !serverId || !me) return;
+
+      // Ich selbst wurde entfernt → eigene + Peer-GSKs für die Channels dieses
+      // Servers droppen (obsolet; dürfen lokal nicht weiterleben).
+      if (removed === me) {
+        for (const ch of serverStore.getKnownChannels().filter(c => c.serverId === serverId)) {
+          void deleteAllGSKsForGroup(ch.id);
+        }
+        return;
+      }
+
+      void (async () => {
+        try {
+          // Early-Out: nur rotieren, wenn ich in mind. einem (bekannten) Channel
+          // dieses Servers eine eigene GSK habe. getKnownChannels enthält alle
+          // Channels besuchter Server — wer gesendet hat, hat den Server geöffnet.
+          const knownChs = serverStore.getKnownChannels().filter(c => c.serverId === serverId);
+          let anyGsk = false;
+          for (const ch of knownChs) { if (await getMyGSK(ch.id)) { anyGsk = true; break; } }
+          if (!anyGsk) return;
+
+          // Frische Member-/Channel-Liste (VIEW-gefiltert) für die Distribution.
+          const r = await apiFetch(`/servers/${encodeURIComponent(serverId)}`);
+          if (!r.ok) return;
+          const members = (Array.isArray(r.data?.members) ? r.data.members : [])
+            .map(m => String(m.handle || '').toLowerCase())
+            .filter(h => h && h !== me && h !== removed);
+          const channels = Array.isArray(r.data?.channels) ? r.data.channels : [];
+          for (const ch of channels) {
+            await deletePeerGSK(ch.id, removed);
+            const myGsk = await getMyGSK(ch.id);
+            if (!myGsk) continue;            // nie in dem Channel gesendet → keine Rotation nötig
+            await rotateMyGSK(ch.id, members);
+          }
+        } catch (e) {
+          captureException(e, { context: 'rotate-on-server-member-removed', serverId, removed });
+        }
+      })();
+    };
+    _wsUnsubs.push(ws.on("server_member_kicked", serverMemberRemovedHandler));
+    _wsUnsubs.push(ws.on("server_member_banned", serverMemberRemovedHandler));
+    _wsUnsubs.push(ws.on("server_member_left",   serverMemberRemovedHandler));
+
     // E2E Inbox-Key Upload + Heartbeat — sequenziell aber non-blocking
     // (Phase 1A.6 Migration aus renex-legacy/js/e2e.js).
     // Upload ist idempotent — Backend macht UPSERT in D1 + KV.

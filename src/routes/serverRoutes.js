@@ -2033,8 +2033,23 @@ async function channelPermissionsHandler({ request, env, me }, serverId, channel
     }
   } else {
     // member-target: targetId muss server_members-Row sein
-    const target = await getServerMembership(env, serverId, targetId.toLowerCase());
+    const targetHandleLc = targetId.toLowerCase();
+    const target = await getServerMembership(env, serverId, targetHandleLc);
     if (!target) return json(request, { error: 'target_not_member' }, 404);
+    // M1: Positions-Check auch für member-Targets (der role-Zweig hat ihn schon).
+    // Ohne ihn könnte ein Mod einem ranggleichen/höheren Member channel-scoped
+    // Overrides verpassen (z.B. einen Vorgesetzten aus einem Channel aussperren).
+    // Self-Targeting bleibt erlaubt (Mod legt privaten Channel an + gibt sich selbst
+    // Zugriff). Owner ist geschützt; Owner-Actor bypassed den Check.
+    if (targetHandleLc !== me) {
+      const [actorPos, targetPos] = await Promise.all([
+        getActorMaxRolePosition(env, serverId, me),
+        getActorMaxRolePosition(env, serverId, targetHandleLc),
+      ]);
+      if (!actorPos.isOwner && (target.is_owner === 1 || targetPos.position >= actorPos.position)) {
+        return json(request, { error: 'forbidden_target_higher_or_equal' }, 403);
+      }
+    }
   }
 
   // Sentinel: alles 0 → Row löschen statt "no-op"-Override speichern

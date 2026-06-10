@@ -1,4 +1,4 @@
-import { json, readJson, param, dmConvoId, isUUID } from '../utils.js';
+import { json, readJson, param, dmConvoId, isUUID, checkCsrf } from '../utils.js';
 import { requireSession, requireAnySession, rateLimit, pushToUserDO, pushToGroupMembers, isConvoMember } from '../auth.js';
 import { handleChatSend } from '../helpers/chatSend.js';
 import { canViewChannel } from '../lib/channelAccess.js';
@@ -8,6 +8,12 @@ import { canViewChannel } from '../lib/channelAccess.js';
 //              /chat/delivered, /chat/message/delete
 // ======================================================
 export async function handleChatRoutes(request, env, path, params, ctx) {
+  // L1: CSRF-Origin-Check (konsistent mit serverRoutes/groupRoutes). Skippt
+  // GET/OPTIONS/HEAD automatisch → /chat/list etc. unberührt; gated /chat/send +
+  // /chat/message/delete. SameSite=Strict mitigiert schon — dies ist Defense-in-Depth.
+  const csrfErr = checkCsrf(request);
+  if (csrfErr) return csrfErr;
+
   switch (path) {
 
     // =========================

@@ -797,7 +797,7 @@ export async function handleVoiceRoutes(request, env, path, params, ctx) {
     // GET /voice/turn-credentials
     // Self-hosted coturn auf turn.renex.id (Hetzner). Ephemere REST-API-
     // Credentials nach coturn use-auth-secret-Pattern:
-    //   username   = "<unix-expiry>:<handle>"
+    //   username   = "<unix-expiry>:<pseudonym>"   // V1: handle-frei (HMAC-Pseudonym, quota-bindbar)
     //   credential = base64(HMAC-SHA1(COTURN_SECRET, username))
     // coturn akzeptiert die Credentials nur bis zum expiry-Timestamp.
     // ──────────────────────────────────────────────────
@@ -819,8 +819,22 @@ export async function handleVoiceRoutes(request, env, path, params, ctx) {
 
       try {
         const expiry = Math.floor(Date.now() / 1000) + TTL_SEC;
-        const username = `${expiry}:${me}`;
 
+        // V1: handle-FREIER, aber pro-User STABILER Pseudonym im TURN-username.
+        // coturn loggt Allocations per username → so steht KEIN Klartext-Handle in
+        // den TURN-Logs (A2 / coturn-Compromise / Hetzner-Staff). Deterministisch
+        // pro Handle, damit coturn `user-quota` weiter bindet; nur mit COTURN_SECRET
+        // auf den Handle rückführbar.
+        const uidKey = await crypto.subtle.importKey(
+          "raw", new TextEncoder().encode(secret),
+          { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+        );
+        const uidBuf = await crypto.subtle.sign("HMAC", uidKey, new TextEncoder().encode(`turn-uid:${me}`));
+        const uid = btoa(String.fromCharCode(...new Uint8Array(uidBuf)))
+          .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "").slice(0, 20);
+        const username = `${expiry}:${uid}`;
+
+        // credential = base64(HMAC-SHA1(COTURN_SECRET, username)) — coturn REST-Pattern (SHA-1 vorgeschrieben)
         const key = await crypto.subtle.importKey(
           "raw",
           new TextEncoder().encode(secret),

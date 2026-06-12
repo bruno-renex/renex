@@ -30,6 +30,7 @@
   import { formatMessage, stripFormatting } from '../lib/messageFormat.js';
   import { openExternalLink } from '../stores/linkWarning.svelte.js';
   import { isGuestHandle, guestDisplayName } from '../lib/guestNames.js';
+  import { swipeReply } from '../lib/swipeReply.js';
 
   let { message, showSender = false, onReply = null, onEdit = null, onDelete = null, onReact = null, onJumpTo = null, onSenderClick = null, myHandle = null } = $props();
 
@@ -311,7 +312,7 @@
       {/if}
     </div>
   {/if}
-  <div class="bubble" class:me={message.isMe} class:tampered={message.verified === false} data-msg-id={message.id}>
+  <div class="bubble" class:me={message.isMe} class:tampered={message.verified === false} data-msg-id={message.id} use:swipeReply={canReply && onReply ? () => onReply(message) : null}>
     {#if showSender && !message.isMe}
       {#if onSenderClick}
         <button
@@ -611,6 +612,9 @@
     color: var(--text-primary);
     word-wrap: break-word;
     overflow-wrap: anywhere;
+    /* Swipe-to-Reply: vertikales Scrollen bleibt beim Browser, die horizontale
+       Geste übernimmt die swipeReply-Action (use:swipeReply auf dieser Bubble). */
+    touch-action: pan-y;
   }
 
   .bubble.me {

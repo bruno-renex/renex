@@ -232,6 +232,7 @@
               </div>
               <div class="srv-info">
                 <div class="srv-name">
+                  {#if s.unread > 0}<span class="srv-unread-dot" aria-label="ungelesen"></span>{/if}
                   {s.name}
                   {#if s.isOwner}
                     <span class="srv-owner-badge" title="Owner">👑</span>
@@ -461,6 +462,16 @@
   .srv-item:hover {
     background: var(--bg-panel-alt);
     border-color: var(--border-subtle);
+  }
+
+  .srv-unread-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-voice);
+    flex-shrink: 0;
+    vertical-align: middle;
   }
 
   .srv-avatar {

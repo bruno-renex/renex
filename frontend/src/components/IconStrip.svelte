@@ -5,15 +5,28 @@
 <script>
   import { inboxStore } from '../stores/inbox.svelte.js';
   import ProfileDropdown from './ProfileDropdown.svelte';
+  import { serverStore } from '../stores/serverStore.svelte.js';
 
   let activeSection = $derived(inboxStore.activeSection);
   let unreadDms = $derived(inboxStore.totalUnreadDms);
   let unreadGroups = $derived(inboxStore.totalUnreadGroups);
   let missedVoice = $derived(inboxStore.missedUnseenVoice);
+  let unreadServers = $derived(serverStore.totalServersUnread);
 
   function selectSection(name) {
     inboxStore.setSection(name);
   }
+
+  // Server-Liste (inkl. Unread pro Server) initial laden + bei jeder Unread-Änderung
+  // debounced neu ziehen → der Punkt am Servers-Tab + pro Server aktualisiert sich
+  // ~live. loadServers ändert nur _servers, nicht unreadCounts → kein Loop.
+  let _srvRefreshTimer = null;
+  $effect(() => {
+    void inboxStore.unreadCounts;   // Abhängigkeit: reagiert auf jede Unread-Änderung
+    clearTimeout(_srvRefreshTimer);
+    _srvRefreshTimer = setTimeout(() => { void serverStore.loadServers(); }, 1200);
+    return () => clearTimeout(_srvRefreshTimer);
+  });
 </script>
 
 <nav class="icon-strip" aria-label="Sections">
@@ -84,6 +97,9 @@
         <line x1="6" y1="12" x2="6.01" y2="12"/>
         <line x1="6" y1="19" x2="6.01" y2="19"/>
       </svg>
+      {#if unreadServers > 0}
+        <span class="strip-dot" aria-label="ungelesene Channel-Nachrichten"></span>
+      {/if}
     </button>
   </div>
 
@@ -167,6 +183,17 @@
     height: 24px;
     background: var(--accent-voice);
     border-radius: 0 3px 3px 0;
+  }
+
+  .strip-dot {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--accent-voice);
+    box-shadow: 0 0 0 2px var(--bg-panel);
   }
 
   .strip-badge {

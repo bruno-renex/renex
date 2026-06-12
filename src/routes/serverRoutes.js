@@ -586,12 +586,16 @@ async function listServers({ request, env, me }) {
   const r = await env.RENEX_DB.prepare(
     `SELECT s.id, s.name, s.description, s.icon_r2_key, s.created_at,
             sm.is_owner,
-            (SELECT COUNT(*) FROM server_members sm2 WHERE sm2.server_id = s.id) AS member_count
+            (SELECT COUNT(*) FROM server_members sm2 WHERE sm2.server_id = s.id) AS member_count,
+            (SELECT COALESCE(SUM(uc.count), 0)
+               FROM unread_counters uc
+               JOIN conversations c ON c.id = uc.sender AND c.type = 'channel'
+              WHERE uc.owner = ? AND c.server_id = s.id) AS unread
      FROM servers s
      JOIN server_members sm ON sm.server_id = s.id
      WHERE sm.user_handle = ?
      ORDER BY s.created_at ASC`
-  ).bind(me).all();
+  ).bind(me, me).all();
 
   const servers = (r.results || []).map(row => ({
     id:          row.id,
@@ -601,6 +605,7 @@ async function listServers({ request, env, me }) {
     memberCount: row.member_count,
     isOwner:     row.is_owner === 1,
     createdAt:   row.created_at,
+    unread:      row.unread || 0,
   }));
 
   return json(request, { servers });

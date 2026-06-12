@@ -492,6 +492,7 @@ async function joinByToken(token, cfTurnstileToken = null) {
 
 export const serverStore = {
   get servers()              { return _servers; },
+  get totalServersUnread()   { return _servers.reduce((sum, s) => sum + (s.unread || 0), 0); },
   get selectedServerId()     { return _selectedServerId; },
   get selectedServerDetail() { return _selectedServerDetail; },
   get isLoading()            { return _isLoading; },

@@ -247,6 +247,7 @@ export default {
   // ── Pulse (Phase 6.5) ──────────────────────────────
   pulseOn:                 "Pulse on",
   pulseOff:                "Pulse off",
+  pulseHintText:           "Pulse — see when someone's really there. Tap to turn it on.",
   pulsePermTitle:          "Enable Pulse",
   pulsePermBody:           "RENEX uses subtle motion of your device to make your presence visible to the other person.",
   pulsePermPoint1:         "Entirely on your device",

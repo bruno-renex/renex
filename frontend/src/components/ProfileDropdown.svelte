@@ -23,6 +23,7 @@
   import SettingsDevicesPanel from './SettingsDevicesPanel.svelte';
   import DebugOverlay from './DebugOverlay.svelte';
   import { isStandalone, requestInstallPrompt } from '../lib/pwaInstall.js';
+  import { toastStore } from '../stores/toast.svelte.js';
 
   let lang = $derived(i18nStore.lang);
   // Sprach-abhängige Manifest-URL: DE → /manifest-de/, sonst → /manifesto/
@@ -34,6 +35,9 @@
   let showDeleteAccountModal = $state(false);
   let showDevicesModal = $state(false);
   let showDebugOverlay = $state(false);
+  // Debug-Eintrag ist für Nutzer versteckt — sichtbar nur wenn renex_debug gesetzt ist
+  // (A: ?debug=1 in der URL, B: 7× Tap auf den Avatar). Siehe main.js + registerDebugTap.
+  let debugEnabled = $state(typeof localStorage !== 'undefined' && localStorage.getItem('renex_debug') === '1');
   let myUser = $derived(userStore.myUser);
   let displayName = $derived(userStore.displayName);
 
@@ -46,6 +50,23 @@
   function handleInstallApp() {
     isOpen = false;
     requestInstallPrompt();
+  }
+
+  // Versteckter Debug-Zugang (B): 7× Tap auf den Avatar (innerhalb 2s) toggelt das
+  // renex_debug-Flag → Debug-Eintrag erscheint/verschwindet. Toast als Feedback.
+  let debugTaps = 0;
+  let debugTapTimer = null;
+  function registerDebugTap() {
+    debugTaps++;
+    clearTimeout(debugTapTimer);
+    debugTapTimer = setTimeout(() => { debugTaps = 0; }, 2000);
+    if (debugTaps >= 7) {
+      debugTaps = 0;
+      debugEnabled = !debugEnabled;
+      if (debugEnabled) localStorage.setItem('renex_debug', '1');
+      else localStorage.removeItem('renex_debug');
+      toastStore.push(debugEnabled ? '🛠️ Debug-Menü aktiviert' : 'Debug-Menü versteckt', { kind: 'info', ttl: 3000 });
+    }
   }
 
   // Initials aus Handle (oder Display-Name falls vorhanden)
@@ -124,7 +145,7 @@
     type="button"
     class="profile-circle"
     class:open={isOpen}
-    onclick={toggle}
+    onclick={(e) => { registerDebugTap(); toggle(e); }}
     aria-label="Profile menu"
     aria-expanded={isOpen}
     aria-haspopup="menu"
@@ -192,14 +213,16 @@
         {lang.devicesLabel || "Geräte"}
       </button>
 
-      <!-- Debug / Diagnose -->
-      <button
-        type="button"
-        class="dropdown-item"
-        onclick={() => { showDebugOverlay = true; close(); }}
-      >
-        🛠️ {lang.debugLabel || "Debug / Diagnose"}
-      </button>
+      <!-- Debug / Diagnose — versteckt (renex_debug): via ?debug=1 oder 7× Avatar-Tap -->
+      {#if debugEnabled}
+        <button
+          type="button"
+          class="dropdown-item"
+          onclick={() => { showDebugOverlay = true; close(); }}
+        >
+          🛠️ {lang.debugLabel || "Debug / Diagnose"}
+        </button>
+      {/if}
 
       <div class="divider"></div>
 

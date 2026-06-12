@@ -18,6 +18,12 @@ if (params.get("dev") !== "skipSessionCheck") {
   sessionStore.check();
 }
 
+// Versteckter Debug-Menü-Zugang: ?debug=1 schaltet ein, ?debug=0 aus (persistiert
+// in localStorage). Ohne das Flag ist der Debug-Eintrag im Profil-Menü unsichtbar.
+const _dbg = params.get("debug");
+if (_dbg === "1") localStorage.setItem("renex_debug", "1");
+else if (_dbg === "0") localStorage.removeItem("renex_debug");
+
 const app = mount(App, {
   target: document.getElementById('app'),
 });

@@ -38,3 +38,6 @@ frontend/public/press/renex-press-kit.zip
 frontend/public/press/_staging/
 # Raw video masters (encoded outputs are committed; raws kept local only)
 assets/press/_sources/
+
+# Internes Launch-Playbook (Strategie/Runbook/Known-Issues) — lokal behalten, NICHT public
+docs/LAUNCH.md

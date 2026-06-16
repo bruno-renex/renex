@@ -1,6 +1,6 @@
 # RENEX — Vision & Strategy
 
-> **AI-FREE FOREVER. PASSKEY-ONLY. HUMANS ONLY.**
+> **BUILT TO RESIST AUTOMATION. PASSKEY-ONLY. HUMAN-FIRST.**
 
 **Status:** Living document
 **Version:** 1.0
@@ -55,11 +55,12 @@ Jede technische und produktstrategische Entscheidung wird gegen diese 5 Prinzipi
 - Die Identität des Users IST sein biometrischer Schlüssel.
 - Recovery via 12-Wort-Phrase (BIP39).
 
-### 2️⃣ AI-Free
-- Keine Bots, keine AI-Agents, keine automatisierten Accounts.
-- Technisch erzwungen: kein Public-API, Captcha-Hardening, Rate-Limits, Hardware-Attestation.
-- Sozial erzwungen: AGB explizit, sofortiger Bann bei Verstoß.
-- "Pure Human Verified"-Badge im Profil.
+### 2️⃣ Anti-AI (best-effort, kein Versprechen)
+- Ziel: keine Bots, keine AI-Agents, keine automatisierten Accounts — gebaut um Automatisierung *teuer* zu machen, nicht um „keine AI" zu garantieren.
+- Technisch erschwert: keine Bot-API, keine Webhooks, kein Integration-Layer, Captcha-Hardening, Rate-Limits.
+- Sozial flankiert: AGB explizit, Bann bei Verstoß.
+- Ehrlich: 100% AI-frei ist nicht garantierbar (siehe Manifesto + Honest-Claim). Wir kämpfen dafür — versprechen es aber nicht.
+- "Pure Human Verified"-Badge im Profil (Signal, kein Beweis).
 
 ### 3️⃣ Open Standard
 - Vollständig dokumentiertes Protokoll (RENEX Protocol v1).
@@ -132,7 +133,7 @@ Jede technische und produktstrategische Entscheidung wird gegen diese 5 Prinzipi
 ### Unique Selling Propositions
 
 1. **"Erster Passkey-only Messenger der Welt"** — technische Pionier-Position
-2. **"AI-Free Forever"** — sozial-technisches Versprechen
+2. **"Built to resist automation"** — sozial-technisches Prinzip (bewusst KEIN „AI-Free"-Versprechen, siehe Honest-Claim)
 3. **"Discord-Quality, Signal-Privacy"** — Best-of-both-worlds
 4. **"Schweizer Standard, weltweit verfügbar"** — Trust durch Herkunft
 
@@ -349,9 +350,9 @@ Jedes Device entschlüsselt nur seinen eigenen Payload
 - **Etymologie:** Frei wählbar — "Renaissance + Connection" oder "Real Network Exchange"
 - **Tagline:** "YOU ARE THE KEY."
 - **Sub-Taglines:**
-  - "AI-FREE FOREVER."
+  - "BUILT TO RESIST AUTOMATION."
   - "PASSKEY-ONLY."
-  - "HUMANS ONLY."
+  - "HUMAN-FIRST."
   - "Made in Switzerland 🇨🇭"
 
 ### Visual Identity
@@ -379,7 +380,7 @@ Jedes Device entschlüsselt nur seinen eigenen Payload
 6. **Schweizer Tech-Medien** — netzwoche, inside-it.ch, Privacy-fokussierte Outlets
 
 ### Launch-Slogan-Optionen
-- "The Messenger That AI Can't Touch"
+- "The Messenger Built to Resist Automation"
 - "For Humans. By Humans. About Humans."
 - "Discord Without the BS"
 - "Your Voice. Your Key. Your Privacy."
@@ -394,7 +395,7 @@ Jedes Device entschlüsselt nur seinen eigenen Payload
 > Wesentliche Änderungen: Phase 3 → Phase 3A (Voice deferred), Phase 4 deferred,
 > Phase 5 → Phase 5-Light, Phase 2 parallelisiert zu Phase 3A. Begründung: Phase 1
 > ist exzellente Foundation (Multi-Device-Krypto stable), Voice ist eigener Tech-Stack
-> (3-4 Wochen), Markenkern „AI-Free + Passkey-Only + Text-Discord-Killer" ist auch ohne
+> (3-4 Wochen), Markenkern „Anti-AI + Passkey-Only + Text-Discord-Killer" ist auch ohne
 > Voice valid. Voice + Signal Protocol gemeinsam in Phase 8 als v2.0-Sicherheits-Update.
 
 > **Roadmap-Acceleration 2026-05-28:** Phase 3A 3 Wochen vor Plan fertig (2026-05-27),

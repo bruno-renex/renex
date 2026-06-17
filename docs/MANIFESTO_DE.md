@@ -337,7 +337,7 @@ Niche-first. Plane sechs bis zwölf Monate Netzwerk-Effekte ein. Wer in diesem M
 Zwei echte Moats, zwei kleinere Hebel:
 
 1. **„AI-Free" als Brand-Moat.** Discord, Slack, Telegram können das nicht imitieren, ohne ihr Bot- und Developer-Geschäft zu killen. Ein „AI-Free-Modus" bei jedem Incumbent wäre unglaubwürdig. Glaubwürdigkeit ist nicht imitierbar, wenn man zu viel zu verlieren hat.
-2. **Schweizer Jurisdiktion, abgesichert durch E2E.** Der Schweizer DSG-Standard deckt die wenigen Metadaten, die wir halten — ein echter rechtlicher Vorteil gegenüber US-Plattformen, nicht nur Standort-Marketing. Wir verkaufen es nicht zu hoch: Der Reference-Server läuft heute auf Cloudflare (US-Unternehmen, vom CLOUD Act erreichbar), Jurisdiktion allein ist also kein Schutzschild. Der echte Schutz: wir haben nichts Brauchbares herauszugeben — Kontakte, Nachrichten und Schlüssel sind E2E-verschlüsselt und erreichen uns nie im Klartext.
+2. **Schweizer Jurisdiktion, abgesichert durch E2E.** Der Schweizer DSG-Standard deckt die wenigen Metadaten, die wir halten — ein echter rechtlicher Vorteil gegenüber US-Plattformen, nicht nur Standort-Marketing. Wir verkaufen es nicht zu hoch: Der Reference-Server läuft heute auf Cloudflare (US-Unternehmen, vom CLOUD Act erreichbar), Jurisdiktion allein ist also kein Schutzschild. Der echte Schutz: der Inhalt erreicht uns nie im Klartext — Nachrichten, Anrufe und Schlüssel sind E2E-verschlüsselt; die wenigen Metadaten, die wir halten (Kontaktgraph, Zeitstempel), sind das Minimum — und sie via Sealed-Sender weiter zu reduzieren steht auf der Roadmap.
 3. Offener Standard + AGPL-Server → schützt vor Hyperscaler-fork-and-hide.
 4. Solo-Dev + Bootstrap → schnelle Iteration, kein Investor-Druck, prinzipientreu statt Sellout.
 

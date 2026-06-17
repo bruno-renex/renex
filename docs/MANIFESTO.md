@@ -337,7 +337,7 @@ Niche-first. Plan six to twelve months of network effects. Anyone who grows fast
 Two real moats, two smaller levers:
 
 1. **"AI-Free" as a brand moat.** Discord, Slack, Telegram cannot imitate this without killing their bot and developer business. An "AI-Free mode" at any incumbent would be unbelievable. Credibility is not imitable when you have too much to lose.
-2. **Swiss jurisdiction, backed by E2E.** Swiss DSG covers the little metadata we hold — a real legal edge over US-based platforms, not just location marketing. We don't oversell it: the reference server still runs on Cloudflare (US-domiciled, so the CLOUD Act can reach it), which means jurisdiction alone is no shield. The real protection is that there's nothing useful to surrender — contacts, messages, and keys are E2E-encrypted and never reach us in clear.
+2. **Swiss jurisdiction, backed by E2E.** Swiss DSG covers the little metadata we hold — a real legal edge over US-based platforms, not just location marketing. We don't oversell it: the reference server still runs on Cloudflare (US-domiciled, so the CLOUD Act can reach it), which means jurisdiction alone is no shield. The real protection is that the content never reaches us in clear — messages, calls, and keys are E2E-encrypted; the metadata we do hold (the contact graph, timestamps) is the minimum, and shrinking it via sealed-sender is on the roadmap.
 3. Open standard + AGPL server → protects against hyperscaler forks-and-hide.
 4. Solo dev + bootstrap → fast iteration, no investor pressure, principled rather than sellout.
 

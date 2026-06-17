@@ -52,7 +52,7 @@ RENEX is not "another messenger" — it is a deliberate response to an increasin
 
 Three pillars hold it up. Identity is **passkey-only** (WebAuthn/FIDO2): no email to scrape, no phone number to triangulate, no password to leak. Communication is **end-to-end encrypted** across DMs, groups, and voice signaling — the server can never read plaintext. And the platform is **human-first by design**: no bot APIs, no webhooks, no public integration layer, because those are precisely the surfaces automation exploits.
 
-RENEX is open-source under a tri-license (spec, docs, and frontend under MIT or Apache-2.0; the reference server under AGPL-3.0), runs on Cloudflare Workers with a Svelte 5 PWA front end, and is built solo and bootstrap-first by Bruno Hochstrasser in Switzerland. RENEX is currently **pre-beta and has not undergone third-party security audit**; a public beta is planned for 2026.
+RENEX is open-source under a tri-license (spec, docs, and frontend under MIT or Apache-2.0; the reference server under AGPL-3.0), runs on Cloudflare Workers with a Svelte 5 PWA front end, and is built solo and bootstrap-first by Bruno Hochstrasser in Switzerland. RENEX is currently **in public beta and has not undergone third-party security audit**.
 
 ### 🇩🇪 Deutsch
 
@@ -67,7 +67,7 @@ RENEX ist nicht „noch ein Messenger" — sondern eine bewusste Antwort auf ein
 
 Drei Säulen tragen es. Die Identität ist **Passkey-only** (WebAuthn/FIDO2): keine E-Mail zum Abgreifen, keine Telefonnummer zum Triangulieren, kein Passwort zum Leaken. Die Kommunikation ist **Ende-zu-Ende-verschlüsselt** über DMs, Gruppen und Voice-Signaling — der Server kann nie Klartext lesen. Und die Plattform ist **human-first by design**: keine Bot-APIs, keine Webhooks, kein Public-Integration-Layer, weil genau das die Flächen sind, die Automatisierung ausnutzt.
 
-RENEX ist Open Source unter einer Tri-Lizenz (Spec, Docs und Frontend unter MIT oder Apache-2.0; der Reference-Server unter AGPL-3.0), läuft auf Cloudflare Workers mit einem Svelte-5-PWA-Frontend und wird solo und bootstrap-first von Bruno Hochstrasser in der Schweiz gebaut. RENEX ist aktuell **Pre-Beta und ohne externes Security-Audit**; eine Public Beta ist für 2026 geplant.
+RENEX ist Open Source unter einer Tri-Lizenz (Spec, Docs und Frontend unter MIT oder Apache-2.0; der Reference-Server unter AGPL-3.0), läuft auf Cloudflare Workers mit einem Svelte-5-PWA-Frontend und wird solo und bootstrap-first von Bruno Hochstrasser in der Schweiz gebaut. RENEX ist aktuell **in der Public Beta und ohne externes Security-Audit**.
 
 ---
 
@@ -114,7 +114,7 @@ Full spec: [`PULSE.md`](./PULSE.md). Live demo loop: see §9 media (`landing-pul
 
 RENEX deliberately **does not over-claim.** Accurate descriptions protect both the project and the journalist:
 
-- ✅ **Say:** "RENEX makes automation expensive" · "built to resist automation" · "no bot APIs by design" · "human-first" · "pre-beta, not yet audited".
+- ✅ **Say:** "RENEX makes automation expensive" · "built to resist automation" · "no bot APIs by design" · "human-first" · "public beta, not yet audited".
 - ❌ **Avoid:** "guarantees every user is human" · "humans only" (as a literal claim) · "impossible to bot" · "unhackable" · "proven secure".
 
 The project's own framing: *"We don't prove humanity — we make automation expensive."* The marketing line **"You have a pulse. Bots don't."** is a statement of intent, not a technical guarantee — please treat it as the slogan it is, not a claim of detection.
@@ -130,7 +130,7 @@ RENEX Protocol v1 has **not** undergone third-party security review (planned for
 | **Name** | RENEX |
 | **Category** | Messenger + open protocol for human-first, E2E communication |
 | **Tagline** | YOU ARE THE KEY. |
-| **Status** | Pre-beta (not externally audited). Public beta planned 2026. |
+| **Status** | Public beta (not externally audited). |
 | **Identity** | Passkey-only (WebAuthn / FIDO2) — no email, phone, or password |
 | **Encryption** | E2E for DMs, groups (sender-keys), and voice signaling (encrypted SDP/ICE) |
 | **Human-first** | No bot APIs, no webhooks, no public integration layer (by design) |
@@ -149,7 +149,7 @@ RENEX Protocol v1 has **not** undergone third-party security review (planned for
 
 ---
 
-## 8. Feature status (current, pre-beta)
+## 8. Feature status (current, public beta)
 
 - ✅ Passkey auth (WebAuthn) on all modern browsers
 - ✅ E2E DMs (multi-device, up to 5 devices per user)

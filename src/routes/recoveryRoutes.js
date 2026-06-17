@@ -57,7 +57,7 @@ export async function handleRecoveryRoutes(request, env, path, params) {
 
         // Rate-Limit: Init wird normalerweise 1× pro Lifetime aufgerufen.
         // 5/h pro User reicht und schützt gegen Bug-Schleifen.
-        const rl = await rateLimit(env, `recovery_init:${handle}`, 3600_000, 5);
+        const rl = await rateLimit(env, `recovery_init:${handle}`, 3600_000, 5, { strict: true });
         if (!rl) return json(request, { error: "Too many requests" }, 429);
 
         const body = await readJson(request);
@@ -181,7 +181,7 @@ export async function handleRecoveryRoutes(request, env, path, params) {
         const handle = session.handle;
 
         // Anti-Brute-Force-Limit: 5/h ist ausreichend (Spec §8 Edge 5)
-        const rl = await rateLimit(env, `recovery_verify:${handle}`, 3600_000, 5);
+        const rl = await rateLimit(env, `recovery_verify:${handle}`, 3600_000, 5, { strict: true });
         if (!rl) return json(request, { error: "Too many requests" }, 429);
 
         const body = await readJson(request);

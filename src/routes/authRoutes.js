@@ -72,7 +72,7 @@ export async function handleAuthRoutes(request, env, path, params) {
 
         // Rate Limit: max. 5 Registrierungsversuche pro IP pro Minute (fail-closed)
         const ip = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
-        const rlOk = await rateLimit(env, `register_start:${ip}`, 60_000, 5);
+        const rlOk = await rateLimit(env, `register_start:${ip}`, 60_000, 5, { strict: true });
         if (!rlOk) return json(request, { error: "Too many requests" }, 429);
 
         // Handle-Sperre prüfen (gelöschte Accounts)
@@ -360,9 +360,15 @@ export async function handleAuthRoutes(request, env, path, params) {
           env,
           `login_start:${ip}:${handle}`,
           60_000,
-          10
+          10,
+          { strict: true }
         );
         if (!ok) return json(request, { error: "Too many requests" }, 429);
+
+        // M2-Hardening (Review #1): zusätzlicher Pro-Handle-Deckel, IP-unabhängig,
+        // gegen verteilte Brute-Force über rotierende IPs.
+        const okHandle = await rateLimit(env, `login_handle:${handle}`, 60_000, 15, { strict: true });
+        if (!okHandle) return json(request, { error: "Too many requests" }, 429);
 
         const credentials = await readCredentials(env, handle);
 

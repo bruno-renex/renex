@@ -12,7 +12,7 @@ const LOGIN_FAIL_TTL_S  = 300;            // Zähler-TTL ohne Lockout: 5 min
 
 export async function handleLoginFinish(request, env) {
   const ip = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
-  const ok = await rateLimit(env, `login_finish:${ip}`, 60_000, 20);
+  const ok = await rateLimit(env, `login_finish:${ip}`, 60_000, 20, { strict: true });
   if (!ok) return json(request, { error: "Too many requests" }, 429);
 
   const body = await readJson(request);

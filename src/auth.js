@@ -179,8 +179,35 @@ export async function requireAnySession(request, env) {
   return requireGuestSession(request, env);
 }
 
-export async function rateLimit(env, key, windowMs, limit, { failOpen = false } = {}) {
+export async function rateLimit(env, key, windowMs, limit, { failOpen = false, strict = false } = {}) {
+  // STRICT (M2): atomarer Durable-Object-Limiter für abuse-kritische Buckets
+  // (login/register/recovery). Verhindert das Burst-Overshoot der nicht-atomaren
+  // KV-Zählung. Bei JEDEM DO-Fehler → Fallback auf den KV-Pfad unten, damit die
+  // failOpen/failClosed-Semantik exakt erhalten bleibt. Siehe src/rateLimiterDO.js.
+  if (strict) {
+    if (env?.RATE_LIMITER_DO) {
+      try {
+        const stub = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(key));
+        const res = await stub.fetch(`https://rl/check?w=${windowMs}&l=${limit}`, { method: "POST" });
+        if (res.ok) {
+          const data = await res.json();
+          return data.allow === true;
+        }
+        // non-ok → sichtbar degradieren auf KV (Finding #3)
+        console.warn("⚠️ rateLimit: DO antwortete non-ok, degradiert auf KV:", key, res.status);
+      } catch (err) {
+        console.error("⚠️ rateLimit: DO-Fehler, degradiert auf KV:", key, err.message);
+      }
+    } else {
+      // Mis-Deploy / fehlendes Binding → sonst still nicht-atomar (Finding #6)
+      console.warn("⚠️ rateLimit: strict angefordert, aber RATE_LIMITER_DO nicht gebunden — KV-Fallback:", key);
+    }
+  }
+
   try {
+    // Defensiv: ungültiges Fenster/Limit nie still durchwinken (Finding #2 — der
+    // Guard existierte nur im DO, fehlte aber im KV-Fallback der bei DO-Ausfall greift).
+    if (!windowMs || !Number.isFinite(limit) || limit < 0) return failOpen ? true : false;
     const now = Date.now();
     const bucket = Math.floor(now / windowMs);
     const kvKey = `rl:${key}:${bucket}`;

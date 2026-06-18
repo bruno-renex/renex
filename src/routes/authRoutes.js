@@ -46,6 +46,11 @@ export async function handleAuthRoutes(request, env, path, params) {
     }
     const session = await requireAnySession(request, env);
     if (!session) return json(request, { error: "Not authenticated" }, 401);
+    // Anti-Enumeration: Profile-Lookups pro IP deckeln (60/min reicht locker für
+    // legitime Group-Member-DisplayName-Lookups). Review-Fast-Follow #8.
+    const lookupIp = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
+    const rlLookup = await rateLimit(env, `profile_lookup:${lookupIp}`, 60_000, 60);
+    if (!rlLookup) return json(request, { error: "Too many requests" }, 429);
     const targetHandle = profileMatch[1];
     const profile = await readProfile(env, targetHandle);
     return json(request, profile);
@@ -462,7 +467,7 @@ export async function handleAuthRoutes(request, env, path, params) {
         if (!body) return json(request, { error: "Invalid JSON" }, 400);
 
         // Rate-Limit: max. 10 Profil-Updates pro Stunde pro User
-        const rlOk = await rateLimit(env, `profile_update:${session.handle}`, 3600_000, 10);
+        const rlOk = await rateLimit(env, `profile_update:${session.handle}`, 3600_000, 10, { strict: true });
         if (!rlOk) return json(request, { error: "Too many requests" }, 429);
 
         const check = validateDisplayName(body.display_name);

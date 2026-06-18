@@ -24,6 +24,11 @@ export async function handleLoginFinish(request, env) {
     return json(request, { error: "Invalid handle" }, 400);
   }
 
+  // Pro-Handle-Deckel (IP-unabhängig) gegen verteilte Brute-Force über rotierende
+  // IPs — komplementär zum IP-Limit oben + dem login_fail-Lockout. Review #7.
+  const okHandle = await rateLimit(env, `login_finish_handle:${handle}`, 60_000, 20, { strict: true });
+  if (!okHandle) return json(request, { error: "Too many requests" }, 429);
+
   // Handle-Lockout prüfen (verhindert Brute-Force von verschiedenen IPs)
   const failKey = `login_fail:${handle}`;
   const failRaw = await env.RENEX_KV.get(failKey);

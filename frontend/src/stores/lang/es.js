@@ -115,7 +115,7 @@ export default {
   recoveryLoginDoneIntro:    "Tus claves se han descifrado:",
   recoveryStatsCmks:         "Conversaciones DM",
   recoveryStatsGsks:         "Grupos",
-  recoveryLoginTodoNote:     "Nota: la restauración del historial de mensajes en este navegador nuevo llegará en una actualización posterior. Hasta entonces tus claves están respaldadas y tu cuenta es accesible.",
+  recoveryLoginTodoNote:     "Tus claves están restauradas — tus mensajes existentes vuelven a ser legibles en este dispositivo.",
   recoveryNotRegistered:     "Cuenta no encontrada. La recuperación necesita una cuenta existente.",
   recoveryInvalidPhrase:     "La frase no es válida (error BIP39).",
   recoveryNoBundle:          "No se encontró copia de recuperación.",

@@ -320,7 +320,7 @@
         </div>
 
         <div class="rl-todo-warning">
-          {lang.recoveryLoginTodoNote || 'Hinweis: Die Wiederherstellung der Nachrichten-Historie auf diesem neuen Browser folgt mit Phase 1A.6 (Svelte-Cutover). Bis dahin: deine Schlüssel sind im Backend gesichert, dein Account ist zugänglich.'}
+          {lang.recoveryLoginTodoNote || 'Deine Schlüssel sind wiederhergestellt — deine bestehenden Nachrichten sind auf diesem Gerät wieder lesbar.'}
         </div>
 
         <button class="rl-btn-primary" onclick={close}>

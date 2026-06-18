@@ -115,7 +115,7 @@ export default {
   recoveryLoginDoneIntro:    "Your keys have been decrypted:",
   recoveryStatsCmks:         "DM conversations",
   recoveryStatsGsks:         "Groups",
-  recoveryLoginTodoNote:     "Note: restoring your message history on this new browser will follow in a later update. Until then your keys are safely backed up and your account is accessible.",
+  recoveryLoginTodoNote:     "Your keys are restored — your existing messages are readable again on this device.",
   recoveryNotRegistered:     "Account not found. Recovery needs an existing account.",
   recoveryInvalidPhrase:     "Phrase is not valid (BIP39 error).",
   recoveryNoBundle:          "No recovery bundle found.",

@@ -115,7 +115,7 @@ export default {
   recoveryLoginDoneIntro:    "Deine Schlüssel wurden entschlüsselt:",
   recoveryStatsCmks:         "DM-Konversationen",
   recoveryStatsGsks:         "Gruppen",
-  recoveryLoginTodoNote:     "Hinweis: Die Wiederherstellung der Nachrichten-Historie auf diesem neuen Browser folgt mit einem späteren Update. Bis dahin sind deine Schlüssel im Backend gesichert und dein Account ist zugänglich.",
+  recoveryLoginTodoNote:     "Deine Schlüssel sind wiederhergestellt — deine bestehenden Nachrichten sind auf diesem Gerät wieder lesbar.",
   recoveryNotRegistered:     "Account nicht gefunden. Recovery braucht einen existierenden Account.",
   recoveryInvalidPhrase:     "Phrase ist nicht gültig (BIP39-Fehler).",
   recoveryNoBundle:          "Kein Recovery-Bundle gefunden.",

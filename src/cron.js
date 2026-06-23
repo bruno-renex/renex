@@ -1,4 +1,5 @@
 import { pushToUserDO } from './auth.js';
+import { pushToUser } from './helpers/pushSend.js';
 
 // ======================================================
 // CRON: Automatische Nachrichten-Löschung (stündlich)
@@ -160,6 +161,16 @@ export async function scheduled(event, env) {
 
   // ── Revoked-Row-Retention (90d) ──────────────────────
   await _revokedRetention(env);
+
+  // ── Tägliches Feedback-Report (1×/Tag, Web-Push) ─────────────────────
+  // Cron feuert stündlich; Report gegated auf UTC-Stunde 12 = 14:00
+  // Europe/Zurich (Sommer) bzw. 13:00 (Winter). DST-Drift bewusst
+  // akzeptiert — für einen Daily-Report unkritisch. Genau 1×/Tag, kein
+  // Doppellauf. Eigenes try/catch in runDailyFeedbackReport → kein
+  // unhandled throw aus dem scheduled-Handler.
+  if (new Date().getUTCHours() === 12) {
+    await runDailyFeedbackReport(env);
+  }
 }
 
 // ======================================================
@@ -228,6 +239,89 @@ export async function runAutoRevokeStaleDevices(env, opts = {}) {
   }
 
   return { revoked: revokedCount, errors: errorCount };
+}
+
+// ======================================================
+// Daily Feedback Report — server-seitig, Web-Push-Zustellung.
+//
+// Ersetzt die lokale, Mac-abhängige Claude-Routine: läuft auch wenn der
+// Mac aus ist (das ist der ganze Punkt). Fragt die feedback-Tabelle der
+// letzten 24h ab und schickt bei ≥1 neuem Eintrag eine kurze Web-Push-
+// Notification mit Kategorie-Aufschlüsselung + Snippet der neuesten
+// Nachricht an den Haupt-Account (opts.handle, default 'renex').
+//
+// Bei 0 neuen Einträgen: KEIN Push (kein täglicher Leer-Spam).
+// Bei D1-Fehler: loggen + { sent:false } zurückgeben — KEIN throw, damit
+// der scheduled-Handler nicht crasht und die übrigen Sweeps durchlaufen.
+//
+// pushToUser MUSS awaited werden: fire-and-forget-Sub-Fetches werden vom
+// CF-Runtime nach Handler-Ende terminiert (→ Push käme nie an). Da diese
+// Funktion im awaited scheduled-Handler awaited wird, bleibt der Worker
+// bis zur Zustellung am Leben.
+//
+// Exportiert für Unit-Tests (siehe tests/cronFeedbackReport.test.js).
+// @returns {Promise<{sent: boolean, count: number, error?: string}>}
+// ======================================================
+const FEEDBACK_REPORT_HANDLE = 'renex';
+
+export async function runDailyFeedbackReport(env, opts = {}) {
+  const handle = opts.handle ?? FEEDBACK_REPORT_HANDLE;
+
+  try {
+    // created_at = ms-Epoch; strftime liefert Sekunden → *1000 für ms-Vergleich.
+    const res = await env.RENEX_DB.prepare(
+      `SELECT name, category, message, created_at FROM feedback
+       WHERE created_at >= (strftime('%s','now','-1 day')*1000)
+       ORDER BY created_at DESC`
+    ).all();
+
+    const rows = res.results || [];
+    if (rows.length === 0) {
+      console.log("📋 Feedback-Report: 0 neue Einträge (24h) — kein Push");
+      return { sent: false, count: 0 };
+    }
+
+    // Kategorie-Aufschlüsselung, deterministisch sortiert (Anzahl desc, dann
+    // alphabetisch): z.B. "2 feature · 1 bug".
+    const byCat = {};
+    for (const r of rows) {
+      const cat = r.category || "allgemein";
+      byCat[cat] = (byCat[cat] || 0) + 1;
+    }
+    const breakdown = Object.entries(byCat)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([cat, n]) => `${n} ${cat}`)
+      .join(" · ");
+
+    // Neueste Nachricht gekürzt (Whitespace normalisiert, max 80 Zeichen).
+    const newest = rows[0];
+    const rawMsg = (newest.message || "").replace(/\s+/g, " ").trim();
+    const snippet = rawMsg.slice(0, 80);
+    const ellipsis = rawMsg.length > 80 ? "…" : "";
+    const newestName = (newest.name || "Anonym").trim() || "Anonym";
+
+    const count = rows.length;
+    const title = "RENEX Feedback (24h)";
+    const body = `${count} neu: ${breakdown}\n„${snippet}${ellipsis}" — ${newestName}`;
+
+    // MUSS awaited werden (siehe Header-Kommentar).
+    await pushToUser(env, handle, {
+      title,
+      body,
+      tag: "renex-feedback-daily",
+      data: {
+        type: "feedback_report",
+        count,
+        url: "/feedback/",
+      },
+    });
+
+    console.log(`📋 Feedback-Report gesendet → @${handle}: ${count} neu (${breakdown})`);
+    return { sent: true, count };
+  } catch (e) {
+    console.error("❌ Feedback-Report fehlgeschlagen:", e);
+    return { sent: false, count: 0, error: e.message };
+  }
 }
 
 async function _revokedRetention(env) {

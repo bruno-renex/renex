@@ -30,6 +30,7 @@ import {
 import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
 import { wrapAttachmentPlaintext } from './attachmentCrypto.js';
 import { signMessage, verifyMessageSig } from './messageSig.js';
+import { sendChatWithPow } from './pow.js';
 import {
   ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
   findMyGSKAtTs, findPeerGSKAtTs,
@@ -722,7 +723,8 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo =
       body.replyCt = enc.ctB64;
     }
 
-    const r = await apiFetch('/chat/send', { method: 'POST', body });
+    // L1 Proof-of-Work: Nonce über (sid|epoch|sig) anhängen, Reject-Retry bei pow_weak.
+    const r = await sendChatWithPow(body, { sid, epoch, sig, ctB64 });
 
     if (!r.ok) return { ok: false, error: r.error || 'send_failed' };
 
@@ -1443,7 +1445,8 @@ export async function sendEncryptedGroup(myHandle, groupId, memberHandles, plain
       body.replyCt = enc.ctB64;
     }
 
-    const r = await apiFetch('/chat/send', { method: 'POST', body });
+    // L1 Proof-of-Work: Nonce über (sid|epoch|sig) anhängen, Reject-Retry bei pow_weak.
+    const r = await sendChatWithPow(body, { sid, epoch, sig, ctB64 });
     if (!r.ok) return { ok: false, error: r.error || 'send_failed' };
     return { ok: true, message: r.data?.message };
   } catch (e) {

@@ -3,6 +3,7 @@ import { requireAnySession, rateLimit, isAcceptedContact, pushToUserDO, pushToGr
 import { pushToUser, detectMentions } from './pushSend.js';
 import { resolveChannelPerms } from '../lib/channelAccess.js';
 import { Permissions } from '../lib/permissions.js';
+import { verifyPow, requiredPowBits, POW_FLOOR_BITS } from '../powCheck.js';
 
 // ======================================================
 // CHAT / SEND handler (extracted for line-count budget)
@@ -222,6 +223,23 @@ export async function handleChatSend(request, env, ctx) {
     );
     if (!ok) {
       return json(request, { error: "Send cooldown", retryAfterMs: 2000 }, 429);
+    }
+
+    // ── L1: Adaptives Proof-of-Work (Dark-Launch) ──────────────────────
+    // Verteuert automatisiertes Massen-Senden: jede echte Nachricht muss eine
+    // Nonce mit N führenden Null-Bits über SHA-256(sid|epoch|sig|nonce) tragen.
+    // EHRLICHER CLAIM: Kostenanstieg, KEIN Mensch-Beweis (Fork/Abtippen umgeht
+    // es by design). Scope = exakt dieser Block (Pulse returnt früh, Control ist
+    // ausgenommen). Dark-Launch: nur verifizieren+loggen; Enforcement erst wenn
+    // env.POW_ENFORCE==="1" gesetzt ist (tunebar ohne Redeploy). Floor via
+    // env.POW_MIN_BITS. verifyPow kostet genau EINEN Hash.
+    const powBits = requiredPowBits({ floorBits: Number(env.POW_MIN_BITS) || POW_FLOOR_BITS });
+    const pow = await verifyPow({ sid, epoch, sig, ctB64, nonce: body.powNonce, requiredBits: powBits });
+    if (!pow.ok) {
+      console.warn(`🔩 PoW ${pow.reason} me=${me} dev=${senderDeviceId || "?"} bits=${pow.bits}/${powBits} enforce=${env.POW_ENFORCE === "1"}`);
+      if (env.POW_ENFORCE === "1") {
+        return json(request, { error: "pow_weak", requiredBits: powBits, retryAfterMs: 0 }, 429);
+      }
     }
   }
 

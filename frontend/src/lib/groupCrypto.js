@@ -26,6 +26,7 @@ import { bytesToB64, b64ToBytes } from './bytes.js';
 import { apiFetch } from './api.js';
 import { captureException } from './sentry.js';
 import { loadPrivateKey, getDeviceId, loadSigningPrivKey } from './e2eKeys.js';
+import { CURRENT_WRAP_ALGO } from './wrapVersion.js';
 import {
   storePeerDevices, loadPeerDevicesIdb, findSenderDeviceJwk,
   getSigPubForDevice,
@@ -641,6 +642,8 @@ async function _wrapGskForDevices(devices, gskBytes) {
         { name: 'AES-GCM', iv }, aesKey, gskBytes
       );
       payloads.push({
+        // algoVersion (Phase 0.2): additiv, Legacy-Reader ignorieren es.
+        algoVersion: CURRENT_WRAP_ALGO,
         deviceId: d.deviceId,
         fromDeviceId,
         ivB64: bytesToB64(iv),

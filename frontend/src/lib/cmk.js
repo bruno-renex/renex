@@ -16,6 +16,7 @@
 import { idbGet, idbSet, idbDelete } from './idb.js';
 import { bytesToB64, b64ToBytes } from './bytes.js';
 import { loadPrivateKey, getDeviceId } from './e2eKeys.js';
+import { CURRENT_WRAP_ALGO } from './wrapVersion.js';
 
 // Lazy-Import um Circular zu vermeiden: cmkBundleSync importiert importAndStore-CMK.
 async function _scheduleBundleSync() {
@@ -556,6 +557,9 @@ export async function wrapCMKForInboxDevices(devices, cmkBytes) {
     );
 
     payloads.push({
+      // algoVersion (Phase 0.2): kennzeichnet das Wrap-Verfahren. Additiv —
+      // Legacy-Reader ignorieren es, neue lesen tolerant (wrapAlgoOf).
+      algoVersion: CURRENT_WRAP_ALGO,
       deviceId: d.deviceId,
       fromDeviceId,
       ivB64: bytesToB64(iv),

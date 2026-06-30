@@ -261,20 +261,26 @@ describe('encryptBundle / decryptBundle', () => {
     await expect(decryptBundle(new Uint8Array(5), key)).rejects.toThrow('invalid_blob');
   }, 10_000);
 
-  it('decrypt rejects bundle with unsupported version', async () => {
+  it('decrypt AKZEPTIERT künftige (höhere) Bundle-Version — forward-tolerant (Phase 0)', async () => {
+    // Vertrags-Änderung Phase 0: ein erfolgreich AES-GCM-entschlüsseltes Bundle ist
+    // bereits AUTHENTIFIZIERT — der frühere v===1||v===2-Whitelist verwarf künftige
+    // Versionen STILL und hat 2026 live alle CMKs beim Recovery vernichtet. Jetzt:
+    // jede authentische Version wird akzeptiert, unbekannte Felder bleiben erhalten.
     const phrase = generatePhrase();
     const salt = randomSalt();
     const key = await deriveMasterKey(phrase, salt);
-    // encryptBundle stempelt v auf 1 oder 2 (recovery.js:202) — den Pfad zur
-    // Version-Validation in decryptBundle erreicht man nur, indem der Blob
-    // direkt aus rohem AES-GCM-Ciphertext mit v=999 im Plaintext gebaut wird.
+    // v=999 (simulierte Zukunfts-Version) direkt als roher AES-GCM-Ciphertext bauen,
+    // da encryptBundle v auf 1/2 stempelt.
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const plaintext = new TextEncoder().encode(JSON.stringify({ v: 999, ts: 1, cmks: {}, gsks: {} }));
+    const plaintext = new TextEncoder().encode(JSON.stringify({ v: 999, ts: 1, cmks: { p: 'x' }, gsks: {}, futureField: 'pq' }));
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
     const blob = new Uint8Array(iv.length + ct.byteLength);
     blob.set(iv, 0);
     blob.set(new Uint8Array(ct), iv.length);
-    await expect(decryptBundle(blob, key)).rejects.toThrow('unsupported_bundle_version');
+    const out = await decryptBundle(blob, key); // VOR Phase 0: warf 'unsupported_bundle_version'
+    expect(out.v).toBe(999);
+    expect(out.cmks).toEqual({ p: 'x' });
+    expect(out.futureField).toBe('pq'); // unbekanntes Feld überlebt (tolerant lesen)
   }, 10_000);
 });
 

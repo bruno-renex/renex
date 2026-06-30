@@ -219,13 +219,33 @@ export async function encryptBundle(bundle, masterKey, handle) {
 }
 
 /**
- * Entschlüsselt einen Bundle-Blob. Versucht v=2 (mit AAD) zuerst,
- * fällt auf v=1 (legacy ohne AAD) zurück. Beide Versionen bleiben
- * permanent supportet — Migration on-the-fly bei nächstem Bundle-Sync.
+ * Forward-tolerante Bundle-Akzeptanz: Ein erfolgreich per AES-GCM (mit handle-AAD
+ * bzw. legacy ohne) entschlüsseltes + geparstes Bundle ist bereits KRYPTOGRAFISCH
+ * AUTHENTIFIZIERT (GCM-Tag + AAD). Der frühere `v===1||v===2`-Whitelist-Check trug
+ * NICHTS zur Sicherheit bei, verwarf aber jede künftige Version → genau dieser
+ * Mechanismus hat 2026 schon einmal live alle CMKs beim Recovery vernichtet (siehe
+ * cmkBundleSync.js). Daher: jede plausible (Objekt mit numerischer `v`)
+ * AUTHENTIFIZIERTE Version akzeptieren; unbekannte höhere Versionen liest der
+ * tolerante Leser (restoreCmksFromBundle) feldweise, statt sie zu verwerfen.
+ *
+ * FORWARD-COMPAT-VERTRAG (für künftige Bundle-Versionen, z.B. PQ-v3, VERBINDLICH):
+ * Verschlüsselung bleibt AES-GCM mit AAD = `renex:bundle:<handle>` (versions-
+ * UNABHÄNGIG); die cmks/gsks/rotationMaps-Maps bleiben erhalten; neue Versionen
+ * fügen NUR Felder HINZU. Leser dürfen NIE wegen einer höheren `v` ablehnen/löschen.
+ */
+function _isAuthenticBundle(b) {
+  return !!b && typeof b === 'object' && !Array.isArray(b) && typeof b.v === 'number';
+}
+
+/**
+ * Entschlüsselt einen Bundle-Blob. Versucht mit AAD (v>=2) zuerst, fällt auf
+ * legacy ohne AAD (v=1) zurück. Akzeptiert JEDE authentifizierte Version
+ * (forward-tolerant — siehe _isAuthenticBundle). Wirft nur bei falschem Key /
+ * korrupten Daten (beide Decrypt-Versuche scheitern am GCM-Tag).
  *
  * @param {Uint8Array} blob - [IV (12B)] [Ciphertext]
  * @param {CryptoKey} masterKey
- * @param {string} [handle] - Wenn gegeben → AAD-Versuch zuerst (v=2)
+ * @param {string} [handle] - Wenn gegeben → AAD-Versuch zuerst
  * @returns {Promise<object>} bundle-Objekt
  * @throws bei falschem Key oder korrupten Daten
  */
@@ -237,7 +257,8 @@ export async function decryptBundle(blob, masterKey, handle) {
   const ciphertext = blob.slice(AES_IV_SIZE);
   const aad = _bundleAad(handle);
 
-  // 1. Versuche v=2 mit AAD (current)
+  // 1. Mit AAD (v>=2 — current + künftig). GCM-Tag authentifiziert das Bundle
+  //    versions-unabhängig; jede authentische Version akzeptieren.
   if (aad) {
     try {
       const pt = await crypto.subtle.decrypt(
@@ -245,17 +266,17 @@ export async function decryptBundle(blob, masterKey, handle) {
         masterKey, ciphertext
       );
       const bundle = JSON.parse(new TextDecoder().decode(pt));
-      if (bundle && (bundle.v === 1 || bundle.v === 2)) return bundle;
+      if (_isAuthenticBundle(bundle)) return bundle;
     } catch {}
   }
 
-  // 2. Fallback v=1 (legacy ohne AAD) — auch ohne handle versucht
+  // 2. Fallback ohne AAD (v=1 legacy) — auch ohne handle versucht.
   try {
     const pt = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv }, masterKey, ciphertext
     );
     const bundle = JSON.parse(new TextDecoder().decode(pt));
-    if (bundle && (bundle.v === 1 || bundle.v === 2)) return bundle;
+    if (_isAuthenticBundle(bundle)) return bundle;
     throw new Error('unsupported_bundle_version');
   } catch (e) {
     throw new Error(e?.message || 'decrypt_failed');

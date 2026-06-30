@@ -41,3 +41,6 @@ assets/press/_sources/
 
 # Internes Launch-Playbook (Strategie/Runbook/Known-Issues) — lokal behalten, NICHT public
 docs/LAUNCH.md
+
+# Interner Krypto-Migrations-Bauplan (legt aktuelle Krypto-Schwächen offen) — NIE public
+docs/CRYPTO_PQ_SIGNAL_BUILDPLAN.md

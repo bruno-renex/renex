@@ -186,11 +186,13 @@ export async function syncBundleNow() {
  * @returns {Promise<{imported: number, skipped: number}>}
  */
 export async function restoreCmksFromBundle(bundle) {
-  // v=1 (Legacy ohne AAD) und v=2 (current, mit handle-AAD) sind beide gültig.
-  // decryptBundle hat die Authentizität bereits geprüft — Version-Check hier ist
-  // nur Schema-Sanity. Vorher: nur v=1 → v=2-Bundles wurden ignoriert (alle
-  // CMKs verloren beim Recovery).
-  if (!bundle || (bundle.v !== 1 && bundle.v !== 2) || !bundle.cmks) {
+  // FORWARD-TOLERANT: decryptBundle hat die Authentizität bereits via AES-GCM+AAD
+  // geprüft (GCM-Tag). KEIN Versions-Whitelist mehr — der frühere `v!==1 && v!==2`-
+  // Check verwarf jede künftige Version STILL und hat 2026 bereits einmal live alle
+  // CMKs beim Recovery vernichtet (Vorher: nur v=1 → v=2-Bundles ignoriert). Wir
+  // importieren die Felder, die wir verstehen (cmks/rotationMaps/gsks), und ignorieren
+  // unbekannte höhere Versionen. Forward-Compat-Vertrag: siehe recovery.js.
+  if (!bundle || typeof bundle !== 'object' || !bundle.cmks) {
     return { imported: 0, skipped: 0 };
   }
   let imported = 0;

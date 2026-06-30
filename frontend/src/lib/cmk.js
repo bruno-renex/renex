@@ -17,6 +17,7 @@ import { idbGet, idbSet, idbDelete } from './idb.js';
 import { bytesToB64, b64ToBytes } from './bytes.js';
 import { loadPrivateKey, getDeviceId } from './e2eKeys.js';
 import { CURRENT_WRAP_ALGO } from './wrapVersion.js';
+import { signWrapPayload } from './wrapSig.js';
 
 // Lazy-Import um Circular zu vermeiden: cmkBundleSync importiert importAndStore-CMK.
 async function _scheduleBundleSync() {
@@ -556,7 +557,7 @@ export async function wrapCMKForInboxDevices(devices, cmkBytes) {
       cmkBytes
     );
 
-    payloads.push({
+    const payload = {
       // algoVersion (Phase 0.2): kennzeichnet das Wrap-Verfahren. Additiv —
       // Legacy-Reader ignorieren es, neue lesen tolerant (wrapAlgoOf).
       algoVersion: CURRENT_WRAP_ALGO,
@@ -564,7 +565,12 @@ export async function wrapCMKForInboxDevices(devices, cmkBytes) {
       fromDeviceId,
       ivB64: bytesToB64(iv),
       ctB64: bytesToB64(new Uint8Array(ct)),
-    });
+    };
+    // Phase 0.3 (Dark-Launch): Wrap signieren (best-effort). Deckt algoVersion +
+    // Empfänger + Ciphertext ab → Downgrade-Schutz + Authentizität. wrapSig ist
+    // NICHT Teil seiner eigenen Signatur (canonicalWrap ignoriert es).
+    payload.wrapSig = await signWrapPayload(payload);
+    payloads.push(payload);
   }
 
   return payloads;

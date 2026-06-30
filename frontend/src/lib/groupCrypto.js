@@ -27,6 +27,7 @@ import { apiFetch } from './api.js';
 import { captureException } from './sentry.js';
 import { loadPrivateKey, getDeviceId, loadSigningPrivKey } from './e2eKeys.js';
 import { CURRENT_WRAP_ALGO } from './wrapVersion.js';
+import { signWrapPayload, logWrapVerify } from './wrapSig.js';
 import {
   storePeerDevices, loadPeerDevicesIdb, findSenderDeviceJwk,
   getSigPubForDevice,
@@ -641,14 +642,17 @@ async function _wrapGskForDevices(devices, gskBytes) {
       const ct = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv }, aesKey, gskBytes
       );
-      payloads.push({
+      const payload = {
         // algoVersion (Phase 0.2): additiv, Legacy-Reader ignorieren es.
         algoVersion: CURRENT_WRAP_ALGO,
         deviceId: d.deviceId,
         fromDeviceId,
         ivB64: bytesToB64(iv),
         ctB64: bytesToB64(new Uint8Array(ct)),
-      });
+      };
+      // Phase 0.3 (Dark-Launch): GSK-Wrap signieren (best-effort).
+      payload.wrapSig = await signWrapPayload(payload);
+      payloads.push(payload);
     } catch (e) {
       // Einzelne Devices mit korrupten Keys überspringen, statt alle zu kippen.
       captureException(e, { context: 'wrapGskForDevices', deviceId: d.deviceId });
@@ -946,6 +950,9 @@ export async function fetchMyGSKFromKV(groupId) {
       senderJwk = devs.find(d => d.deviceId === fromDeviceId)?.jwk || null;
     }
     if (!senderJwk) return null;
+
+    // Phase 0.3 Dark-Launch: GSK-Wrap-Sig verifizieren + loggen (KEIN Reject).
+    try { await logWrapVerify(r.data.payload, await getSigPubForDevice(me, fromDeviceId), `gsk ${me}/${fromDeviceId}`); } catch {}
 
     const gsk = await _unwrapGskFromPayload({ ivB64, ctB64 }, senderJwk);
     return gsk;

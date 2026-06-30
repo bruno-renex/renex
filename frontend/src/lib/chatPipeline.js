@@ -31,6 +31,7 @@ import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
 import { wrapAttachmentPlaintext } from './attachmentCrypto.js';
 import { signMessage, verifyMessageSig } from './messageSig.js';
 import { sendChatWithPow } from './pow.js';
+import { logWrapVerify } from './wrapSig.js';
 import {
   ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
   findMyGSKAtTs, findPeerGSKAtTs,
@@ -158,6 +159,9 @@ export async function tryFetchAndUnwrapCMK(fromHandle, opts = {}) {
         senderJwk = devs.find(d => d.deviceId === fromDeviceId)?.jwk || null;
       }
       if (!senderJwk) return null;
+
+      // Phase 0.3 Dark-Launch: Wrap-Sig verifizieren + loggen (KEIN Reject).
+      try { await logWrapVerify(r.data.payload, await getSigPubForDevice(fromHandle, fromDeviceId), `cmk ${fromHandle}/${fromDeviceId}`); } catch {}
 
       const cmk = await unwrapCMKFromPeer(ivB64, ctB64, senderJwk);
 
@@ -1179,6 +1183,9 @@ async function _doMirrorRotate(myHandle, peerHandle) {
           senderJwk = devs.find(d => d.deviceId === fromDeviceId)?.jwk || null;
         }
         if (!senderJwk) continue;
+
+        // Phase 0.3 Dark-Launch: Wrap-Sig verifizieren + loggen (KEIN Reject).
+        try { await logWrapVerify(r.data.payload, await getSigPubForDevice(peerHandle, fromDeviceId), `cmk ${peerHandle}/${fromDeviceId}`); } catch {}
 
         const fetched = await unwrapCMKFromPeer(ivB64, ctB64, senderJwk);
         if (!(fetched instanceof Uint8Array) || fetched.length !== 32) continue;

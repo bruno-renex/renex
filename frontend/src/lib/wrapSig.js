@@ -17,6 +17,7 @@
 // ======================================================
 import { loadSigningPrivKey } from './e2eKeys.js';
 import { bytesToB64, b64ToBytes } from './bytes.js';
+import { captureException } from './sentry.js';
 
 // Kanonische, domain-separierte Serialisierung der sicherheitsrelevanten Felder.
 // Feste Reihenfolge; '\n'-Trenner (Felder sind base64/ascii, enthalten kein '\n').
@@ -82,6 +83,15 @@ export async function logWrapVerify(payload, sigPubJwk, ctx) {
   const v = await verifyWrapPayload(payload, sigPubJwk);
   if (v.reason !== 'ok' && v.reason !== 'missing') {
     console.warn(`🔏 wrap_sig ${v.reason} ${ctx || ''}`.trim());
+    // 'invalid' = Sig VORHANDEN, verifiziert aber NICHT → potenzielle Manipulation/
+    // Downgrade-Versuch. Nach Sentry (aggregierbar) — DAS ist das Dark-Launch-Signal
+    // für die "safe to enforce?"-Entscheidung. 'no_pubkey'/'error' bleiben Konsole
+    // (Rollout-Rauschen: Pubkey noch nicht gecacht etc.). Nie werfen.
+    if (v.reason === 'invalid') {
+      try {
+        captureException(new Error('wrap_sig_invalid'), { context: 'wrapSig', where: String(ctx || '') });
+      } catch {}
+    }
   }
   return v;
 }

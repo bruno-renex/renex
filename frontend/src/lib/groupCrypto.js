@@ -1022,6 +1022,9 @@ export async function handleIncomingGSKMessage(msg) {
       return false;
     }
 
+    // Phase 0.3 Dark-Launch: GSK-Wrap-Sig verifizieren + loggen (KEIN Reject).
+    try { await logWrapVerify(payload, await getSigPubForDevice(from, senderDeviceId), `gsk-recv ${from}/${senderDeviceId}`); } catch {}
+
     let gsk;
     try {
       gsk = await _unwrapGskFromPayload(payload, senderJwk);

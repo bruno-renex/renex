@@ -118,4 +118,13 @@ describe('logWrapVerify', () => {
     // missing/error dürfen nicht werfen
     await expect(logWrapVerify(BASE, null, 'test')).resolves.toBeTruthy();
   });
+
+  it('invalid → wirft nicht (Sentry-Pfad), gibt reason=invalid', async () => {
+    const kp = await genSigKeypair();
+    const other = await genSigKeypair();
+    const otherPub = await crypto.subtle.exportKey('jwk', other.publicKey);
+    const wrap = { ...BASE, wrapSig: await manualSign(BASE, kp.privateKey) }; // Sig von kp, verifiziert gegen other → invalid
+    const v = await logWrapVerify(wrap, otherPub, 'test-invalid');
+    expect(v).toEqual({ ok: false, reason: 'invalid' });
+  });
 });

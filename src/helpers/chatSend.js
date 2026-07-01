@@ -4,6 +4,7 @@ import { pushToUser, detectMentions } from './pushSend.js';
 import { resolveChannelPerms } from '../lib/channelAccess.js';
 import { Permissions } from '../lib/permissions.js';
 import { verifyPow, requiredPowBits, POW_FLOOR_BITS } from '../powCheck.js';
+import { isKnownMessageType } from '../messageTypes.js';
 
 // ======================================================
 // CHAT / SEND handler (extracted for line-count budget)
@@ -148,6 +149,17 @@ export async function handleChatSend(request, env, ctx) {
   }
   if (typeof type === "string" && type.length > MAX_TYPE_LEN) {
     return json(request, { error: "type too large" }, 400);
+  }
+  // ── M0.5: Message-Type-Allowlist (Dark-Launch) ─────────────────────
+  // Unbekannte Types nur LOGGEN, Verhalten unverändert (heute = wie Chat-Msg).
+  // Enforcement erst via env.TYPE_ALLOWLIST_ENFORCE, wenn Logs zeigen dass kein
+  // legitimer Traffic unbekannte Types nutzt. Voraussetzung für sichere
+  // Einführung der pq_rekey/skdm-Control-Types (P3/P4).
+  if (!isKnownMessageType(type)) {
+    console.warn(`🧾 unknown_type "${String(type).slice(0, 32)}" me=${me} dev=${senderDeviceId || "?"} enforce=${env.TYPE_ALLOWLIST_ENFORCE === "1"}`);
+    if (env.TYPE_ALLOWLIST_ENFORCE === "1") {
+      return json(request, { error: "unknown_type" }, 400);
+    }
   }
   // sig: ECDSA P-256 Signatur (base64, max ~120 Zeichen)
   if (sig !== undefined && (typeof sig !== "string" || sig.length > 256)) {

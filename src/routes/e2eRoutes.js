@@ -44,6 +44,50 @@ export function isValidKemEkB64(v) {
   try { return atob(v).length === ML_KEM_EK_BYTES; } catch { return false; }
 }
 
+// ── M2 (PQXDH-Handshake): Prekey-Bundle-Validatoren (additiv, §4.3) ──
+// Nur STRUKTURELLE Wohlgeformtheit (Byte-Länge + Standard-base64). KEINE
+// Server-Signatur-Verify: der Server ist eine TOFU-Registry — die echte
+// Prekey-Sig-Prüfung macht der Initiator client-seitig (pqxdh.verifyPrekey).
+const X25519_PUB_BYTES = 32;   // X25519-Pub UND Ed25519-Pub sind beide 32 Bytes
+const ED25519_SIG_BYTES = 64;
+const PQXDH_ID = /^[A-Za-z0-9_-]{1,24}$/;   // Prekey-IDs (Client _rid(): ≤8 b64-alnum)
+
+/** Standard-base64 eines 32-Byte-Keys (X25519-Pub oder Ed25519-Pub). */
+export function isValid32ByteKeyB64(v) {
+  if (typeof v !== "string" || v.length < 43 || v.length > 44) return false;
+  try { return atob(v).length === X25519_PUB_BYTES; } catch { return false; }
+}
+/** Standard-base64 einer 64-Byte Ed25519-Signatur. */
+export function isValidEd25519SigB64(v) {
+  if (typeof v !== "string" || v.length < 86 || v.length > 88) return false;
+  try { return atob(v).length === ED25519_SIG_BYTES; } catch { return false; }
+}
+
+/**
+ * Validiert ein PQXDH-Publish-Bundle (Shape aus pqxdhKeys.buildPublishBundle).
+ * @returns {string|null} null = ok, sonst ein kurzer Fehler-Code.
+ */
+export function validatePqxdhUploadBundle(b) {
+  if (!b || typeof b !== "object") return "missing_body";
+  const { deviceId, ik, spk, pqspk, opks } = b;
+  if (typeof deviceId !== "string" || deviceId.length < 8 || deviceId.length > 64) return "bad_deviceId";
+  if (!ik || !isValid32ByteKeyB64(ik.ikX) || !isValid32ByteKeyB64(ik.ikEd)) return "bad_ik";
+  if (!spk || !PQXDH_ID.test(String(spk.spkId || "")) || !isValid32ByteKeyB64(spk.spk) || !isValidEd25519SigB64(spk.sig)) return "bad_spk";
+  if (!pqspk || !PQXDH_ID.test(String(pqspk.pqspkId || "")) || !isValidKemEkB64(pqspk.ek) || !isValidEd25519SigB64(pqspk.sig)) return "bad_pqspk";
+  if (!Array.isArray(opks) || opks.length > 100) return "bad_opks";   // 0 erlaubt (SPK-only-Device)
+  for (const o of opks) {
+    if (!o || !PQXDH_ID.test(String(o.opkId || "")) || !isValid32ByteKeyB64(o.opk)) return "bad_opk_entry";
+  }
+  if (new Set(opks.map(o => o.opkId)).size !== opks.length) return "dup_opkId";
+  return null;
+}
+
+// One-Time-Prekey-Consume-Rationierung (an den PrekeyDO durchgereicht):
+// ein Requester darf pro Ziel-Device max. CAP OPKs pro Fenster ziehen →
+// verhindert Pool-Erschöpfung (sonst fallen alle neuen Handshakes auf SPK-only).
+const PQXDH_OPK_CONSUME_WINDOW_MS = 3_600_000;   // 1 h
+const PQXDH_OPK_CONSUME_CAP = 8;
+
 // Devset-Generation pro User (KV-Counter). Bumpt bei Recipient-Set-Änderung
 // (KEM-Key-Change ODER Device-Add) → Client cached die Recipient-Menge per gen.
 async function _bumpDevsetGen(env, handle) {
@@ -561,6 +605,143 @@ export async function handleE2eRoutes(request, env, path, params) {
         }));
         const gen = await _getDevsetGen(env, user);
         return json(request, { gen, devices });
+      }
+      break;
+    }
+
+    // ======================================================
+    // PQXDH (M2): Prekey-Bundle-Publish + atomarer Consume + OPK-Count.
+    // Dark-Launch PUBLISH-ONLY (§4.3): Prekeys publizieren, Consume live
+    // beobachten (verify+log). Alles additiv → Legacy-Clients unberührt.
+    // ======================================================
+
+    // Eigenes Prekey-Bundle publizieren. IK/SPK/PQSPK → KV (klein, überschreibbar),
+    // OPK-Pubs → D1 (einzeln atomar konsumierbar). Nur öffentliches Material.
+    case "/e2e/pqxdh/upload": {
+      if (request.method === "POST") {
+        const session = await requireSession(request, env);   // Identitäts-Publish = echter User (kein Guest)
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+        const me = String(session.handle || "").toLowerCase();
+
+        const rl = await rateLimit(env, `pqxdh_upload:${me}`, 60_000, 10, { failOpen: true });
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
+
+        const body = await readJson(request);
+        const err = validatePqxdhUploadBundle(body);
+        if (err) return json(request, { error: `Invalid bundle (${err})` }, 400);
+        const { deviceId, ik, spk, pqspk, opks } = body;
+
+        await env.RENEX_KV.put(`e2e:pqxdh:bundle:${me}:${deviceId}`, JSON.stringify({
+          ik, spk, pqspk, updatedAt: Date.now(),
+        }));
+
+        // OPKs additiv (INSERT OR IGNORE): idempotenter Re-Upload. Resurrect'et
+        // keine bereits konsumierte ID, AUSSER der Client republiziert sie noch
+        // (dokumentierte Reuse-Kante → Fix: client-seitiger Fresh-ID-Topup, spätere
+        // Phase). D1-Fehler (z.B. Tabelle vor gegateter Migration) → Bundle liegt
+        // trotzdem in KV, SPK-only nutzbar; nicht hart failen (Dark-Launch).
+        let stored = 0;
+        if (opks.length) {
+          try {
+            const now = Date.now();
+            const stmt = env.RENEX_DB.prepare(
+              "INSERT OR IGNORE INTO pqxdh_opk (user_handle, device_id, opk_id, opk_pub, created_at) VALUES (?, ?, ?, ?, ?)"
+            );
+            await env.RENEX_DB.batch(opks.map(o => stmt.bind(me, deviceId, o.opkId, o.opk, now)));
+            stored = opks.length;
+          } catch (e) {
+            console.warn("pqxdh upload: OPK D1 batch failed (SPK-only bundle stored):", e?.message);
+          }
+        }
+        console.log(`🔑 pqxdh upload ${me}:${deviceId} — spk=${spk.spkId} pqspk=${pqspk.pqspkId} opks=${stored}`);
+        return json(request, { ok: true, opks: stored });
+      }
+      break;
+    }
+
+    // Prekey-Bundle EINES Ziel-Geräts holen + GENAU EINE OPK atomar konsumieren
+    // (PrekeyDO). Per-peer-device (§4.0 D1) → `device` ist Pflicht. 3-Wege-
+    // Access-Gate über BEIDE Membership-Tabellen (_sharesTrustContext). Rückgabe
+    // = single-opk-Wire für pqxdhKeys.decodeInitiatorBundle.
+    case "/e2e/pqxdh/bundle": {
+      if (request.method === "GET") {
+        const session = await requireAnySession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+        const me = String(session.handle || "").toLowerCase();
+        const user = (param(params, "user") || "").toLowerCase();
+        const device = String(param(params, "device") || "");
+        if (!user || !/^[a-z0-9_]+$/.test(user) || device.length < 8 || device.length > 64) {
+          return json(request, { error: "bad_params" }, 400);
+        }
+
+        const rl = await rateLimit(env, `pqxdh_bundle:${me}`, 60_000, 30, { failOpen: true });
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
+
+        if (user !== me && !(await _sharesTrustContext(env, me, user))) {
+          return json(request, { error: "Not found" }, 404);
+        }
+
+        const raw = await env.RENEX_KV.get(`e2e:pqxdh:bundle:${user}:${device}`);
+        if (!raw) return json(request, { error: "Not found" }, 404);
+        let stored;
+        try { stored = JSON.parse(raw); } catch { return json(request, { error: "Not found" }, 404); }
+
+        // Atomarer Consume EINER OPK via PrekeyDO (pro Ziel-Device serialisiert).
+        // DO ungebunden (vor gegatetem Binding) ODER Fehler → opk=null (SPK-only).
+        let opk = null, reason = "no_do";
+        if (env.PREKEY_DO) {
+          try {
+            const stub = env.PREKEY_DO.get(env.PREKEY_DO.idFromName(`pqxdh:${user}:${device}`));
+            const r = await stub.fetch(
+              `https://prekey/consume?w=${PQXDH_OPK_CONSUME_WINDOW_MS}&l=${PQXDH_OPK_CONSUME_CAP}`,
+              { method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ user, deviceId: device, requester: me }) }
+            );
+            if (r.ok) { const d = await r.json(); opk = d.opk || null; reason = d.reason || "ok"; }
+            else reason = "do_err";
+          } catch (e) {
+            console.warn("pqxdh bundle: DO consume failed, SPK-only:", e?.message);
+            reason = "do_exc";
+          }
+        }
+        // Dark-Launch verify+log: Upload→Consume→OPK-Dekrement beobachtbar.
+        console.log(`🔑 pqxdh bundle ${me}→${user}:${device} — opk=${opk ? opk.opkId : "none"} (${reason})`);
+        return json(request, {
+          deviceId: device,
+          ik: stored.ik,
+          spk: stored.spk,
+          pqspk: stored.pqspk,
+          opk,   // { opkId, opk } | null
+        });
+      }
+      break;
+    }
+
+    // Verbleibende OPKs eines Ziel-Geräts (Client-Topup-Signal + Dark-Launch-
+    // Beobachtung des OPK-Dekrements). Read-only D1-COUNT — kein DO nötig.
+    case "/e2e/pqxdh/opk-count": {
+      if (request.method === "GET") {
+        const session = await requireAnySession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+        const me = String(session.handle || "").toLowerCase();
+        const user = (param(params, "user") || "").toLowerCase();
+        const device = String(param(params, "device") || "");
+        if (!user || !/^[a-z0-9_]+$/.test(user) || device.length < 8 || device.length > 64) {
+          return json(request, { error: "bad_params" }, 400);
+        }
+        if (user !== me && !(await _sharesTrustContext(env, me, user))) {
+          return json(request, { count: 0 });
+        }
+        let count = 0;
+        try {
+          const row = await env.RENEX_DB.prepare(
+            "SELECT COUNT(*) AS n FROM pqxdh_opk WHERE user_handle = ? AND device_id = ?"
+          ).bind(user, device).first();
+          count = Number(row?.n) || 0;
+        } catch (e) {
+          console.warn("pqxdh opk-count D1 error:", e?.message);
+        }
+        return json(request, { count });
       }
       break;
     }

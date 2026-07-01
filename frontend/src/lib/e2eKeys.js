@@ -20,6 +20,8 @@
 import { idbGet, idbSet } from './idb.js';
 import { detectDeviceName } from './multidevice.js';
 import { captureException } from './sentry.js';
+import { bytesToB64 } from './bytes.js';
+import { getKemPublicKey } from './kemIdentity.js';
 
 const API = 'https://api.renex.id';
 
@@ -287,8 +289,19 @@ export async function uploadInboxKeyIfNeeded() {
     const sigPub = await getSigningPublicKeyJwk();
     const name   = detectDeviceName();
 
+    // M1 (Sesame-Core, Dark-Launch): ML-KEM-768-Prekey additiv mitpublizieren.
+    // Best-effort — schlägt es fehl, geht der klassische Upload trotzdem durch
+    // (Server akzeptiert kemEk optional). ratchet-caps erst ab P3.
+    let kemFields = {};
+    try {
+      const ek = await getKemPublicKey();
+      kemFields = { kemEk: bytesToB64(ek), caps: { hybrid: true, ratchet: false } };
+    } catch (e) {
+      console.warn('📮 kemEk-Publishing übersprungen (non-fatal):', e?.message);
+    }
+
     return await _uploadWithRetry(`${API}/e2e/inbox/upload`, {
-      jwk, deviceId, sigPub, name,
+      jwk, deviceId, sigPub, name, ...kemFields,
     });
   } catch (e) {
     captureException(e, { context: 'uploadInboxKeyIfNeeded' });

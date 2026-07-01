@@ -31,6 +31,7 @@ import { Toucan } from 'toucan-js';
 // Cloudflare Durable Object binding requirement — must be re-exported from entry point
 export { UserSessionDO } from './src/auth.js';
 export { RateLimiterDO } from './src/rateLimiterDO.js';
+export { PrekeyDO } from './src/prekeyDO.js';
 
 // ── SENTRY (Error-Tracking) ──────────────────────────────
 // DSN als Wrangler-Secret setzen: npx wrangler secret put SENTRY_DSN

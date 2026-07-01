@@ -14,7 +14,7 @@
 // das Remote-Bedrohungsmodell eines Async-Messengers dokumentierbar akzeptabel.
 // ======================================================
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
-import { x25519 } from '@noble/curves/ed25519.js';
+import { x25519, ed25519 } from '@noble/curves/ed25519.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
@@ -45,8 +45,23 @@ export function x25519Keygen() {
   const priv = x25519.utils.randomSecretKey();
   return { priv, pub: x25519.getPublicKey(priv) };
 }
+export function x25519PublicKey(priv) {
+  return x25519.getPublicKey(priv);
+}
 export function x25519Shared(myPriv, peerPub) {
   return x25519.getSharedSecret(myPriv, peerPub);
+}
+
+// ── Ed25519 (Identitäts-Signaturen für Prekeys / InitHdr) ───
+export function ed25519Keygen() {
+  const priv = ed25519.utils.randomSecretKey();
+  return { priv, pub: ed25519.getPublicKey(priv) };
+}
+export function edSign(msg, priv) {
+  return ed25519.sign(msg, priv);
+}
+export function edVerify(sig, msg, pub) {
+  try { return ed25519.verify(sig, msg, pub); } catch { return false; }
 }
 
 // ── CT-bindender Hybrid-Combiner ────────────────────────
@@ -67,6 +82,9 @@ function _concat(arrs) {
   for (const a of arrs) { out.set(a, o); o += a.length; }
   return out;
 }
+
+// Wiederverwendbar für andere Hybrid-KDFs (pqxdh.js Root, P3 Rekey).
+export { _lp as lenPrefix, _concat as concatBytes };
 
 /**
  * Der EINE Hybrid-Wrap-Key-Combiner (verbindlich, überall identisch).

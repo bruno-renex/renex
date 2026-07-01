@@ -36,6 +36,45 @@ function _isValidEcdsaPubJwk(jwk) {
   return _isValidEcdhPubJwk(jwk);
 }
 
+// ── M1 (Sesame-Core): ML-KEM-768-Prekey + Devset-Registry (additiv, KV-basiert) ──
+const ML_KEM_EK_BYTES = 1184;
+/** ML-KEM-768 encapsulation key (public): base64 von EXAKT 1184 Bytes. */
+export function isValidKemEkB64(v) {
+  if (typeof v !== "string" || v.length < 1560 || v.length > 1600) return false;
+  try { return atob(v).length === ML_KEM_EK_BYTES; } catch { return false; }
+}
+
+// Devset-Generation pro User (KV-Counter). Bumpt bei Recipient-Set-Änderung
+// (KEM-Key-Change ODER Device-Add) → Client cached die Recipient-Menge per gen.
+async function _bumpDevsetGen(env, handle) {
+  const key = `e2e:devset:gen:${handle}`;
+  const next = (Number(await env.RENEX_KV.get(key)) || 0) + 1;
+  await env.RENEX_KV.put(key, String(next));
+  return next;
+}
+async function _getDevsetGen(env, handle) {
+  return Number(await env.RENEX_KV.get(`e2e:devset:gen:${handle}`)) || 0;
+}
+
+// 3-Wege-Trust-Kontext (Kontakt ODER gemeinsame Gruppe ODER gemeinsamer
+// Server/Channel) — identisch zum /e2e/inbox/get-Gate, deckt BEIDE Membership-
+// Tabellen. Aufrufer behandelt den self-Fall (user===me) separat.
+async function _sharesTrustContext(env, me, user) {
+  if (await isAcceptedContact(env, me, user)) return true;
+  const g = await env.RENEX_DB.prepare(`
+    SELECT 1 FROM conversation_members cm1
+    JOIN conversation_members cm2 ON cm1.convo_id = cm2.convo_id
+    WHERE cm1.member_handle = ? AND cm2.member_handle = ? LIMIT 1
+  `).bind(me, user).first();
+  if (g) return true;
+  const s = await env.RENEX_DB.prepare(`
+    SELECT 1 FROM server_members sm1
+    JOIN server_members sm2 ON sm1.server_id = sm2.server_id
+    WHERE sm1.user_handle = ? AND sm2.user_handle = ? LIMIT 1
+  `).bind(me, user).first();
+  return !!s;
+}
+
 // ======================================================
 // E2E ROUTES: /chat/keys/*, /e2e/inbox/*, /e2e/cmk/*
 // ======================================================
@@ -287,6 +326,26 @@ export async function handleE2eRoutes(request, env, path, params) {
           await env.RENEX_KV.put(sigPubKey, JSON.stringify(sigPub));
         }
 
+        // ── M1 (Sesame-Core): optionaler ML-KEM-768-Prekey + caps (additiv) ──
+        // KV-Storage analog jwk/sigPub → keine Abhängigkeit von der (gegateten)
+        // D1-Migration. Legacy-Clients senden kein kemEk → unverändert.
+        const { kemEk, caps, sigAlgo } = body;
+        let kemChanged = false;
+        if (kemEk !== undefined && kemEk !== null) {
+          if (!isValidKemEkB64(kemEk)) {
+            return json(request, { error: "Invalid kemEk (ML-KEM-768 ek, 1184B)" }, 400);
+          }
+          const kemKey = `e2e:inbox:kem:${handle}:${deviceId}`;
+          let prevEk = null;
+          try { const p = await env.RENEX_KV.get(kemKey); prevEk = p ? JSON.parse(p).kemEk : null; } catch {}
+          kemChanged = prevEk !== kemEk;
+          await env.RENEX_KV.put(kemKey, JSON.stringify({
+            kemEk,
+            caps: (caps && typeof caps === "object") ? caps : null,
+            sigAlgo: sigAlgo === "ml-dsa-65" ? "ml-dsa-65" : "ecdsa-p256",
+          }));
+        }
+
         // State 'new' → 'syncing' nach erfolgreichem KV-Write
         await env.RENEX_DB.prepare(
           "UPDATE devices SET state = 'syncing' WHERE device_id = ? AND state = 'new'"
@@ -299,6 +358,11 @@ export async function handleE2eRoutes(request, env, path, params) {
         const idx = (activeRows.results || []).map(r => r.device_id);
         const idxKey = `e2e:inbox:index:${handle}`;
         await env.RENEX_KV.put(idxKey, JSON.stringify(idx));
+
+        // M1: Devset-Gen bei Recipient-Set-Änderung (neuer KEM-Key ODER neues Device).
+        const devsetGen = (kemChanged || shouldBroadcast)
+          ? await _bumpDevsetGen(env, handle)
+          : await _getDevsetGen(env, handle);
 
         // device_added: Push an Kontakte + eigene Devices.
         // WICHTIG: deviceId + jwk + sigPub IM PUSH mitliefern.
@@ -325,8 +389,10 @@ export async function handleE2eRoutes(request, env, path, params) {
               type: "device_added",
               from: handle,
               deviceId,
-              jwk,
+              jwk,                      // legacy inline (bleibt bis alle Clients Notify-and-Fetch nutzen)
               sigPub: sigPub || null,
+              gen: devsetGen,           // M1: neue Clients nutzen gen + Notify-and-Fetch
+              hasKem: !!kemEk,          // M1: kemEk NICHT inline (4KB-Limit) → via inbox/get holen
               ts: now,
             };
 
@@ -423,14 +489,22 @@ export async function handleE2eRoutes(request, env, path, params) {
 
         const deviceEntries = await Promise.all(
           deviceIds.map(async (deviceId) => {
-            const [raw, rawSig, rawHist] = await Promise.all([
+            const [raw, rawSig, rawHist, rawKem] = await Promise.all([
               env.RENEX_KV.get(`e2e:inbox:${user}:${deviceId}`),
               env.RENEX_KV.get(`e2e:inbox:sigpub:${user}:${deviceId}`),
               env.RENEX_KV.get(`e2e:inbox:sigpub-hist:${user}:${deviceId}`),
+              env.RENEX_KV.get(`e2e:inbox:kem:${user}:${deviceId}`),  // M1: ML-KEM-768-Prekey
             ]);
             if (!raw) return null;
             try {
               const entry = { deviceId, jwk: JSON.parse(raw) };
+              // M1 (Sesame-Core): ML-KEM-768 ek + caps additiv (fehlt bei v1-Devices).
+              if (rawKem) {
+                try {
+                  const k = JSON.parse(rawKem);
+                  if (k?.kemEk) { entry.kemEk = k.kemEk; entry.caps = k.caps || null; entry.sigAlgo = k.sigAlgo || "ecdsa-p256"; }
+                } catch {}
+              }
               if (rawSig) {
                 try { entry.sigPub = JSON.parse(rawSig); } catch {}
               }
@@ -449,8 +523,44 @@ export async function handleE2eRoutes(request, env, path, params) {
           })
         );
         const devices = deviceEntries.filter(Boolean);
+        const gen = await _getDevsetGen(env, user);  // M1: Recipient-Set-Generation
 
-        return json(request, { devices });
+        return json(request, { devices, gen });
+      }
+      break;
+    }
+
+    // ======================================================
+    // DEVSET (M1 Sesame-Core): leichte Recipient-Set-Abfrage (gen-gecacht)
+    // Nur deviceId/hasKem/caps + gen — KEIN voller jwk. 3-Wege-Access-Gate
+    // (BEIDE Membership-Tabellen), analog inbox/get.
+    // ======================================================
+    case "/e2e/devset": {
+      if (request.method === "GET") {
+        const session = await requireAnySession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+        const me = String(session.handle || "").toLowerCase();
+        const user = (param(params, "user") || "").toLowerCase();
+        if (!user || !/^[a-z0-9_]+$/.test(user)) return json(request, { gen: 0, devices: [] });
+
+        const rl = await rateLimit(env, `devset_get:${me}`, 60_000, 30, { failOpen: true });
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
+
+        if (user !== me && !(await _sharesTrustContext(env, me, user))) {
+          return json(request, { gen: 0, devices: [] });
+        }
+
+        const rows = await env.RENEX_DB.prepare(
+          "SELECT device_id FROM devices WHERE user_handle = ? AND state IN ('active','syncing') ORDER BY created_at"
+        ).bind(user).all();
+        const devices = await Promise.all((rows.results || []).map(async (r) => {
+          const rawKem = await env.RENEX_KV.get(`e2e:inbox:kem:${user}:${r.device_id}`);
+          let hasKem = false, caps = null;
+          if (rawKem) { try { const k = JSON.parse(rawKem); hasKem = !!k.kemEk; caps = k.caps || null; } catch {} }
+          return { deviceId: r.device_id, hasKem, caps };
+        }));
+        const gen = await _getDevsetGen(env, user);
+        return json(request, { gen, devices });
       }
       break;
     }

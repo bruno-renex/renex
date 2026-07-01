@@ -43,6 +43,38 @@ export function verifyPrekey(label, pubBytes, sig, ikEdPub) {
   return edVerify(sig, _prekeyMsg(label, pubBytes), ikEdPub);
 }
 
+// ── InitHdr-Signatur (3. Sig-Domäne „canonicalInitHdr", §4.0/§4.3) ──
+// Der Initiator signiert den ganzen Header mit seinem IK-Ed25519. Deckt u.a.
+// `mlkemCt` + `usedPqspkId` ab → PQ-Downgrade-Schutz (ein Angreifer kann den
+// PQ-Anteil nicht strippen, ohne die Sig zu brechen), plus alle übrigen Felder
+// (ikA/ekA/usedSpk/usedOpk) gegen Header-Tampering.
+// ⚠️ hdrSig ist NUR so stark wie die Authentizität von ikAEd: die volle
+// Downgrade-Garantie greift erst, wenn der Responder ikAEd gegen die Registry-
+// Identität von peerHandle pinnt (TOFU, P3). In M2 verifiziert der Responder
+// gegen das mitgelieferte ikAEd (verify+log, Dark-Launch).
+const INITHDR_DOMAIN = 'renex:pqxdh:inithdr:v3';
+// Kanonische Bytes über die semantischen Header-Felder (OHNE hdrSig/ikAEd).
+// ikA25519/ekA25519/mlkemCt = Uint8Array; ids = string; usedOpkId null→''.
+export function canonicalInitHdr({ v, alg, ikA25519, ekA25519, usedSpkId, usedOpkId, usedPqspkId, mlkemCt }) {
+  return concatBytes([
+    lenPrefix(INITHDR_DOMAIN),
+    lenPrefix(new Uint8Array([v & 0xff])),
+    lenPrefix(alg),
+    lenPrefix(ikA25519),
+    lenPrefix(ekA25519),
+    lenPrefix(usedSpkId),
+    lenPrefix(usedOpkId || ''),
+    lenPrefix(usedPqspkId),
+    lenPrefix(mlkemCt),
+  ]);
+}
+export function signInitHdr(fields, ikEdPriv) {
+  return edSign(canonicalInitHdr(fields), ikEdPriv);
+}
+export function verifyInitHdr(fields, sig, ikEdPub) {
+  return edVerify(sig, canonicalInitHdr(fields), ikEdPub);
+}
+
 /**
  * Initiator (Alice): verifiziert Bobs Prekey-Signaturen, rechnet DHs + KEM → RK0.
  * @param {{ ikAPriv, ekAPriv, bundle:{ ikEdPub, ikX, spkX, spkSig, opkX?, pqspkEk, pqspkSig } }} p

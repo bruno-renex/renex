@@ -24,15 +24,16 @@ function makeState(store = new Map()) {
   };
 }
 
-// ── Mock env.RENEX_DB: der DELETE…RETURNING pop't die erste OPK aus `pool` ──
+// ── Mock env.RENEX_DB: der UPDATE…RETURNING (Tombstone) pop't die erste
+//    verfügbare OPK aus `pool` (Grabstein = aus `pool` entfernt) ──
 function makeEnv(pool) {
   return {
     RENEX_DB: {
       prepare: (sql) => ({
         bind: (..._args) => ({
           first: async () => {
-            if (/DELETE FROM pqxdh_opk/i.test(sql)) {
-              const row = pool.shift();          // FIFO-Pop, mutiert `pool`
+            if (/UPDATE pqxdh_opk/i.test(sql)) {
+              const row = pool.shift();          // FIFO-Pop (= Tombstone), mutiert `pool`
               return row ? { opkId: row.opkId, opk: row.opk } : null;
             }
             return null;
@@ -169,5 +170,20 @@ describe('PrekeyDO.fetch — atomarer Consume', () => {
     const do_ = new PrekeyDO(makeState(), makeEnv([]));
     const res = await do_.fetch(new Request('https://prekey/nope', { method: 'POST', body: '{}' }));
     expect(res.status).toBe(404);
+  });
+
+  it('Consume nutzt TOMBSTONE (UPDATE consumed_at), KEIN Hard-DELETE — Reuse-Resistenz', async () => {
+    // Fängt die tatsächlich abgesetzte SQL ab: muss ein UPDATE mit
+    // consumed_at-Guard sein (Grabstein), NICHT DELETE (sonst Resurrection möglich).
+    let seenSql = '';
+    const env = {
+      RENEX_DB: {
+        prepare: (sql) => { seenSql = sql; return { bind: () => ({ first: async () => ({ opkId: 'o1', opk: 'P1' }) }) }; },
+      },
+    };
+    await new PrekeyDO(makeState(), env).fetch(consumeReq());
+    expect(seenSql).toMatch(/UPDATE pqxdh_opk SET consumed_at/i);
+    expect(seenSql).toMatch(/consumed_at IS NULL/i);
+    expect(seenSql).not.toMatch(/DELETE/i);
   });
 });

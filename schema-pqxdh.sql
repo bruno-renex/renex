@@ -18,14 +18,26 @@
 -- (INSERT … ON CONFLICT DO NOTHING) und liefert zugleich den Prefix-Index für
 -- die Consume-/Count-Abfragen (WHERE user_handle=? AND device_id=?).
 -- Impliziter rowid (KEIN "WITHOUT ROWID") — der PrekeyDO pop't via rowid-Subquery.
+--
+-- ⚠️ TOMBSTONE statt Hard-DELETE (Refinement zu §4.3 „DELETE…RETURNING"):
+-- Consume setzt `consumed_at` statt die Reihe zu löschen. Die Reihe BLEIBT als
+-- Grabstein → ein Re-Upload derselben opk_id (INSERT OR IGNORE) läuft in den
+-- UNIQUE-Konflikt und kann eine bereits konsumierte OPK NICHT wiederbeleben
+-- (schließt die OPK-Reuse-Kante an der Wurzel; Review-Finding M2). Verfügbar =
+-- `consumed_at IS NULL`. Grabsteine sind winzig; optionaler TTL-Cleanup später.
 CREATE TABLE IF NOT EXISTS pqxdh_opk (
   user_handle TEXT    NOT NULL,
   device_id   TEXT    NOT NULL,
   opk_id      TEXT    NOT NULL,
   opk_pub     TEXT    NOT NULL,
   created_at  INTEGER NOT NULL,
+  consumed_at INTEGER,                       -- NULL = verfügbar; gesetzt = Grabstein (Einweg)
   UNIQUE(user_handle, device_id, opk_id)
 );
+
+-- Partieller Index für Consume/Count: nur die noch verfügbaren OPKs.
+CREATE INDEX IF NOT EXISTS idx_pqxdh_opk_avail
+  ON pqxdh_opk(user_handle, device_id) WHERE consumed_at IS NULL;
 
 -- Forward-Compat (RESERVIERT, noch NICHT befüllt): optionaler PQ-One-Time-Prekey-
 -- Pool (ML-KEM-768 ek + IK-Ed-Sig). Der M2-Handshake nutzt ausschließlich den

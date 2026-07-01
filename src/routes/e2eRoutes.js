@@ -52,14 +52,14 @@ const X25519_PUB_BYTES = 32;   // X25519-Pub UND Ed25519-Pub sind beide 32 Bytes
 const ED25519_SIG_BYTES = 64;
 const PQXDH_ID = /^[A-Za-z0-9_-]{1,24}$/;   // Prekey-IDs (Client _rid(): ≤8 b64-alnum)
 
-/** Standard-base64 eines 32-Byte-Keys (X25519-Pub oder Ed25519-Pub). */
+/** Standard-base64 eines 32-Byte-Keys (X25519-Pub oder Ed25519-Pub): EXAKT 44 Zeichen (kanonisch, gepolstert). */
 export function isValid32ByteKeyB64(v) {
-  if (typeof v !== "string" || v.length < 43 || v.length > 44) return false;
+  if (typeof v !== "string" || v.length !== 44) return false;   // btoa polstert immer → kanonisch erzwingen
   try { return atob(v).length === X25519_PUB_BYTES; } catch { return false; }
 }
-/** Standard-base64 einer 64-Byte Ed25519-Signatur. */
+/** Standard-base64 einer 64-Byte Ed25519-Signatur: EXAKT 88 Zeichen (kanonisch). */
 export function isValidEd25519SigB64(v) {
-  if (typeof v !== "string" || v.length < 86 || v.length > 88) return false;
+  if (typeof v !== "string" || v.length !== 88) return false;
   try { return atob(v).length === ED25519_SIG_BYTES; } catch { return false; }
 }
 
@@ -729,13 +729,16 @@ export async function handleE2eRoutes(request, env, path, params) {
         if (!user || !/^[a-z0-9_]+$/.test(user) || device.length < 8 || device.length > 64) {
           return json(request, { error: "bad_params" }, 400);
         }
+        const rl = await rateLimit(env, `pqxdh_opkcount:${me}`, 60_000, 30, { failOpen: true });
+        if (!rl) return json(request, { error: "Too many requests" }, 429);
         if (user !== me && !(await _sharesTrustContext(env, me, user))) {
           return json(request, { count: 0 });
         }
         let count = 0;
         try {
+          // Nur verfügbare OPKs (Grabsteine ausgeschlossen).
           const row = await env.RENEX_DB.prepare(
-            "SELECT COUNT(*) AS n FROM pqxdh_opk WHERE user_handle = ? AND device_id = ?"
+            "SELECT COUNT(*) AS n FROM pqxdh_opk WHERE user_handle = ? AND device_id = ? AND consumed_at IS NULL"
           ).bind(user, device).first();
           count = Number(row?.n) || 0;
         } catch (e) {

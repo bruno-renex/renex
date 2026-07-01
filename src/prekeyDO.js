@@ -81,21 +81,24 @@ export class PrekeyDO {
         return { opk: null, reason: "capped" };
       }
 
-      // 2) Atomarer Einweg-Consume: genau EINE OPK-Reihe löschen + Pub zurückgeben.
-      //    D1/SQLite kann kein `DELETE … LIMIT` → rowid-Subquery. RETURNING liefert
-      //    die Pub in einem Round-Trip. D1-Fehler (z.B. Tabelle vor gegateter
-      //    Migration noch nicht da) → graceful SPK-only statt 500.
+      // 2) Atomarer Einweg-Consume: genau EINE noch verfügbare OPK-Reihe als
+      //    Grabstein markieren (consumed_at) + Pub zurückgeben. TOMBSTONE statt
+      //    Hard-DELETE → ein späterer Re-Upload derselben opk_id kann sie NICHT
+      //    wiederbeleben (schließt die OPK-Reuse-Kante). D1/SQLite kann kein
+      //    `UPDATE … LIMIT` → rowid-Subquery. RETURNING liefert die Pub in einem
+      //    Round-Trip. D1-Fehler (z.B. Tabelle vor gegateter Migration) →
+      //    graceful SPK-only statt 500.
       let row = null;
       try {
         row = await this.env.RENEX_DB.prepare(
-          `DELETE FROM pqxdh_opk
+          `UPDATE pqxdh_opk SET consumed_at = ?
              WHERE rowid = (
                SELECT rowid FROM pqxdh_opk
-                WHERE user_handle = ? AND device_id = ?
+                WHERE user_handle = ? AND device_id = ? AND consumed_at IS NULL
                 ORDER BY rowid LIMIT 1
              )
            RETURNING opk_id AS opkId, opk_pub AS opk`
-        ).bind(user, deviceId).first();
+        ).bind(Date.now(), user, deviceId).first();
       } catch (e) {
         console.error("prekey consume D1 error:", e?.message);
         return { opk: null, reason: "error" };

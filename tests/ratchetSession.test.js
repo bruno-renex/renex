@@ -46,7 +46,7 @@ beforeAll(async () => {
   sigPub = await crypto.subtle.exportKey('jwk', pair.publicKey);
   await idbSet('sig_keypair', { pub: sigPub, priv: await crypto.subtle.exportKey('jwk', pair.privateKey) });
 });
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => { vi.clearAllMocks(); _ls.set('renex_ratchet_send', '1'); });   // Send-Flag AN für die Round-Trip-Tests
 
 // AES-GCM-Decrypt mit rohem MK (Gegenseite im Test).
 async function aesDecrypt(mk, ivB64, ctB64, aad) {
@@ -184,5 +184,39 @@ describe('pqDeviceCount (single-device-Gate)', () => {
       { deviceId: 'c', hasKem: true, caps: { hybrid: true } },
     ]);
     expect(await pqDeviceCount('peer')).toBe(2);
+  });
+});
+
+describe('Gates: Flag + single-device', () => {
+  it('Flag AUS → ratchetEncrypt immer null (inert by default)', async () => {
+    _ls.delete('renex_ratchet_send');
+    getRecipientDevices.mockResolvedValue([{ deviceId: 'x', hasKem: true, caps: { hybrid: true } }]);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: makeBobWire('x').wire });
+    expect(await ratchetEncrypt('flagoff', 'hi')).toBe(null);
+    await primeRatchetSession('flagoff');                     // Prime tut nichts ohne Flag
+    expect(await ratchetEncrypt('flagoff', 'hi')).toBe(null);
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it('Peer multi-device → keine Session (null), kein Handshake', async () => {
+    _ls.set('renex_ratchet_send', '1');
+    getRecipientDevices.mockResolvedValue([
+      { deviceId: 'd1', hasKem: true, caps: { hybrid: true } },
+      { deviceId: 'd2', hasKem: true, caps: { hybrid: true } },
+    ]);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: makeBobWire('d1').wire });
+    expect(await ratchetEncrypt('multi', 'hi')).toBe(null);
+    expect(await primeRatchetSession('multi')).toBe(null);    // 2 Geräte → nicht single-device
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it('ICH multi-device → keine Session (Self-Sync-Schutz)', async () => {
+    _ls.set('renex_ratchet_send', '1');
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'me' ? [{ deviceId: 'm1' }, { deviceId: 'm2' }]
+                 : [{ deviceId: 'p1', hasKem: true, caps: { hybrid: true } }]);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: makeBobWire('p1').wire });
+    expect(await primeRatchetSession('peerx', { myHandle: 'me' })).toBe(null);
+    expect(apiFetch).not.toHaveBeenCalled();
   });
 });

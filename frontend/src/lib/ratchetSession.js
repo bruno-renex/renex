@@ -42,6 +42,13 @@ const SKIPPED_CAP = 512;                 // harte Gesamtgrenze des Skipped-Store
 const _key = () => deriveStorageKey(STORE_INFO);
 const _idbKey = (peer, dev) => `${IDB_PREFIX}${peer}:${dev}`;
 
+// Sender-Flag (P3.1). DEFAULT AUS (opt-in) — im Gegensatz zum Shadow, der
+// standardmäßig läuft. Empfangen von v4 ist IMMER an (deployed capability);
+// dieses Flag steuert nur, ob ICH v4 SENDE.
+export function ratchetSendEnabled() {
+  try { return localStorage.getItem('renex_ratchet_send') === '1'; } catch { return false; }
+}
+
 // ── Per-Key-Mutex (race-frei via Promise-Kette) ────────
 const _tail = new Map();
 function _withLock(key, fn) {
@@ -81,16 +88,31 @@ async function _findExisting(peer) {
 }
 
 // ── Session-Priming (Netzwerk — NUR im Hintergrund) ────
-/** Stellt (falls nötig) eine reale Initiator-Session gegen EIN aktives pq-Device her. */
-export function primeRatchetSession(peerHandle) {
+/**
+ * Stellt (falls nötig) eine reale Initiator-Session gegen EIN aktives pq-Device
+ * her — NUR wenn single-device qualifiziert (§4.4 P3.1): Peer hat GENAU 1 Gerät
+ * (pq-fähig) UND ich habe genau 1 Gerät. Multi-Device = P3.2 (Fan-out).
+ * @param {string} peerHandle
+ * @param {{myHandle?:string}} [opts]
+ */
+export function primeRatchetSession(peerHandle, { myHandle = '' } = {}) {
   const peer = String(peerHandle || '').toLowerCase();
-  if (!peer) return Promise.resolve(null);
+  if (!peer || !ratchetSendEnabled()) return Promise.resolve(null);
   return _withLock(`prime:${peer}`, async () => {
     try {
       const devices = await getRecipientDevices(peer).catch(() => []);
       const active = new Set((devices || []).filter(d => d.hasKem && d.caps?.hybrid).map(d => d.deviceId));
       const existing = await _findExisting(peer);
       if (existing && active.has(existing.dev)) return { dev: existing.dev };
+
+      // single-device-Gate: Peer genau 1 Gerät + pq-fähig.
+      if ((devices || []).length !== 1 || active.size !== 1) return null;
+      // … und ICH genau 1 Gerät (sonst bricht v4 meinen Multi-Device-Self-Sync).
+      if (myHandle) {
+        const mine = await getRecipientDevices(String(myHandle).toLowerCase()).catch(() => []);
+        if ((mine || []).length > 1) return null;
+      }
+
       const target = [...active].sort()[0];
       if (!target) return null;
       if (await _load(peer, target)) return { dev: target };
@@ -127,13 +149,14 @@ export async function pqDeviceCount(peerHandle) {
  * @param {string} plaintext
  * @returns {Promise<{v:4, header_b64:string, ivB64:string, ctB64:string, sig:string, init?:object}|null>}
  */
-export async function ratchetEncrypt(peerHandle, plaintext) {
+export async function ratchetEncrypt(peerHandle, plaintext, { myHandle = '' } = {}) {
   try {
+    if (!ratchetSendEnabled()) return null;                          // Flag AUS → immer Legacy
     const peer = String(peerHandle || '').toLowerCase();
     if (!peer || typeof plaintext !== 'string') return null;
 
     const existing = await _findExisting(peer);
-    if (!existing) { void primeRatchetSession(peer); return null; }   // Session baut sich auf → dieser Send bleibt Legacy
+    if (!existing) { void primeRatchetSession(peer, { myHandle }); return null; }   // Session baut sich auf → dieser Send bleibt Legacy
     const { dev } = existing;
 
     return await _withLock(`sess:${peer}:${dev}`, async () => {

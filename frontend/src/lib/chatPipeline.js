@@ -33,6 +33,7 @@ import { signMessage, verifyMessageSig } from './messageSig.js';
 import { sendChatWithPow } from './pow.js';
 import { logWrapVerify } from './wrapSig.js';
 import { shadowOnSend } from './ratchetShadow.js';
+import { ratchetEncrypt, ratchetDecrypt } from './ratchetSession.js';
 import {
   ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
   findMyGSKAtTs, findPeerGSKAtTs,
@@ -426,12 +427,45 @@ export async function republishCMKForPeer(myHandle, peerHandle) {
  *   verified=true → Sig korrekt, =false → Sig falsch (Tampering!), =null → Sig nicht prüfbar (kein sigPub)
  *   replyText → Decryptete Reply-Preview, null wenn keine vorhanden / decrypt failed
  */
+// P3.1 v4-Decrypt: Ratchet statt CMK. Sender-Sig-Pubkey (verify+log) wie im
+// Legacy-Pfad aus dem Peer-Device-Cache. null/kein-Session → {text:null} →
+// derselbe Retry/Locked-UX wie v2 (Datenverlust-frei, kein Crash).
+async function _decryptIncomingV4(msg, myHandle, peerHandle) {
+  const from = (msg.from || peerHandle || '').toLowerCase();
+  const deviceId = msg.deviceId || msg.device_id;
+  const ivB64 = msg.ivB64 || msg.iv_b64;
+  const ctB64 = msg.ctB64 || msg.ct_b64;
+  if (!from || !deviceId || typeof ivB64 !== 'string' || typeof ctB64 !== 'string') {
+    return { text: null, verified: null };
+  }
+  let sigPub = null;
+  try {
+    sigPub = await getSigPubForDevice(from, deviceId);
+    if (!sigPub) {
+      const devs = await fetchPeerDevices(from).catch(() => []);
+      sigPub = (devs || []).find(d => d.deviceId === deviceId)?.sigPub || null;
+    }
+  } catch {}
+  const r = await ratchetDecrypt(from, deviceId, { header_b64: msg.header_b64, ivB64, ctB64, sig: msg.sig, init: msg.init }, sigPub);
+  if (!r) return { text: null, verified: null };
+  return { text: r.text, verified: r.verified, replyText: null };
+}
+
 export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
   // Cache-Hit — text + verified werden zusammen gespeichert damit ein 2.
   // _decryptAllE2E-Lauf (z.B. nach device_added) den verified-State nicht löscht.
   if (msg.id) {
     const cached = _decryptCacheGet(msg.id);
     if (cached) return { text: cached.text, verified: cached.verified, replyText: cached.replyText, _cached: true };
+  }
+
+  // ── P3.1 v4 Double-Ratchet: header_b64 vorhanden → Ratchet-Decrypt (nicht
+  // CMK). Ergebnis wird gecacht → ein History-Reload advanct den Ratchet NICHT
+  // erneut (sonst Desync). Receive-Capability ist IMMER an (kein Flag). ──
+  if (msg.header_b64) {
+    const res = await _decryptIncomingV4(msg, myHandle, peerHandle);
+    if (res && res.text != null && msg.id) _decryptCacheSet(msg.id, res.text, res.verified, res.replyText);
+    return res || { text: null, verified: null };
   }
 
   // Hard-Stop: Peer hat cmk_unavailable gesendet → KV-Fetch sparen.
@@ -655,6 +689,26 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
  */
 export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo = null, attachment = null) {
   try {
+    // ── P3.1: v4-Double-Ratchet-Versuch (flag-gegated, single-device) ──
+    // Nur reiner Text (Reply/Attachment bleiben in P3.1 Legacy). ratchetEncrypt
+    // liefert null wenn Flag aus / nicht qualifiziert / Session noch nicht bereit
+    // → dann unten der unveränderte Legacy-v2-Pfad. KEIN Shadow bei v4 (die
+    // Session IST der echte Ratchet).
+    if (!replyTo && !attachment) {
+      const v4 = await ratchetEncrypt(peerHandle, plaintext, { myHandle });
+      if (v4) {
+        const body = { to: peerHandle, e2e: true, v: 4, header_b64: v4.header_b64, ivB64: v4.ivB64, ctB64: v4.ctB64, sig: v4.sig, deviceId: getDeviceId() };
+        if (v4.init) body.init = v4.init;
+        // PoW über die v4-Felder (kein sid/epoch → undefined, identisch server-seitig).
+        const r = await sendChatWithPow(body, { sid: undefined, epoch: undefined, sig: v4.sig, ctB64: v4.ctB64 });
+        if (r.ok) return { ok: true, message: r.data?.message };
+        console.warn('🔗 v4 send failed → Legacy-Fallback:', r.error || r.status);
+        // Fällt durch auf Legacy (der Ratchet-Zustand hat aber schon eine
+        // Nachricht verbraucht → nächster Send nutzt die nächste Kette; der
+        // Empfänger überspringt die verlorene n via Skipped-Keys).
+      }
+    }
+
     const cmk = await ensureSecureDmSession(myHandle, peerHandle);
     if (!cmk) {
       return { ok: false, error: 'no_cmk' };

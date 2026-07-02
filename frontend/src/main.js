@@ -24,6 +24,12 @@ const _dbg = params.get("debug");
 if (_dbg === "1") localStorage.setItem("renex_debug", "1");
 else if (_dbg === "0") localStorage.removeItem("renex_debug");
 
+// P3.1: v4-Double-Ratchet-SENDEN (opt-in, default aus). Empfangen ist immer an.
+// ?ratchetsend=1 aktivieren / =0 zurück auf Legacy. Kill-Switch bleibt lokal.
+const _rs = params.get("ratchetsend");
+if (_rs === "1") localStorage.setItem("renex_ratchet_send", "1");
+else if (_rs === "0") localStorage.removeItem("renex_ratchet_send");
+
 const app = mount(App, {
   target: document.getElementById('app'),
 });

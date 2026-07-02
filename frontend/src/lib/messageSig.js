@@ -16,6 +16,32 @@
 import { bytesToB64, b64ToBytes } from './bytes.js';
 import { loadSigningPrivKey } from './e2eKeys.js';
 
+// ── v4 (Double-Ratchet, P3.1) — eigene Signatur-Domäne ──
+// Deckt den Ratchet-HEADER ab (nicht nur iv|ct) → Header ist zusätzlich zur
+// AES-GCM-AAD auch identitäts-signiert (§4.4). Getrennte Domäne `renex:msgv4:`
+// gegen Cross-Protocol-Verwechslung mit dem v2-`iv|ct|sid|epoch`-Format.
+function _v4Canon(headerB64, ivB64, ctB64) {
+  return new TextEncoder().encode(`renex:msgv4:${headerB64}|${ivB64}|${ctB64}`);
+}
+export async function signMessageV4(headerB64, ivB64, ctB64) {
+  const privKey = await loadSigningPrivKey();
+  if (!privKey) throw new Error('No signing key — initE2EKeys + uploadInboxKeyIfNeeded first');
+  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privKey, _v4Canon(headerB64, ivB64, ctB64));
+  return bytesToB64(new Uint8Array(sig));
+}
+export async function verifyMessageSigV4(headerB64, ivB64, ctB64, sigB64, pubJwk) {
+  try {
+    if (!pubJwk || typeof pubJwk !== 'object') return false;
+    if (pubJwk.kty !== 'EC' || pubJwk.crv !== 'P-256') return false;
+    if (typeof pubJwk.x !== 'string' || typeof pubJwk.y !== 'string') return false;
+    if (pubJwk.d !== undefined) return false;
+    const pubKey = await crypto.subtle.importKey('jwk', pubJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+    return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pubKey, b64ToBytes(sigB64), _v4Canon(headerB64, ivB64, ctB64));
+  } catch {
+    return false;
+  }
+}
+
 // loadSigningPrivKey wird zentral aus e2eKeys.js bezogen — sie liefert den
 // non-extractable CryptoKey (mit Legacy-JWK-Migration on-the-fly).
 // Spec-Hardening 2026-05-02 H1.

@@ -104,6 +104,12 @@ export async function handleChatSend(request, env, ctx) {
   const MAX_MSG_LEN  = 1000;  // plaintext fallback
   const MAX_SID_LEN  = 128;   // session ID
   const MAX_TYPE_LEN = 32;    // control message type
+  const MAX_HEADER_B64 = 512; // P3.1 v4 Double-Ratchet-Header (base64)
+  const MAX_INIT_JSON  = 4096;// P3.1 v4 PQXDH-InitHdr (JSON)
+
+  // v4 (Double-Ratchet, P3.1): eigene Wire-Felder. Kein sid/epoch.
+  const headerB64 = body.header_b64;
+  const initHdr = body.init;
 
   if (typeof ivB64 === "string" && ivB64.length > MAX_IV_B64) {
     return json(request, { error: "ivB64 too large" }, 400);
@@ -303,10 +309,25 @@ export async function handleChatSend(request, env, ctx) {
     if (!gskSenderIsMember) return json(request, { error: "Not a group member" }, 403);
   }
 
-  // E2E Versions-Guard — gilt NUR für echte E2E-Nachrichten
+  // E2E Versions-Guard — gilt NUR für echte E2E-Nachrichten. v4 = Double-Ratchet
+  // (P3.1), koexistiert mit v2-CMK.
   if (type !== "cmk_req" && type !== "cmk_unavailable" && type !== "cmk" && type !== "epoch_rotate" && type !== "cmk_rotate" && type !== "cmk_reset" && type !== "auto_delete_set" && type !== "gsk" && type !== "request_gsk") {
-    if (v !== undefined && v !== 2) {
+    if (v !== undefined && v !== 2 && v !== 4) {
       return json(request, { error: "Unsupported E2E version" }, 400);
+    }
+  }
+
+  // v4-Pflichtfelder (Double-Ratchet-DM): header_b64 + optionaler InitHdr.
+  // Kein sid/epoch (der Ratchet trägt seinen Zustand im Header). Malformed →
+  // 400 (v4 ist opt-in Sender-seitig; ein wohlgeformter Client sendet es nie).
+  if (v === 4 && e2e === true && !bodyConvoId && !type) {
+    if (typeof headerB64 !== "string" || headerB64.length < 8 || headerB64.length > MAX_HEADER_B64) {
+      return json(request, { error: "Invalid header_b64" }, 400);
+    }
+    if (initHdr !== undefined && initHdr !== null) {
+      let ok = false;
+      try { ok = typeof initHdr === "object" && JSON.stringify(initHdr).length <= MAX_INIT_JSON; } catch {}
+      if (!ok) return json(request, { error: "Invalid init" }, 400);
     }
   }
   // v2 Pflichtfelder – NUR für echte verschlüsselte Nachrichten
@@ -502,6 +523,14 @@ export async function handleChatSend(request, env, ctx) {
       if (msg.v === undefined) msg.v = 2;
     }
 
+    // v4 (Double-Ratchet, P3.1): Ratchet-Header + InitHdr additiv ans msg-Objekt
+    // → reist im Live-Push mit UND wird persistiert (offline/History-Empfänger
+    // baut die Session daraus auf). Legacy-Empfänger ignorieren die Felder.
+    if (v === 4) {
+      msg.header_b64 = (typeof headerB64 === "string") ? headerB64 : null;
+      if (initHdr && typeof initHdr === "object") msg.init = initHdr;   // Client liest msg.init
+    }
+
   } else {
     msg.message = message;
   }
@@ -534,8 +563,8 @@ export async function handleChatSend(request, env, ctx) {
   if (msg.type !== "cmk" && msg.type !== "cmk_req" && msg.type !== "cmk_unavailable" && msg.type !== "epoch_rotate" && msg.type !== "cmk_rotate" && msg.type !== "cmk_reset" && msg.type !== "auto_delete_set") {
     await env.RENEX_DB.prepare(
       `INSERT OR IGNORE INTO messages
-         (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id, reply_to_id, reply_from, reply_iv, reply_ct, reply_rotation_index, attachment_key, attachment_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, convo_id, from_user, to_user, ts, status, type, v, e2e, sid, epoch, message, iv_b64, ct_b64, payloads, rotation_index, sig, device_id, reply_to_id, reply_from, reply_iv, reply_ct, reply_rotation_index, attachment_key, attachment_type, header_b64, init_hdr)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       msg.id, cid, msg.from, msg.to, msg.ts,
       msg.status ?? "sent",
@@ -557,7 +586,9 @@ export async function handleChatSend(request, env, ctx) {
       (typeof replyCt === "string" && replyCt.length > 0) ? replyCt : null,
       (typeof replyRotationIndex === "number") ? replyRotationIndex : null,
       (typeof attachmentKey === "string" && attachmentKey.length > 0) ? attachmentKey : null,
-      (typeof attachmentType === "string" && attachmentType.length > 0) ? attachmentType : null
+      (typeof attachmentType === "string" && attachmentType.length > 0) ? attachmentType : null,
+      (typeof msg.header_b64 === "string" && msg.header_b64.length > 0) ? msg.header_b64 : null,
+      (msg.init && typeof msg.init === "object") ? JSON.stringify(msg.init) : null
     ).run();
   }
 

@@ -170,6 +170,10 @@ export async function handleChatRoutes(request, env, path, params, ctx) {
           if (r.rotation_index != null) m.rotationIndex = r.rotation_index;
           if (r.sig)       m.sig      = r.sig;
           if (r.device_id) m.deviceId = r.device_id;
+          // v4 Double-Ratchet (P3.1): Header + InitHdr → Empfänger baut die
+          // Session aus der History auf (offline gewesener Client).
+          if (r.header_b64) m.header_b64 = r.header_b64;
+          if (r.init_hdr) { try { m.init = JSON.parse(r.init_hdr); } catch {} }
           // Reply-Felder (E2E-verschlüsselt — nur Ciphertext)
           if (r.reply_to_id)          m.replyToId          = r.reply_to_id;
           if (r.reply_from)           m.replyFrom          = r.reply_from;

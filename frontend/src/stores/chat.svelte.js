@@ -587,13 +587,16 @@ export const chatStore = {
 
     // P3.0 Shadow-Ratchet (Dark-Launch §4.4): parallel-derive + fp-Vergleich
     // für FRESH E2E-DMs vom Peer (History trägt kein shadowV4 → advanct nie).
-    // Fire-and-forget, wirft nie, beeinflusst Rendering/Decrypt nicht.
-    if (rawMsg.shadowV4 && !rawMsg.groupId && !rawMsg.type && !msg.isMe && msg.from) {
+    // Fire-and-forget, wirft nie, beeinflusst Rendering/Decrypt nicht. Whitelist
+    // statt !type (type==='' darf nicht durchrutschen); msgId → Redelivery-Dedup.
+    const _shadowType = !rawMsg.type || rawMsg.type === 'message';
+    if (rawMsg.shadowV4 && !rawMsg.groupId && _shadowType && !msg.isMe && msg.from) {
       void shadowOnReceive(
         msg.from,
         rawMsg.deviceId || rawMsg.device_id,
         rawMsg.shadowV4,
-        userStore.deviceId
+        userStore.deviceId,
+        rawMsg.id
       );
     }
 

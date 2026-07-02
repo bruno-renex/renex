@@ -7,15 +7,22 @@
 // die Nachricht selbst bleibt Legacy-verschlüsselt. Ziel (§4.4): ≥1000
 // Live-Nachrichten mit 100% Match → Freigabe P3.1.
 //
-// Session-Identität = per-peer-device (§4.0 D1): Initiator wählt EIN
-// pq-fähiges Ziel-Device (sesame); nur DAS Device kann folgen (InitHdr
-// referenziert seine OPK) — andere Peer-Devices skippen still via `tgt`.
-// Shadow-Wire (top-level, additiv, ~120B; +InitHdr ~2.2KB bis zur ersten
-// Antwort): { v:4, tgt, header, fp, init? }.
+// Korrektheits-Härtung (adversariale Review P3.0):
+//  - Per-(peer,dev)-Mutex (_withLock) um JEDE State-Mutation → kein Race bei
+//    schnellen Sends (verlorene ns) / gleichzeitigen Receives (doppelter
+//    OPK-Consume via acceptHybridSession, State-Clobber).
+//  - KEIN Netzwerk auf dem Send-Pfad: die Session (Bundle-Fetch + OPK-Consume)
+//    wird im HINTERGRUND pre-established (primeShadowSession); shadowOnSend
+//    macht nur noch lokale CPU/IDB-Arbeit oder skippt sofort. Die allererste
+//    Nachricht an einen neuen Peer trägt daher noch keinen Shadow (akzeptiert).
+//  - Device-Reuse nur wenn das Device NOCH pq-aktiv ist (sesame) — sonst frische
+//    Session fürs aktuelle Ziel; deterministische Device-Wahl (sortiert).
+//  - Receive-Idempotenz per msgId (gegen WS-Redelivery → sonst nr-Doppel-
+//    Advance = Desync).
 //
-// Ausschlüsse: Control-/Pulse-Typen (Rekey-Storm-Guard §4.4), History-
-// Re-Reads (Server persistiert das Shadow-Feld bewusst NICHT → nur fresh
-// WS-Receives tragen es). Kill-Switch: localStorage renex_ratchet_shadow='0'.
+// Ausschlüsse: Control-/Pulse-Typen (Rekey-Storm-Guard §4.4), History-Re-Reads
+// (Server persistiert das Shadow-Feld bewusst NICHT → nur fresh WS-Receives
+// tragen es). Kill-Switch: localStorage renex_ratchet_shadow='0'.
 // Wirft NIE (Login-/Chat-Flow-Schutz); Telemetrie im logWrapVerify-Stil.
 // ======================================================
 import { idbGet, idbSet, idbListKeys } from './idb.js';
@@ -34,6 +41,7 @@ import { captureException } from './sentry.js';
 const STORE_INFO = 'renex:ratchetshadow:store:v1';
 const IDB_PREFIX = 'ratchetshadow:';
 const STATS_KEY = 'renex_ratchet_shadow_stats';
+const SEEN_CAP = 256;                          // Receive-Dedup-Ringpuffer pro Session
 const _key = () => deriveStorageKey(STORE_INFO);
 const _idbKey = (peer, dev) => `${IDB_PREFIX}${peer}:${dev}`;
 
@@ -41,21 +49,33 @@ export function shadowEnabled() {
   try { return localStorage.getItem('renex_ratchet_shadow') !== '0'; } catch { return true; }
 }
 
-// ── Stats (localStorage, fürs ≥1000-Gate ablesbar) ─────
+// ── Per-Key-Mutex (race-frei via Promise-Verkettung) ───
+const _tail = new Map();
+function _withLock(key, fn) {
+  const run = (_tail.get(key) || Promise.resolve()).then(fn, fn);   // fn läuft egal wie der Vorgänger endete
+  _tail.set(key, run.then(() => {}, () => {}));                     // Tail fehlerfrei halten
+  return run;
+}
+
+// ── Stats (localStorage + In-Memory-Fallback fürs ≥1000-Gate) ──
+let _mem = { match: 0, mismatch: 0, skip: 0, err: 0 };
 export function shadowStats() {
-  try { return JSON.parse(localStorage.getItem(STATS_KEY)) || { match: 0, mismatch: 0, skip: 0, err: 0 }; }
-  catch { return { match: 0, mismatch: 0, skip: 0, err: 0 }; }
+  try { return JSON.parse(localStorage.getItem(STATS_KEY)) || { ..._mem }; }
+  catch { return { ..._mem }; }
 }
 function _bump(field) {
+  _mem[field] = (_mem[field] || 0) + 1;                    // immer (überlebt localStorage-Ausfall)
+  let s = _mem;
   try {
-    const s = shadowStats();
+    s = shadowStats();
     s[field] = (s[field] || 0) + 1;
     localStorage.setItem(STATS_KEY, JSON.stringify(s));
-    if (field === 'match' && s.match % 50 === 0) {
-      console.log(`🧬 ratchet_shadow: ${s.match} matches (mismatch=${s.mismatch}, skip=${s.skip}, err=${s.err})`);
-    }
-    return s;
-  } catch { return null; }
+    _mem = { ...s };
+  } catch { /* private mode etc. → In-Memory zählt weiter */ }
+  if (field === 'match' && s.match % 50 === 0) {
+    console.log(`🧬 ratchet_shadow: ${s.match} matches (mismatch=${s.mismatch}, skip=${s.skip}, err=${s.err})`);
+  }
+  return s;
 }
 
 // ── State-Persistenz (versiegelt, device-scoped) ───────
@@ -63,22 +83,63 @@ async function _load(peer, dev) {
   const sealed = await idbGet(_idbKey(peer, dev));
   if (!sealed) return null;
   const o = await openJson(await _key(), sealed);
-  return o ? { ...o, state: deserializeRatchetState(o.state) } : null;
+  return o ? { ...o, state: deserializeRatchetState(o.state), seen: o.seen || [] } : null;
 }
 async function _save(peer, dev, rec) {
-  await idbSet(_idbKey(peer, dev), await sealJson(await _key(), { ...rec, state: serializeRatchetState(rec.state) }));
+  await idbSet(_idbKey(peer, dev), await sealJson(await _key(), {
+    ...rec, state: serializeRatchetState(rec.state), seen: (rec.seen || []).slice(-SEEN_CAP),
+  }));
 }
-// Existierende Shadow-Session (irgendein Device) des Peers finden.
+// Existierende Shadow-Session des Peers finden — deterministisch (sortiert).
 async function _findExisting(peer) {
-  const keys = await idbListKeys(`${IDB_PREFIX}${peer}:`);
-  if (!keys?.length) return null;
-  const dev = keys[0].slice(`${IDB_PREFIX}${peer}:`.length);
+  const pfx = `${IDB_PREFIX}${peer}:`;
+  const keys = (await idbListKeys(pfx)) || [];
+  if (!keys.length) return null;
+  const dev = keys.map(k => k.slice(pfx.length)).sort()[0];
   const rec = await _load(peer, dev);
   return rec ? { dev, rec } : null;
 }
 
 // ======================================================
-// SENDEN: Shadow-Feld für eine echte DM erzeugen (oder null)
+// Session-Priming (Netzwerk — NUR im Hintergrund, NIE am Send-Pfad)
+// ======================================================
+/**
+ * Stellt (falls nötig) eine Initiator-Shadow-Session gegen EIN aktuell
+ * pq-fähiges Peer-Device her. Single-flight pro Peer (via _withLock). Reuse
+ * einer bestehenden Session nur, wenn ihr Device noch pq-aktiv ist.
+ * @returns {Promise<{dev:string}|null>}
+ */
+export function primeShadowSession(peerHandle) {
+  const peer = String(peerHandle || '').toLowerCase();
+  if (!peer) return Promise.resolve(null);
+  return _withLock(`prime:${peer}`, async () => {
+    try {
+      const devices = await getRecipientDevices(peer).catch(() => []);
+      const active = new Set((devices || []).filter(d => d.hasKem && d.caps?.hybrid).map(d => d.deviceId));
+
+      const existing = await _findExisting(peer);
+      if (existing && active.has(existing.dev)) return { dev: existing.dev };   // noch gültig
+
+      const target = [...active].sort()[0];
+      if (!target) return null;                                                  // Peer (noch) nicht pq-fähig
+      if (await _load(peer, target)) return { dev: target };                    // schon da
+
+      const hs = await ensureHybridSession(peer, target);
+      if (!hs?.peerSpkPub) return null;                                          // Alt-Record ohne Ratchet-Anker
+      await _save(peer, target, {
+        role: 'initiator', peerSeen: false, initHdr: hs.initHdr, seen: [],
+        state: initInitiator(hs.rootKey, b64ToBytes(hs.peerSpkPub)),
+      });
+      return { dev: target };
+    } catch (e) {
+      console.warn('🧬 ratchet_shadow prime skip (non-fatal):', e?.message);
+      return null;
+    }
+  });
+}
+
+// ======================================================
+// SENDEN: Shadow-Feld für eine echte DM (lokal, kein Netzwerk)
 // ======================================================
 /**
  * @param {string} peerHandle
@@ -88,41 +149,30 @@ async function _findExisting(peer) {
 export async function shadowOnSend(peerHandle, { type = null } = {}) {
   try {
     if (!shadowEnabled()) return null;
-    if (type && type !== 'message') return null;   // Pulse/Control NIE (Rekey-Storm-Guard)
+    if (type && type !== 'message') return null;         // Pulse/Control NIE (Rekey-Storm-Guard)
     const peer = String(peerHandle || '').toLowerCase();
     if (!peer) return null;
 
-    // 1) Bestehende Session (egal welche Rolle) wiederverwenden.
-    let dev, rec;
     const existing = await _findExisting(peer);
-    if (existing) {
-      ({ dev, rec } = existing);
-    } else {
-      // 2) Neuer Initiator-Handshake gegen EIN pq-fähiges Ziel-Device.
-      const devices = await getRecipientDevices(peer).catch(() => []);
-      const target = (devices || []).find(d => d.hasKem && d.caps?.hybrid);
-      if (!target) { _bump('skip'); return null; }   // Peer (noch) nicht pq-fähig
-      dev = target.deviceId;
-      const hs = await ensureHybridSession(peer, dev);
-      if (!hs?.peerSpkPub) { _bump('skip'); return null; }   // Alt-Record ohne Ratchet-Anker
-      rec = {
-        role: 'initiator', peerSeen: false, initHdr: hs.initHdr,
-        state: initInitiator(hs.rootKey, b64ToBytes(hs.peerSpkPub)),
-      };
+    if (!existing) {
+      void primeShadowSession(peer);                     // Hintergrund; DIESE Nachricht skippt
+      _bump('skip');
+      return null;
     }
+    const { dev } = existing;
 
-    if (!rec.state.cks) { _bump('skip'); return null; }   // Responder vor erstem Empfang: noch nicht sendefähig
-
-    const { mk, header } = nextSendKey(rec.state);
-    await _save(peer, dev, rec);
-    return {
-      v: 4,
-      tgt: dev,                                    // nur DIESES Peer-Device kann folgen
-      header: encodeRatchetHeader(header),
-      fp: bytesToB64(fingerprintMk(mk)),
-      // InitHdr mitsenden, bis der Peer geantwortet hat (Standard-Signal-Verhalten).
-      ...(rec.role === 'initiator' && !rec.peerSeen && rec.initHdr ? { init: rec.initHdr } : {}),
-    };
+    return await _withLock(`sess:${peer}:${dev}`, async () => {
+      const rec = await _load(peer, dev);                // frisch unter Lock (kein Lost-Update)
+      if (!rec || !rec.state.cks) { _bump('skip'); return null; }   // Responder vor erstem Empfang: nicht sendefähig
+      const { mk, header } = nextSendKey(rec.state);
+      await _save(peer, dev, rec);
+      return {
+        v: 4, tgt: dev,
+        header: encodeRatchetHeader(header),
+        fp: bytesToB64(fingerprintMk(mk)),
+        ...(rec.role === 'initiator' && !rec.peerSeen && rec.initHdr ? { init: rec.initHdr } : {}),
+      };
+    });
   } catch (e) {
     console.warn('🧬 ratchet_shadow send skip (non-fatal):', e?.message);
     _bump('err');
@@ -138,9 +188,10 @@ export async function shadowOnSend(peerHandle, { type = null } = {}) {
  * @param {string} senderDeviceId   Absender-Gerät (Wire `deviceId`)
  * @param {object|null} shadow      das Shadow-Wire-Feld der Nachricht
  * @param {string} myDeviceId       eigenes Gerät (tgt-Filter)
+ * @param {string} [msgId]          Nachrichten-ID (Receive-Dedup gegen Redelivery)
  * @returns {Promise<'match'|'mismatch'|'skip'|'err'>}
  */
-export async function shadowOnReceive(fromHandle, senderDeviceId, shadow, myDeviceId) {
+export async function shadowOnReceive(fromHandle, senderDeviceId, shadow, myDeviceId, msgId = '') {
   try {
     if (!shadowEnabled() || !shadow || typeof shadow !== 'object') return 'skip';
     if (shadow.v !== 4 || !shadow.header || !shadow.fp) return 'skip';
@@ -149,32 +200,36 @@ export async function shadowOnReceive(fromHandle, senderDeviceId, shadow, myDevi
     const dev = String(senderDeviceId || '');
     if (!peer || !dev) { _bump('skip'); return 'skip'; }
 
-    // Session laden / via InitHdr aufbauen (accept NUR wenn kein State —
-    // sonst würde die one-time-OPK erneut konsumiert).
-    let rec = await _load(peer, dev);
-    if (!rec) {
-      if (!shadow.init) { _bump('skip'); return 'skip'; }   // Init verpasst (z.B. offline) → erst nächster Handshake
-      const hs = await acceptHybridSession(peer, dev, shadow.init);   // verify+log intern (Dark-Launch)
-      const spkPriv = b64ToBytes(hs.ownSpkPriv);
-      rec = {
-        role: 'responder', peerSeen: true, initHdr: null,
-        state: initResponder(hs.rootKey, { priv: spkPriv, pub: x25519PublicKey(spkPriv) }),
-      };
-    }
+    // Alles unter demselben Session-Lock wie der Send → acceptHybridSession läuft
+    // GENAU EINMAL (kein doppelter OPK-Consume), kein State-Clobber.
+    return await _withLock(`sess:${peer}:${dev}`, async () => {
+      let rec = await _load(peer, dev);
+      if (!rec) {
+        if (!shadow.init) { _bump('skip'); return 'skip'; }   // Init verpasst (offline) → erst nächster Handshake
+        const hs = await acceptHybridSession(peer, dev, shadow.init);   // verify+log intern (Dark-Launch)
+        const spkPriv = b64ToBytes(hs.ownSpkPriv);
+        rec = {
+          role: 'responder', peerSeen: true, initHdr: null, seen: [],
+          state: initResponder(hs.rootKey, { priv: spkPriv, pub: x25519PublicKey(spkPriv) }),
+        };
+      }
 
-    const mk = deriveReceiveKey(rec.state, decodeRatchetHeader(shadow.header));
-    const match = bytesToB64(fingerprintMk(mk)) === shadow.fp;
-    if (rec.role === 'initiator') rec.peerSeen = true;      // Antwort gesehen → init nicht mehr mitsenden
-    await _save(peer, dev, rec);
+      // Idempotenz gegen WS-Redelivery: schon verarbeitete msgId → nicht erneut advancen.
+      if (msgId && rec.seen?.includes(msgId)) { _bump('skip'); return 'skip'; }
 
-    if (match) { _bump('match'); return 'match'; }
-    // Divergenz = das eigentliche Dark-Launch-Signal → warn + Sentry (Muster logWrapVerify 'invalid').
-    console.warn(`🧬 ratchet_shadow MISMATCH ${peer}:${dev}`);
-    try { captureException(new Error('ratchet_shadow_mismatch'), { context: 'ratchetShadow', where: `${peer}:${dev}` }); } catch {}
-    _bump('mismatch');
-    return 'mismatch';
+      const mk = deriveReceiveKey(rec.state, decodeRatchetHeader(shadow.header));
+      const match = bytesToB64(fingerprintMk(mk)) === shadow.fp;
+      if (rec.role === 'initiator') rec.peerSeen = true;    // Antwort gesehen → init nicht mehr mitsenden
+      if (msgId) rec.seen = [...(rec.seen || []), msgId].slice(-SEEN_CAP);
+      await _save(peer, dev, rec);
+
+      if (match) { _bump('match'); return 'match'; }
+      console.warn(`🧬 ratchet_shadow MISMATCH ${peer}:${dev}`);
+      try { captureException(new Error('ratchet_shadow_mismatch'), { context: 'ratchetShadow', where: `${peer}:${dev}` }); } catch {}
+      _bump('mismatch');
+      return 'mismatch';
+    });
   } catch (e) {
-    // skip_limit/Header-Fehler etc.: console-only (Rollout-Rauschen, Muster logWrapVerify)
     console.warn('🧬 ratchet_shadow recv err (non-fatal):', e?.message);
     _bump('err');
     return 'err';

@@ -28,7 +28,7 @@ import {
   initInitiator, initResponder, nextSendKey, deriveReceiveKey,
   decodeRatchetHeader, encodeRatchetHeader, fingerprintMk,
 } from '../frontend/src/lib/ratchet.js';
-import { shadowOnSend, shadowOnReceive, shadowStats } from '../frontend/src/lib/ratchetShadow.js';
+import { shadowOnSend, shadowOnReceive, shadowStats, primeShadowSession } from '../frontend/src/lib/ratchetShadow.js';
 
 const ALG = 'pqxdh-x25519-mlkem768';
 const MYDEV = 'dev_local_test_1';
@@ -84,6 +84,10 @@ describe('A) Lokale Partei = Initiator', () => {
   it('shadowOnSend: Handshake + Shadow-Feld; ad-hoc-Bob matcht die fp über 3 Nachrichten', async () => {
     getRecipientDevices.mockResolvedValue([{ deviceId: 'bobdevA', hasKem: true, caps: { hybrid: true } }]);
     apiFetch.mockResolvedValue({ ok: true, status: 200, data: bob.wire });
+
+    // Erste Nachricht skippt (Session wird im Hintergrund pre-established) …
+    expect(await shadowOnSend('bobinit')).toBe(null);
+    await primeShadowSession('bobinit');          // … Priming abwarten (idempotent, single-flight)
 
     const s1 = await shadowOnSend('bobinit');
     expect(s1).not.toBe(null);
@@ -177,5 +181,49 @@ describe('B) Lokale Partei = Responder', () => {
     expect(await shadowOnReceive('aliced', 'alicedevD', s, MYDEV)).toBe('mismatch');
     expect(shadowStats().mismatch).toBe(before + 1);
     expect(captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ context: 'ratchetShadow' }));
+  });
+
+  it('Receive-Dedup: dieselbe msgId 2× → 2. skippt, nr advanct NICHT (nächste echte matcht)', async () => {
+    const alice = await makeAlice('alicedevDD');
+    const s1 = { ...aliceShadow(alice, true) };            // n=0, mit init
+    expect(await shadowOnReceive('alicedd', 'alicedevDD', s1, MYDEV, 'mid-1')).toBe('match');
+    expect(await shadowOnReceive('alicedd', 'alicedevDD', s1, MYDEV, 'mid-1')).toBe('skip');   // Redelivery
+    const s2 = aliceShadow(alice, false);                  // n=1
+    expect(await shadowOnReceive('alicedd', 'alicedevDD', s2, MYDEV, 'mid-2')).toBe('match');  // nicht desynct
+  });
+
+  it('gleichzeitige Receives (2 verschiedene init-Msgs) → accept nur EINMAL, kein Clobber (beide match)', async () => {
+    const alice = await makeAlice('alicedevE');
+    const s1 = { ...aliceShadow(alice, true) };
+    const s2 = { ...aliceShadow(alice, true) };            // beide tragen init (Alice sah keine Antwort)
+    const [r1, r2] = await Promise.all([
+      shadowOnReceive('alicee', 'alicedevE', s1, MYDEV, 'e-1'),
+      shadowOnReceive('alicee', 'alicedevE', s2, MYDEV, 'e-2'),
+    ]);
+    expect([r1, r2].sort()).toEqual(['match', 'match']);   // doppelter accept → Clobber → wäre mismatch
+  });
+});
+
+describe('Härtung: Send-Pfad ohne Netzwerk + Concurrency', () => {
+  it('erste Nachricht skippt SOFORT (kein await auf Bundle-Fetch); Priming im Hintergrund', async () => {
+    getRecipientDevices.mockResolvedValue([{ deviceId: 'bobF', hasKem: true, caps: { hybrid: true } }]);
+    let resolveFetch;
+    apiFetch.mockImplementation(() => new Promise(r => { resolveFetch = r; }));   // hängt absichtlich
+    const r = await shadowOnSend('bobf');                 // darf NICHT auf den hängenden Fetch warten
+    expect(r).toBe(null);
+    resolveFetch?.({ ok: false, status: 500, data: null });   // Priming sauber auflösen
+  });
+
+  it('gleichzeitige Sends serialisieren → n=0,1,2 (kein Lost-Update), Bob folgt allen', async () => {
+    const bob = makeBobWire('bobG');
+    getRecipientDevices.mockResolvedValue([{ deviceId: 'bobG', hasKem: true, caps: { hybrid: true } }]);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: bob.wire });
+    await primeShadowSession('bobg');
+
+    const outs = (await Promise.all([shadowOnSend('bobg'), shadowOnSend('bobg'), shadowOnSend('bobg')]))
+      .filter(Boolean)
+      .map(s => decodeRatchetHeader(s.header).n)
+      .sort((a, b) => a - b);
+    expect(outs).toEqual([0, 1, 2]);                      // keine doppelte 0 (Race gefixt)
   });
 });

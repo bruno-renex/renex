@@ -27,6 +27,7 @@ import { getCMKIfExists } from '../lib/cmk.js';
 import { isGuestHandle } from '../lib/guestNames.js';
 import { stripFormatting } from '../lib/messageFormat.js';
 import { unwrapAttachmentPlaintext } from '../lib/attachmentCrypto.js';
+import { shadowOnReceive } from '../lib/ratchetShadow.js';
 import {
   isPendingCmkReq, markPendingCmkReq, clearPendingCmkReq,
   isCmkUnavailable, markCmkUnavailable, clearCmkUnavailable, clearAllCmkState,
@@ -583,6 +584,18 @@ export const chatStore = {
 
     // Dedup: keine Message ID darf 2× in der Liste sein.
     if (msg.id && _messages.some(m => m.id === msg.id)) return;
+
+    // P3.0 Shadow-Ratchet (Dark-Launch §4.4): parallel-derive + fp-Vergleich
+    // für FRESH E2E-DMs vom Peer (History trägt kein shadowV4 → advanct nie).
+    // Fire-and-forget, wirft nie, beeinflusst Rendering/Decrypt nicht.
+    if (rawMsg.shadowV4 && !rawMsg.groupId && !rawMsg.type && !msg.isMe && msg.from) {
+      void shadowOnReceive(
+        msg.from,
+        rawMsg.deviceId || rawMsg.device_id,
+        rawMsg.shadowV4,
+        userStore.deviceId
+      );
+    }
 
     // Inbox-Key bestimmen: bei DM der nicht-mir-Handle (Sidebar zeigt Peer),
     // bei Group die groupId. Gilt unabhängig davon ob aktueller Chat oder

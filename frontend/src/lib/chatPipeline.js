@@ -32,6 +32,7 @@ import { wrapAttachmentPlaintext } from './attachmentCrypto.js';
 import { signMessage, verifyMessageSig } from './messageSig.js';
 import { sendChatWithPow } from './pow.js';
 import { logWrapVerify } from './wrapSig.js';
+import { shadowOnSend } from './ratchetShadow.js';
 import {
   ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
   findMyGSKAtTs, findPeerGSKAtTs,
@@ -714,6 +715,15 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo =
     if (rotationIndex > 0) {
       body.rotationIndex = rotationIndex;
     }
+
+    // P3.0 Shadow-Ratchet (Dark-Launch §4.4, RATCHET_SEND=0): parallel-derive,
+    // nur der 8B-MK-Fingerprint reist mit. shadowOnSend wirft nie; doppelt
+    // abgesichert, weil dies der aktivste Pfad ist. null = skip (kein pq-Peer,
+    // Kill-Switch, …) → Nachricht bleibt exakt wie bisher.
+    try {
+      const shadow = await shadowOnSend(peerHandle);
+      if (shadow) body.shadowV4 = shadow;
+    } catch { /* Shadow darf den Send NIE beeinflussen */ }
 
     if (replyTo && replyTo.id && typeof replyTo.text === 'string') {
       // Preview auf max 200 Zeichen kappen — verhindert riesige reply_ct in DB

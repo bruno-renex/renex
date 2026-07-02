@@ -454,6 +454,25 @@ export async function handleChatSend(request, env, ctx) {
     msg.v = v;
   }
 
+  // P3.0 Shadow-Ratchet (Dark-Launch §4.4): additives Transit-Feld — reist NUR
+  // im Live-Push mit (das D1-INSERT bindet explizite Spalten → landet nie in
+  // der History; Re-Reads können den Shadow nicht advancen). Nur echte E2E-DMs
+  // (kein Control-Type, keine Gruppe). Malformed/zu groß → still droppen
+  // (Dark-Launch: nie rejecten).
+  if (e2e && !type && !bodyConvoId && body.shadowV4 && typeof body.shadowV4 === "object") {
+    const s = body.shadowV4;
+    const okShape = s.v === 4
+      && typeof s.tgt === "string" && s.tgt.length >= 4 && s.tgt.length <= 64
+      && typeof s.header === "string" && s.header.length <= 512
+      && typeof s.fp === "string" && s.fp.length <= 16
+      && (s.init === undefined || (s.init && typeof s.init === "object"));
+    let sized = false;
+    try { sized = okShape && JSON.stringify(s).length <= 4096; } catch {}
+    if (sized) {
+      msg.shadowV4 = { v: 4, tgt: s.tgt, header: s.header, fp: s.fp, ...(s.init ? { init: s.init } : {}) };
+    }
+  }
+
   if (e2e) {
     msg.e2e = true;
 

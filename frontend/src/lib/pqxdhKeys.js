@@ -85,6 +85,27 @@ export async function ensureOpkPool(target = OPK_POOL) {
   return { added, all, count: all.length };
 }
 
+/**
+ * Fresh-ID-Topup: erzeugt `count` FRISCHE OPKs ADDITIV zum lokalen Bestand
+ * (unabhängig von der Pool-Größe) und gibt NUR die neuen zurück — für den
+ * Server-Topup, wenn der D1-Pool zur Neige geht. Server-Tombstone + Fresh-IDs
+ * zusammen schließen die OPK-Reuse-Kante: konsumierte IDs werden nie erneut
+ * hochgeladen. Alte lokale Privs bleiben liegen (deren InitHdr kann noch
+ * unterwegs sein); TTL-Cleanup der Leichen = pre-GA-TODO (Bauplan §4.3).
+ */
+export async function topUpOpks(count) {
+  const key = await _key();
+  const map = (await openJson(key, await idbGet(IDB_OPKS))) || {};
+  const added = [];
+  for (let i = 0; i < count; i++) {
+    const opk = x25519Keygen(), opkId = _rid();
+    map[opkId] = bytesToB64(opk.priv);
+    added.push({ opkId, pub: opk.pub });
+  }
+  if (added.length) await idbSet(IDB_OPKS, await sealJson(key, map));
+  return { added, localCount: Object.keys(map).length };
+}
+
 /** Publizierbares Bundle (nur Pubs) für POST /e2e/pqxdh/upload. */
 export async function buildPublishBundle({ opkCount = OPK_POOL } = {}) {
   const { ikX, ikEd } = await getOrCreateIdentity();

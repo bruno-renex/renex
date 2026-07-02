@@ -26,6 +26,7 @@
   import { heartbeat } from './lib/multidevice.js';
   import { getRecoveryStatus } from './lib/recovery.js';
   import { uploadInboxKeyIfNeeded } from './lib/e2eKeys.js';
+  import { publishPqxdhBundleIfNeeded } from './lib/pqxdhPublish.js';
   import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer, ensureSecureDmSession, republishCMKForPeer, decryptPulse } from './lib/chatPipeline.js';
   // (sendNod wird im ChatHeader genutzt, decryptPulse hier für Empfang)
   import { pulseStore } from './stores/pulseStore.svelte.js';
@@ -1428,6 +1429,12 @@
       const result = await uploadInboxKeyIfNeeded();
       if (result?.ok) {
         _runHeartbeat();
+        // M2 PQXDH (Dark-Launch PUBLISH-ONLY): Prekey-Bundle publizieren +
+        // OPK-Topup. Best-effort/non-blocking — wirft nie. Guests haben keine
+        // Session für /e2e/pqxdh/upload (requireSession) → skippen.
+        if (!userStore.isGuest) {
+          void publishPqxdhBundleIfNeeded();
+        }
       } else if (result?.deviceLimit) {
         deviceLimitInfo = result.deviceLimit;
       }

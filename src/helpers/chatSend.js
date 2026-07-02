@@ -317,12 +317,21 @@ export async function handleChatSend(request, env, ctx) {
     }
   }
 
-  // v4-Pflichtfelder (Double-Ratchet-DM): header_b64 + optionaler InitHdr.
-  // Kein sid/epoch (der Ratchet trägt seinen Zustand im Header). Malformed →
-  // 400 (v4 ist opt-in Sender-seitig; ein wohlgeformter Client sendet es nie).
-  if (v === 4 && e2e === true && !bodyConvoId && !type) {
+  // v4 ist AUSSCHLIESSLICH Double-Ratchet-DM: kein Gruppen-/Channel-Kontext,
+  // kein Control-Type. Sonst würde ein v4-Header ohne Pflichtfeld-Prüfung
+  // durchrutschen. Hart ablehnen (kein Datenverlust-Pfad; v4 ist opt-in).
+  if (v === 4 && (bodyConvoId || (type !== undefined && type !== null))) {
+    return json(request, { error: "v4 is DM-only" }, 400);
+  }
+  // v4-Pflichtfelder (Double-Ratchet-DM): header_b64 + ivB64 + ctB64 (sonst
+  // unentschlüsselbar) + optionaler InitHdr. Kein sid/epoch (der Ratchet trägt
+  // seinen Zustand im Header). Malformed → 400.
+  if (v === 4 && e2e === true) {
     if (typeof headerB64 !== "string" || headerB64.length < 8 || headerB64.length > MAX_HEADER_B64) {
       return json(request, { error: "Invalid header_b64" }, 400);
+    }
+    if (typeof ivB64 !== "string" || typeof ctB64 !== "string") {
+      return json(request, { error: "v4 requires ivB64+ctB64" }, 400);
     }
     if (initHdr !== undefined && initHdr !== null) {
       let ok = false;

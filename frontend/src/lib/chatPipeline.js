@@ -33,7 +33,7 @@ import { signMessage, verifyMessageSig } from './messageSig.js';
 import { sendChatWithPow } from './pow.js';
 import { logWrapVerify } from './wrapSig.js';
 import { shadowOnSend } from './ratchetShadow.js';
-import { ratchetEncrypt, ratchetDecrypt } from './ratchetSession.js';
+import { ratchetEncrypt, ratchetDecrypt, storeV4Plaintext, loadV4Plaintext } from './ratchetSession.js';
 import {
   ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
   findMyGSKAtTs, findPeerGSKAtTs,
@@ -460,11 +460,24 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
   }
 
   // ── P3.1 v4 Double-Ratchet: header_b64 vorhanden → Ratchet-Decrypt (nicht
-  // CMK). Ergebnis wird gecacht → ein History-Reload advanct den Ratchet NICHT
-  // erneut (sonst Desync). Receive-Capability ist IMMER an (kein Flag). ──
+  // CMK). Receive-Capability ist IMMER an (kein Flag). ──
   if (msg.header_b64) {
+    // Persistenter Klartext-Store ZUERST: v4-MKs sind forward-secret (einmalig)
+    // → History-Reload/Redelivery/eigene Sends können NICHT re-derivt werden.
+    if (msg.id) {
+      const st = await loadV4Plaintext(msg.id);
+      if (st) return { text: st.text, verified: st.verified, replyText: null, _cached: true };
+    }
+    // Eigene gesendete v4-Nachricht ohne Store-Eintrag → nicht re-derivbar
+    // (Ratchet ist gerichtet). NIE gegen die Peer-Session ratchetDecrypten
+    // (falsche Richtung → Desync).
+    const from = String(msg.from || peerHandle || '').toLowerCase();
+    if (from === String(myHandle || '').toLowerCase()) return { text: null, verified: null };
+
     const res = await _decryptIncomingV4(msg, myHandle, peerHandle);
-    if (res && res.text != null && msg.id) _decryptCacheSet(msg.id, res.text, res.verified, res.replyText);
+    // Erfolgreichen Klartext persistieren → Reload/Redelivery advanct den
+    // Ratchet nicht erneut (Store-Hit oben).
+    if (res && res.text != null && msg.id) await storeV4Plaintext(msg.id, res.text, res.verified);
     return res || { text: null, verified: null };
   }
 
@@ -701,7 +714,13 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo =
         if (v4.init) body.init = v4.init;
         // PoW über die v4-Felder (kein sid/epoch → undefined, identisch server-seitig).
         const r = await sendChatWithPow(body, { sid: undefined, epoch: undefined, sig: v4.sig, ctB64: v4.ctB64 });
-        if (r.ok) return { ok: true, message: r.data?.message };
+        if (r.ok) {
+          // Eigenen Klartext persistieren — v4-MKs sind forward-secret, ohne
+          // Store wäre die eigene Nachricht nach Reload unlesbar.
+          const mid = r.data?.message?.id;
+          if (mid) await storeV4Plaintext(mid, plaintext, true).catch(() => {});
+          return { ok: true, message: r.data?.message };
+        }
         console.warn('🔗 v4 send failed → Legacy-Fallback:', r.error || r.status);
         // Fällt durch auf Legacy (der Ratchet-Zustand hat aber schon eine
         // Nachricht verbraucht → nächster Send nutzt die nächste Kette; der

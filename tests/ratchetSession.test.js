@@ -28,6 +28,7 @@ import { e2eEncrypt, e2eDecrypt } from '../frontend/src/lib/chatCrypto.js';
 import { verifyMessageSigV4 } from '../frontend/src/lib/messageSig.js';
 import {
   ratchetEncrypt, ratchetDecrypt, primeRatchetSession, pqDeviceCount,
+  storeV4Plaintext, loadV4Plaintext,
 } from '../frontend/src/lib/ratchetSession.js';
 
 const ALG = 'pqxdh-x25519-mlkem768';
@@ -158,8 +159,9 @@ describe('B) Lokale Partei = Empfänger (Responder)', () => {
     expect(r1.text).toBe('hallo responder');
     expect(r1.verified).toBe(null);                              // kein sigPub übergeben
 
-    // Der Responder kann jetzt zurücksenden (v4, dieselbe Session, kein Netz).
-    getRecipientDevices.mockResolvedValue([]);                   // darf nicht gebraucht werden
+    // Der Responder kann jetzt zurücksenden (v4, dieselbe Session).
+    // getRecipientDevices für den Send-Zeit-single-device-Recheck (1 pq-Device).
+    getRecipientDevices.mockResolvedValue([{ deviceId: 'adevB', hasKem: true, caps: { hybrid: true } }]);
     const back = await ratchetEncrypt('aliceb', 'antwort');
     expect(back?.v).toBe(4);
     expect(back.init).toBeUndefined();                           // Responder sendet nie init
@@ -173,6 +175,41 @@ describe('B) Lokale Partei = Empfänger (Responder)', () => {
   it('kaputte Felder → null', async () => {
     expect(await ratchetDecrypt('x', 'y', { header_b64: 'z' }, null)).toBe(null);
     expect(await ratchetDecrypt('x', 'y', null, null)).toBe(null);
+  });
+
+  it('DATENVERLUST-FIX: kaputter Header verbrennt die OPK NICHT (Retry mit gutem Header klappt)', async () => {
+    const good = await aliceMakesV4('adevF', 'echte nachricht', true);
+    // Erst eine Nachricht mit DEMSELBEN init aber kaputtem Header → muss null +
+    // OHNE OPK-Consume sein (Header wird ZUERST validiert).
+    const broken = { ...good, header_b64: 'nicht-base64!!!' };
+    expect(await ratchetDecrypt('alicef', 'adevF', broken, null)).toBe(null);
+    // Danach die intakte Nachricht → accept läuft erst JETZT, Klartext kommt.
+    const r = await ratchetDecrypt('alicef', 'adevF', good, null);
+    expect(r?.text).toBe('echte nachricht');
+  });
+});
+
+describe('v4-Klartext-Store (forward-secret History)', () => {
+  it('storeV4Plaintext/loadV4Plaintext Round-Trip', async () => {
+    await storeV4Plaintext('mid-x', 'geheim', true);
+    expect(await loadV4Plaintext('mid-x')).toEqual({ text: 'geheim', verified: true });
+    expect(await loadV4Plaintext('unbekannt')).toBe(null);
+  });
+});
+
+describe('Send-Zeit-Recheck (Peer wird multi-device)', () => {
+  it('Session existiert, aber Peer jetzt 2 Geräte → ratchetEncrypt null (Legacy-Fallback)', async () => {
+    const bob = makeBobWire('bobH');
+    getRecipientDevices.mockResolvedValue([{ deviceId: 'bobH', hasKem: true, caps: { hybrid: true } }]);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: bob.wire });
+    await primeRatchetSession('bobh');
+    expect((await ratchetEncrypt('bobh', 'eins'))?.v).toBe(4);   // 1 Gerät → v4
+    // Peer fügt ein Gerät hinzu:
+    getRecipientDevices.mockResolvedValue([
+      { deviceId: 'bobH', hasKem: true, caps: { hybrid: true } },
+      { deviceId: 'bobH2', hasKem: true, caps: { hybrid: true } },
+    ]);
+    expect(await ratchetEncrypt('bobh', 'zwei')).toBe(null);      // jetzt multi-device → Legacy
   });
 });
 

@@ -104,6 +104,22 @@ describe('chatSend v4-Transit', () => {
     expect(res.status).toBe(400);
   });
 
+  it('v4 mit convoId (Gruppe) → 400 (DM-only)', async () => {
+    const res = await handleChatSend(req(v4Body({ convoId: 'grp-1' })), buildEnv());
+    expect(res.status).toBe(400);
+  });
+
+  it('v4 mit Control-Type → 400 (DM-only)', async () => {
+    const res = await handleChatSend(req(v4Body({ type: 'pulse' })), buildEnv());
+    expect(res.status).toBe(400);
+  });
+
+  it('v4 ohne ivB64/ctB64 → 400 (unentschlüsselbar)', async () => {
+    const b = v4Body(); delete b.ivB64;
+    const res = await handleChatSend(req(b), buildEnv());
+    expect(res.status).toBe(400);
+  });
+
   it('v2-DM unverändert → 200, kein header_b64', async () => {
     const env = buildEnv();
     const res = await handleChatSend(req({ to: 'bob', e2e: true, v: 2, sid: 'alice:bob', epoch: 1, ivB64: IV, ctB64: CT, deviceId: 'dev_alice_1' }), env);

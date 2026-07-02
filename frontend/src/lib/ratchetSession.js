@@ -34,13 +34,30 @@ import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
 import { signMessageV4, verifyMessageSigV4 } from './messageSig.js';
 import { ensureHybridSession, acceptHybridSession } from './hybridSession.js';
 import { getRecipientDevices } from './sesame.js';
-import { captureException } from './sentry.js';
 
 const STORE_INFO = 'renex:ratchetsession:store:v1';
 const IDB_PREFIX = 'ratchet:';
+const V4MSG_PREFIX = 'v4msg:';           // persistenter Klartext-Store (siehe unten)
 const SKIPPED_CAP = 512;                 // harte Gesamtgrenze des Skipped-Stores (über MAX_SKIP hinaus)
+const MAX_INIT_SENDS = 32;               // InitHdr höchstens so oft mitschicken (danach liegt es in der History)
 const _key = () => deriveStorageKey(STORE_INFO);
 const _idbKey = (peer, dev) => `${IDB_PREFIX}${peer}:${dev}`;
+
+// ── Persistenter v4-Klartext-Store (versiegelt) ────────
+// Ratchet-Message-Keys sind EINMALIG (forward-secret) → eine bereits
+// entschlüsselte v4-Nachricht kann NICHT re-derivt werden. Ohne lokalen
+// Klartext-Cache wären nach Reload alle v4-History-Nachrichten (empfangene UND
+// eigene gesendete) unlesbar. Daher: Klartext je msgId lokal versiegelt ablegen.
+// Löst zugleich Redelivery-Dedup (Store-Hit → kein zweiter Ratchet-Advance).
+export async function storeV4Plaintext(msgId, text, verified = null) {
+  if (!msgId || typeof text !== 'string') return;
+  try { await idbSet(V4MSG_PREFIX + msgId, await sealJson(await _key(), { text, verified })); } catch {}
+}
+export async function loadV4Plaintext(msgId) {
+  if (!msgId) return null;
+  try { const s = await idbGet(V4MSG_PREFIX + msgId); return s ? await openJson(await _key(), s) : null; }
+  catch { return null; }
+}
 
 // Sender-Flag (P3.1). DEFAULT AUS (opt-in) — im Gegensatz zum Shadow, der
 // standardmäßig läuft. Empfangen von v4 ist IMMER an (deployed capability);
@@ -159,6 +176,11 @@ export async function ratchetEncrypt(peerHandle, plaintext, { myHandle = '' } = 
     if (!existing) { void primeRatchetSession(peer, { myHandle }); return null; }   // Session baut sich auf → dieser Send bleibt Legacy
     const { dev } = existing;
 
+    // Send-Zeit-Recheck (cached): Peer inzwischen multi-device geworden? → Legacy
+    // (v4 für Multi-Device = P3.2). Verhindert, dass ein zweites Peer-Gerät die
+    // v4-Nachricht nie lesen kann.
+    if ((await pqDeviceCount(peer)) !== 1) return null;
+
     return await _withLock(`sess:${peer}:${dev}`, async () => {
       const rec = await _load(peer, dev);
       if (!rec || !rec.state.cks) return null;                        // Responder vor erstem Empfang: noch nicht sendefähig
@@ -167,11 +189,13 @@ export async function ratchetEncrypt(peerHandle, plaintext, { myHandle = '' } = 
       const aesKey = await _aesKey(mk);
       const { ivB64, ctB64 } = await e2eEncrypt(aesKey, plaintext, headerB64);   // AAD = header_b64
       const sig = await signMessageV4(headerB64, ivB64, ctB64);
+      // init-Cap: InitHdr höchstens MAX_INIT_SENDS-mal mitschicken. Es liegt in
+      // der History (init_hdr-Spalte) → ein offline gewesener Peer baut die
+      // Session daraus auf; unbegrenztes Resenden wäre reine Bandbreite.
+      const carryInit = rec.role === 'initiator' && !rec.peerSeen && rec.initHdr && (rec.initSends || 0) < MAX_INIT_SENDS;
+      if (carryInit) rec.initSends = (rec.initSends || 0) + 1;
       await _save(peer, dev, rec);
-      return {
-        v: 4, header_b64: headerB64, ivB64, ctB64, sig,
-        ...(rec.role === 'initiator' && !rec.peerSeen && rec.initHdr ? { init: rec.initHdr } : {}),
-      };
+      return { v: 4, header_b64: headerB64, ivB64, ctB64, sig, ...(carryInit ? { init: rec.initHdr } : {}) };
     });
   } catch (e) {
     console.warn('🔗 ratchet_session encrypt fail → Legacy (non-fatal):', e?.message);
@@ -194,26 +218,36 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
   const dev = String(senderDeviceId || '');
   if (!peer || !dev || !msg || !msg.header_b64 || !msg.ivB64 || !msg.ctB64) return null;
 
+  // Header ZUERST validieren (pure Leseoperation, KEINE Mutation) → ein kaputter
+  // Header verbrennt keine OPK (acceptHybridSession läuft erst danach).
+  let header;
+  try { header = decodeRatchetHeader(msg.header_b64); } catch { return null; }
+
   return await _withLock(`sess:${peer}:${dev}`, async () => {
     try {
       let rec = await _load(peer, dev);
       if (!rec) {
         if (!msg.init) return null;                                   // Init verpasst → (Aufrufer: retry/locked)
-        const hs = await acceptHybridSession(peer, dev, msg.init);
+        const hs = await acceptHybridSession(peer, dev, msg.init);    // KONSUMIERT die one-time-OPK
         const spkPriv = b64ToBytes(hs.ownSpkPriv);
         rec = {
           role: 'responder', peerSeen: true, initHdr: null,
           state: initResponder(hs.rootKey, { priv: spkPriv, pub: x25519PublicKey(spkPriv) }),
         };
+        // OPK-Verbrauch SOFORT mit persistierter Session paaren: ein späterer
+        // Decrypt-Fehler kann die Session nicht mehr verwaisen lassen (sonst
+        // würde der Retry acceptHybridSession erneut aufrufen → opk_consumed →
+        // permanenter Lockout). Kritischer Datenverlust-Fix.
+        await _save(peer, dev, rec);
       }
 
-      const header = decodeRatchetHeader(msg.header_b64);
       const mk = deriveReceiveKey(rec.state, header);
       const aesKey = await _aesKey(mk);
-      // Entschlüsseln ZUERST (AES-GCM-Tag beweist Integrität inkl. header via AAD).
+      // Entschlüsseln (AES-GCM-Tag beweist Integrität inkl. header via AAD).
       const text = await e2eDecrypt(aesKey, msg.ivB64, msg.ctB64, msg.header_b64);
 
-      // Identitäts-Signatur über den Header (verify+log; Auth-Tag ist der harte Schutz).
+      // Identitäts-Signatur über den Header (verify+log; Auth-Tag ist der harte
+      // Schutz). verified=null wenn kein Pubkey vorhanden → NICHT als Fehler.
       let verified = null;
       if (msg.sig && sigPubJwk) {
         verified = await verifyMessageSigV4(msg.header_b64, msg.ivB64, msg.ctB64, msg.sig, sigPubJwk);
@@ -224,10 +258,10 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
       await _save(peer, dev, rec);
       return { text, verified };
     } catch (e) {
-      // Decrypt-Fehler (falscher Key / Tag-Mismatch / Header kaputt) → null:
-      // der Aufrufer retryt/zeigt locked, wirft NICHT.
+      // Decrypt-Fehler (Tag-Mismatch / Replay / skip_limit) → null: Aufrufer
+      // retryt/zeigt locked, wirft NICHT. Kein Sentry (Replays sind normal;
+      // echte Probleme zeigen sich als dauerhaft-locked = beobachtbar).
       console.warn('🔗 ratchet_session decrypt fail (non-fatal):', e?.message);
-      try { captureException(new Error('ratchet_session_decrypt_fail'), { context: 'ratchetSession', where: `${peer}:${dev}` }); } catch {}
       return null;
     }
   });

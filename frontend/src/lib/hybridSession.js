@@ -156,6 +156,8 @@ async function _ensureInitiator(peer, dev) {
     peerHandle: peer, peerDeviceId: dev,
     rootKey: bytesToB64(rk0),
     initHdr,
+    // P3: Bobs SPK-Pub = initialer Ratchet-DHr (Signal-Konvention, ratchet.js).
+    peerSpkPub: bytesToB64(bundle.spkX),
     createdAt: Date.now(),
   };
   // Peer-IK aus dem Bundle für den Tie-Break (D4).
@@ -223,6 +225,8 @@ export async function acceptHybridSession(peerHandle, peerDeviceId, initHdr, { e
     peerHandle: peer, peerDeviceId: dev,
     rootKey: bytesToB64(rk0),
     hdrSigOk,
+    // P3: eigenes SPK-Priv = initiales Ratchet-DHs des Responders (ratchet.js).
+    ownSpkPriv: bytesToB64(privs.spkBPriv),
     createdAt: Date.now(),
   };
   // Tie-Break (D4): meine Identität vs. der Initiator-IK aus dem Header.

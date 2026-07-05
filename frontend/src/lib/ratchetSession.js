@@ -204,6 +204,108 @@ export async function ratchetEncrypt(peerHandle, plaintext, { myHandle = '' } = 
 }
 
 // ======================================================
+// MULTI-DEVICE-FAN-OUT (P3.2-A). Ein v4-Ciphertext pro Ziel-Device via eigener
+// (handle,deviceId)-Ratchet-Session. Jede Session ist ISOLIERT → ein aus-
+// gelassenes/out-of-order-Device erzeugt nur eine lokal-gesperrte Nachricht,
+// NIE einen Fleet-State-Clobber (die Lehre aus 2026-05-15; Ratchet-Desync heilt
+// nicht durch Re-Fetch, deshalb Isolation statt geteiltem Zustand).
+// ======================================================
+const FANOUT_MAX = 9;   // Server-Cap ist 10; ein Slot Reserve
+
+/** Ziel-Devices: pq-fähige Peer-Devices + EIGENE andere pq-Devices (Self-Sync), ohne mein aktuelles. */
+async function _fanoutTargets(peer, myHandle, myDeviceId) {
+  const pq = (list) => (list || []).filter(d => d.hasKem && d.caps?.hybrid);
+  const peerDevs = pq(await getRecipientDevices(peer).catch(() => [])).map(d => ({ handle: peer, deviceId: d.deviceId }));
+  let mine = [];
+  if (myHandle) {
+    mine = pq(await getRecipientDevices(myHandle).catch(() => []))
+      .filter(d => d.deviceId !== myDeviceId)
+      .map(d => ({ handle: myHandle, deviceId: d.deviceId }));
+  }
+  return [...peerDevs, ...mine].slice(0, FANOUT_MAX);
+}
+
+/** Stellt (falls nötig) eine Initiator-Session gegen EIN exaktes (handle,dev)-Ziel her. Single-flight. */
+export function primePair(handle, dev) {
+  const h = String(handle || '').toLowerCase(), d = String(dev || '');
+  if (!h || !d || !ratchetSendEnabled()) return Promise.resolve(false);
+  return _withLock(`prime:${h}:${d}`, async () => {
+    try {
+      if (await _load(h, d)) return true;                       // schon da
+      const hs = await ensureHybridSession(h, d);
+      if (!hs?.peerSpkPub) return false;
+      await _save(h, d, {
+        role: 'initiator', peerSeen: false, initHdr: hs.initHdr,
+        state: initInitiator(hs.rootKey, b64ToBytes(hs.peerSpkPub)),
+      });
+      return true;
+    } catch (e) { console.warn('🔗 primePair skip:', e?.message); return false; }
+  });
+}
+
+/** Per-(handle,dev)-Encrypt unter Lock. null = Session nicht sendebereit. */
+async function _encryptForDevice(handle, dev, plaintext) {
+  return _withLock(`sess:${handle}:${dev}`, async () => {
+    const rec = await _load(handle, dev);
+    if (!rec || !rec.state.cks) return null;
+    const { mk, header } = nextSendKey(rec.state);
+    const headerB64 = encodeRatchetHeader(header);
+    const aesKey = await _aesKey(mk);
+    const { ivB64, ctB64 } = await e2eEncrypt(aesKey, plaintext, headerB64);
+    const sig = await signMessageV4(headerB64, ivB64, ctB64);
+    const carryInit = rec.role === 'initiator' && !rec.peerSeen && rec.initHdr && (rec.initSends || 0) < MAX_INIT_SENDS;
+    if (carryInit) rec.initSends = (rec.initSends || 0) + 1;
+    await _save(handle, dev, rec);
+    return { header_b64: headerB64, ivB64, ctB64, sig, ...(carryInit ? { init: rec.initHdr } : {}) };
+  });
+}
+
+/**
+ * Multi-Device-Fan-out (P3.2-A). ALL-OR-NOTHING: v4 nur, wenn JEDES Ziel-Device
+ * eine bereite Session hat — sonst null (Aufrufer sendet Legacy an alle; kein
+ * Device bleibt ohne lesbare Kopie) und die fehlenden Sessions primen im BG.
+ * @returns {Promise<{mode:'single', tgt, header_b64, ivB64, ctB64, sig, init?}
+ *                  | {mode:'multi', payloads:[{deviceId, header_b64, ivB64, ctB64, sig, init?}]}
+ *                  | null>}
+ */
+export async function ratchetEncryptMulti(peerHandle, plaintext, { myHandle = '', myDeviceId = '' } = {}) {
+  try {
+    if (!ratchetSendEnabled()) return null;
+    const peer = String(peerHandle || '').toLowerCase();
+    if (!peer || typeof plaintext !== 'string') return null;
+    const myH = String(myHandle || '').toLowerCase();
+
+    const targets = await _fanoutTargets(peer, myH, myDeviceId);
+    if (targets.length === 0) return null;                      // kein pq-Ziel → Legacy
+
+    // All-or-nothing-Bereitschaft: fehlt EINEM Ziel die Session → Legacy diese
+    // Runde, fehlende im Hintergrund primen.
+    let allReady = true;
+    for (const t of targets) {
+      const rec = await _load(t.handle, t.deviceId);
+      if (!rec || !rec.state.cks) { allReady = false; void primePair(t.handle, t.deviceId); }
+    }
+    if (!allReady) return null;
+
+    const payloads = [];
+    for (const t of targets) {
+      const enc = await _encryptForDevice(t.handle, t.deviceId, plaintext);
+      if (!enc) return null;                                    // Race: unbereit geworden → sicher auf Legacy
+      payloads.push({ deviceId: t.deviceId, ...enc });
+    }
+    // 1 Ziel → single-Wire (P3.1, live-validiert, unverändert); N → payloads[].
+    if (payloads.length === 1) {
+      const { deviceId, ...single } = payloads[0];
+      return { mode: 'single', tgt: deviceId, ...single };
+    }
+    return { mode: 'multi', payloads };
+  } catch (e) {
+    console.warn('🔗 ratchetEncryptMulti fail → Legacy (non-fatal):', e?.message);
+    return null;
+  }
+}
+
+// ======================================================
 // EMPFANGEN (v4). null → Aufrufer behandelt als „noch nicht entschlüsselbar".
 // ======================================================
 /**

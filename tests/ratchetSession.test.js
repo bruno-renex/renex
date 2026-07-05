@@ -29,6 +29,7 @@ import { verifyMessageSigV4 } from '../frontend/src/lib/messageSig.js';
 import {
   ratchetEncrypt, ratchetDecrypt, primeRatchetSession, pqDeviceCount,
   storeV4Plaintext, loadV4Plaintext,
+  ratchetEncryptMulti, primePair,
 } from '../frontend/src/lib/ratchetSession.js';
 
 const ALG = 'pqxdh-x25519-mlkem768';
@@ -194,6 +195,97 @@ describe('v4-Klartext-Store (forward-secret History)', () => {
     await storeV4Plaintext('mid-x', 'geheim', true);
     expect(await loadV4Plaintext('mid-x')).toEqual({ text: 'geheim', verified: true });
     expect(await loadV4Plaintext('unbekannt')).toBe(null);
+  });
+});
+
+describe('P3.2-A Multi-Device-Fan-out (ratchetEncryptMulti)', () => {
+  // decrypt eines payload durch das ad-hoc-Device, das das Wire-Bundle stellte.
+  async function bobDecryptsPayload(bob, p) {
+    const rk0 = responderRoot({
+      ikBPriv: bob.ikX.priv, spkBPriv: bob.spk.priv, opkBPriv: bob.opk.priv, pqspkDk: bob.pq.dk,
+      ikAX: b64ToBytes(p.init.ikA25519), ekAX: b64ToBytes(p.init.ekA25519),
+      kemCt: b64ToBytes(p.init.mlkemCt), usedOpk: !!p.init.usedOpkId,
+    });
+    const st = initResponder(rk0, { priv: bob.spk.priv, pub: bob.spk.pub });
+    const mk = deriveReceiveKey(st, decodeRatchetHeader(p.header_b64));
+    return aesDecrypt(mk, p.ivB64, p.ctB64, p.header_b64);
+  }
+
+  it('2 Peer-Devices → mode:multi mit 2 Payloads, jedes vom richtigen Device entschlüsselbar', async () => {
+    const b1 = makeBobWire('bd1'), b2 = makeBobWire('bd2');
+    const wires = { bd1: b1.wire, bd2: b2.wire };
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobm' ? [{ deviceId: 'bd1', hasKem: true, caps: { hybrid: true } }, { deviceId: 'bd2', hasKem: true, caps: { hybrid: true } }]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockImplementation(async (path) => {
+      const dev = (path.match(/device=([^&]+)/) || [])[1];
+      return (path.startsWith('/e2e/pqxdh/bundle') && wires[dev]) ? { ok: true, status: 200, data: wires[dev] } : { ok: false, status: 404, data: null };
+    });
+
+    // 1. Aufruf: nicht bereit → null (Legacy), primet beide im BG.
+    expect(await ratchetEncryptMulti('bobm', 'x', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
+    await primePair('bobm', 'bd1'); await primePair('bobm', 'bd2');
+
+    const out = await ratchetEncryptMulti('bobm', 'hallo multi 🔐', { myHandle: 'me', myDeviceId: 'medev' });
+    expect(out.mode).toBe('multi');
+    expect(out.payloads.map(p => p.deviceId).sort()).toEqual(['bd1', 'bd2']);
+    const pd1 = out.payloads.find(p => p.deviceId === 'bd1');
+    const pd2 = out.payloads.find(p => p.deviceId === 'bd2');
+    expect(await bobDecryptsPayload(b1, pd1)).toBe('hallo multi 🔐');
+    expect(await bobDecryptsPayload(b2, pd2)).toBe('hallo multi 🔐');
+  });
+
+  it('1 Ziel-Device → mode:single (P3.1-Wire, unverändert)', async () => {
+    const b = makeBobWire('sd1');
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobs' ? [{ deviceId: 'sd1', hasKem: true, caps: { hybrid: true } }]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: b.wire });
+    expect(await ratchetEncryptMulti('bobs', 'x', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
+    await primePair('bobs', 'sd1');
+    const out = await ratchetEncryptMulti('bobs', 'einzeln', { myHandle: 'me', myDeviceId: 'medev' });
+    expect(out.mode).toBe('single');
+    expect(out.tgt).toBe('sd1');
+    expect(out.header_b64).toBeTruthy();
+    expect(out.payloads).toBeUndefined();
+  });
+
+  it('Self-Sync: EIGENES anderes Device ist Ziel (2 Payloads: Peer + eigenes)', async () => {
+    const bp = makeBobWire('pd'), bm = makeBobWire('mydev2');
+    const wires = { pd: bp.wire, mydev2: bm.wire };
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobss' ? [{ deviceId: 'pd', hasKem: true, caps: { hybrid: true } }]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }, { deviceId: 'mydev2', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockImplementation(async (path) => {
+      const dev = (path.match(/device=([^&]+)/) || [])[1];
+      return wires[dev] ? { ok: true, status: 200, data: wires[dev] } : { ok: false, status: 404, data: null };
+    });
+    await ratchetEncryptMulti('bobss', 'x', { myHandle: 'me', myDeviceId: 'medev' });
+    await primePair('bobss', 'pd'); await primePair('me', 'mydev2');
+    const out = await ratchetEncryptMulti('bobss', 'self-sync', { myHandle: 'me', myDeviceId: 'medev' });
+    expect(out.mode).toBe('multi');
+    expect(out.payloads.map(p => p.deviceId).sort()).toEqual(['mydev2', 'pd']);   // Peer + eigenes anderes Device
+  });
+
+  it('all-or-nothing: 1 Device unbereit → null (Legacy für alle)', async () => {
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobno' ? [{ deviceId: 'r1', hasKem: true, caps: { hybrid: true } }, { deviceId: 'r2', hasKem: true, caps: { hybrid: true } }]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    // Nur r1 bekommt ein Bundle; r2 nie → r2-Session nie bereit.
+    const b1 = makeBobWire('r1');
+    apiFetch.mockImplementation(async (path) => {
+      const dev = (path.match(/device=([^&]+)/) || [])[1];
+      return (dev === 'r1') ? { ok: true, status: 200, data: b1.wire } : { ok: false, status: 404, data: null };
+    });
+    await ratchetEncryptMulti('bobno', 'x', { myHandle: 'me', myDeviceId: 'medev' });
+    await primePair('bobno', 'r1'); await primePair('bobno', 'r2');   // r2 schlägt fehl
+    // r2 unbereit → all-or-nothing greift → null.
+    expect(await ratchetEncryptMulti('bobno', 'y', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
+  });
+
+  it('kein pq-Ziel → null (Legacy)', async () => {
+    getRecipientDevices.mockResolvedValue([]);
+    expect(await ratchetEncryptMulti('nopq', 'x', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
   });
 });
 

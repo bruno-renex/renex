@@ -33,7 +33,7 @@ import { signMessage, verifyMessageSig } from './messageSig.js';
 import { sendChatWithPow } from './pow.js';
 import { logWrapVerify } from './wrapSig.js';
 import { shadowOnSend } from './ratchetShadow.js';
-import { ratchetEncrypt, ratchetDecrypt, storeV4Plaintext, loadV4Plaintext } from './ratchetSession.js';
+import { ratchetEncryptMulti, ratchetDecrypt, storeV4Plaintext, loadV4Plaintext } from './ratchetSession.js';
 import {
   ensureMyGSK, getMyGSK, getOrRequestPeerGSK, importGskAesKey,
   findMyGSKAtTs, findPeerGSKAtTs,
@@ -725,18 +725,20 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
  */
 export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo = null, attachment = null) {
   try {
-    // ── P3.1: v4-Double-Ratchet-Versuch (flag-gegated, single-device) ──
-    // Nur reiner Text (Reply/Attachment bleiben in P3.1 Legacy). ratchetEncrypt
-    // liefert null wenn Flag aus / nicht qualifiziert / Session noch nicht bereit
-    // → dann unten der unveränderte Legacy-v2-Pfad. KEIN Shadow bei v4 (die
-    // Session IST der echte Ratchet).
+    // ── P3.2: v4-Double-Ratchet-Fan-out (flag-gegated, Multi-Device) ──
+    // Nur reiner Text (Reply/Attachment bleiben Legacy). ratchetEncryptMulti
+    // fächert an ALLE pq-Ziel-Devices (Peer + eigene andere) auf; all-or-nothing.
+    // null = Flag aus / kein pq-Ziel / eine Session noch nicht bereit → unten der
+    // unveränderte Legacy-v2-Pfad. KEIN Shadow bei v4 (die Session IST der Ratchet).
     if (!replyTo && !attachment) {
-      const v4 = await ratchetEncrypt(peerHandle, plaintext, { myHandle });
+      const deviceId = getDeviceId();
+      const v4 = await ratchetEncryptMulti(peerHandle, plaintext, { myHandle, myDeviceId: deviceId });
       if (v4) {
-        const body = { to: peerHandle, e2e: true, v: 4, header_b64: v4.header_b64, ivB64: v4.ivB64, ctB64: v4.ctB64, sig: v4.sig, deviceId: getDeviceId() };
-        if (v4.init) body.init = v4.init;
-        // PoW über die v4-Felder (kein sid/epoch → undefined, identisch server-seitig).
-        const r = await sendChatWithPow(body, { sid: undefined, epoch: undefined, sig: v4.sig, ctB64: v4.ctB64 });
+        const body = v4.mode === 'multi'
+          ? { to: peerHandle, e2e: true, v: 4, payloads: v4.payloads, deviceId }
+          : { to: peerHandle, e2e: true, v: 4, header_b64: v4.header_b64, ivB64: v4.ivB64, ctB64: v4.ctB64, sig: v4.sig, deviceId, ...(v4.init ? { init: v4.init } : {}) };
+        // PoW über die Top-Level-v4-Felder (bei multi undefined → identisch server-seitig).
+        const r = await sendChatWithPow(body, { sid: undefined, epoch: undefined, sig: body.sig, ctB64: body.ctB64 });
         if (r.ok) {
           // Eigenen Klartext persistieren — v4-MKs sind forward-secret, ohne
           // Store wäre die eigene Nachricht nach Reload unlesbar.
@@ -745,9 +747,6 @@ export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo =
           return { ok: true, message: r.data?.message };
         }
         console.warn('🔗 v4 send failed → Legacy-Fallback:', r.error || r.status);
-        // Fällt durch auf Legacy (der Ratchet-Zustand hat aber schon eine
-        // Nachricht verbraucht → nächster Send nutzt die nächste Kette; der
-        // Empfänger überspringt die verlorene n via Skipped-Keys).
       }
     }
 

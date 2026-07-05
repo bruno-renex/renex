@@ -287,6 +287,55 @@ describe('P3.2-A Multi-Device-Fan-out (ratchetEncryptMulti)', () => {
     getRecipientDevices.mockResolvedValue([]);
     expect(await ratchetEncryptMulti('nopq', 'x', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
   });
+
+  it('2026-05-15-REGRESSION: per-Device-Sessions ISOLIERT — kein Cross-Device-Clobber, out-of-order pro Device ok', async () => {
+    // Der Vorfall 2026-05-15 war ein GETEILTER-Zustand-Clobber (ein Device
+    // zerstörte den State der anderen). v4 hat pro (peer,device) eine EIGENE
+    // isolierte Session → strukturell unmöglich. Dieser Test beweist es:
+    const b1 = makeBobWire('rd1'), b2 = makeBobWire('rd2');
+    const wires = { rd1: b1.wire, rd2: b2.wire };
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobiso' ? [{ deviceId: 'rd1', hasKem: true, caps: { hybrid: true } }, { deviceId: 'rd2', hasKem: true, caps: { hybrid: true } }]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockImplementation(async (path) => {
+      const dev = (path.match(/device=([^&]+)/) || [])[1];
+      return wires[dev] ? { ok: true, status: 200, data: wires[dev] } : { ok: false, status: 404, data: null };
+    });
+    await ratchetEncryptMulti('bobiso', 'x', { myHandle: 'me', myDeviceId: 'medev' });
+    await primePair('bobiso', 'rd1'); await primePair('bobiso', 'rd2');
+
+    // 3 Fan-out-Sends → je payloads[rd1, rd2].
+    const sends = [];
+    for (let i = 0; i < 3; i++) sends.push(await ratchetEncryptMulti('bobiso', 'msg' + i, { myHandle: 'me', myDeviceId: 'medev' }));
+    const P = (i, dev) => sends[i].payloads.find(p => p.deviceId === dev);
+
+    // Persistente Responder-States je Device (aus dem init der 1. Nachricht).
+    const respState = (bob, p) => {
+      const rk0 = responderRoot({
+        ikBPriv: bob.ikX.priv, spkBPriv: bob.spk.priv, opkBPriv: bob.opk.priv, pqspkDk: bob.pq.dk,
+        ikAX: b64ToBytes(p.init.ikA25519), ekAX: b64ToBytes(p.init.ekA25519), kemCt: b64ToBytes(p.init.mlkemCt), usedOpk: !!p.init.usedOpkId,
+      });
+      return initResponder(rk0, { priv: bob.spk.priv, pub: bob.spk.pub });
+    };
+    const dec = (st, p) => aesDecrypt(deriveReceiveKey(st, decodeRatchetHeader(p.header_b64)), p.ivB64, p.ctB64, p.header_b64);
+
+    const st1 = respState(b1, P(0, 'rd1'));
+    const st2 = respState(b2, P(0, 'rd2'));
+
+    // Device rd1: IN ORDER 0,1,2.
+    expect(await dec(st1, P(0, 'rd1'))).toBe('msg0');
+    expect(await dec(st1, P(1, 'rd1'))).toBe('msg1');
+    expect(await dec(st1, P(2, 'rd1'))).toBe('msg2');
+
+    // Device rd2: OUT OF ORDER 0,2,1 (verpasst 1 kurz) → Skipped-Keys, alle korrekt.
+    expect(await dec(st2, P(0, 'rd2'))).toBe('msg0');
+    expect(await dec(st2, P(2, 'rd2'))).toBe('msg2');   // überspringt 1
+    expect(await dec(st2, P(1, 'rd2'))).toBe('msg1');   // aus dem Skipped-Store
+
+    // Beide Devices vollständig + unabhängig → das rd2-Out-of-Order hat rd1 NICHT
+    // beeinflusst (isolierte Chains).
+    expect(P(0, 'rd1').header_b64).not.toBe(P(0, 'rd2').header_b64);   // verschiedene Ketten
+  });
 });
 
 describe('Send-Zeit-Recheck (Peer wird multi-device)', () => {

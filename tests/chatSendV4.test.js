@@ -120,6 +120,37 @@ describe('chatSend v4-Transit', () => {
     expect(res.status).toBe(400);
   });
 
+  it('v4-MULTI payloads[] → 200, per-Device header_b64/init durchgereicht + persistiert', async () => {
+    const env = buildEnv();
+    const payloads = [
+      { deviceId: 'dev_bob_1', header_b64: HDR, ivB64: IV, ctB64: CT, sig: 's1', init: { v: 3, alg: 'pqxdh-x25519-mlkem768' } },
+      { deviceId: 'dev_bob_2', header_b64: HDR, ivB64: IV, ctB64: CT, sig: 's2' },
+    ];
+    const body = { to: 'bob', e2e: true, v: 4, deviceId: 'dev_alice_1', payloads };   // kein top-level header/iv/ct
+    const res = await handleChatSend(req(body), env);
+    expect(res.status).toBe(200);
+    const pushed = pushToUserDO.mock.calls.find(c => c[1] === 'bob')?.[2];
+    expect(pushed.payloads.length).toBe(2);
+    expect(pushed.payloads[0].header_b64).toBe(HDR);
+    expect(pushed.payloads[0].init).toEqual({ v: 3, alg: 'pqxdh-x25519-mlkem768' });
+    expect(pushed.payloads[1].header_b64).toBe(HDR);
+    // D1: payloads-JSON enthält header_b64
+    const ins = env._binds.find(b => /INSERT OR IGNORE INTO messages/.test(b.sql));
+    expect(JSON.stringify(ins.args)).toContain(HDR);
+  });
+
+  it('v4-MULTI payload ohne header_b64 → 400 (kein stiller Device-Verlust)', async () => {
+    const body = { to: 'bob', e2e: true, v: 4, deviceId: 'dev_alice_1', payloads: [{ deviceId: 'dev_bob_1', ivB64: IV, ctB64: CT }] };
+    const res = await handleChatSend(req(body), buildEnv());
+    expect(res.status).toBe(400);
+  });
+
+  it('v4-MULTI mit convoId → 400 (DM-only gilt auch für multi)', async () => {
+    const body = { to: 'bob', convoId: 'grp', e2e: true, v: 4, deviceId: 'd', payloads: [{ deviceId: 'dev_bob_1', header_b64: HDR, ivB64: IV, ctB64: CT }] };
+    const res = await handleChatSend(req(body), buildEnv());
+    expect(res.status).toBe(400);
+  });
+
   it('v2-DM unverändert → 200, kein header_b64', async () => {
     const env = buildEnv();
     const res = await handleChatSend(req({ to: 'bob', e2e: true, v: 2, sid: 'alice:bob', epoch: 1, ivB64: IV, ctB64: CT, deviceId: 'dev_alice_1' }), env);

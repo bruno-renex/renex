@@ -323,20 +323,24 @@ export async function handleChatSend(request, env, ctx) {
   if (v === 4 && (bodyConvoId || (type !== undefined && type !== null))) {
     return json(request, { error: "v4 is DM-only" }, 400);
   }
-  // v4-Pflichtfelder (Double-Ratchet-DM): header_b64 + ivB64 + ctB64 (sonst
-  // unentschlüsselbar) + optionaler InitHdr. Kein sid/epoch (der Ratchet trägt
-  // seinen Zustand im Header). Malformed → 400.
+  // v4-Pflichtfelder (Double-Ratchet-DM). ZWEI Modi:
+  //  - single (1 Ziel-Device): top-level header_b64 + ivB64 + ctB64 (+ optional init)
+  //  - multi (Fan-out, P3.2): payloads[] mit per-Device header_b64/iv/ct/init
+  //    (validiert im hasMultiE2E-Block). Kein sid/epoch. Malformed → 400.
   if (v === 4 && e2e === true) {
-    if (typeof headerB64 !== "string" || headerB64.length < 8 || headerB64.length > MAX_HEADER_B64) {
-      return json(request, { error: "Invalid header_b64" }, 400);
-    }
-    if (typeof ivB64 !== "string" || typeof ctB64 !== "string") {
-      return json(request, { error: "v4 requires ivB64+ctB64" }, 400);
-    }
-    if (initHdr !== undefined && initHdr !== null) {
-      let ok = false;
-      try { ok = typeof initHdr === "object" && JSON.stringify(initHdr).length <= MAX_INIT_JSON; } catch {}
-      if (!ok) return json(request, { error: "Invalid init" }, 400);
+    const isMulti = Array.isArray(payloads) && payloads.length > 0;
+    if (!isMulti) {
+      if (typeof headerB64 !== "string" || headerB64.length < 8 || headerB64.length > MAX_HEADER_B64) {
+        return json(request, { error: "Invalid header_b64" }, 400);
+      }
+      if (typeof ivB64 !== "string" || typeof ctB64 !== "string") {
+        return json(request, { error: "v4 requires ivB64+ctB64" }, 400);
+      }
+      if (initHdr !== undefined && initHdr !== null) {
+        let ok = false;
+        try { ok = typeof initHdr === "object" && JSON.stringify(initHdr).length <= MAX_INIT_JSON; } catch {}
+        if (!ok) return json(request, { error: "Invalid init" }, 400);
+      }
     }
   }
   // v2 Pflichtfelder – NUR für echte verschlüsselte Nachrichten
@@ -518,7 +522,25 @@ export async function handleChatSend(request, env, ctx) {
           typeof ivB64 !== "string" || ivB64.length < 16 || ivB64.length > MAX_IV_B64 ||
           typeof ctB64 !== "string" || ctB64.length < 16 || ctB64.length > MAX_CT_B64
         ) continue;
-        cleaned.push({ deviceId, ivB64, ctB64, fromDeviceId });
+        const entry = { deviceId, ivB64, ctB64, fromDeviceId };
+        // v4-Fan-out (P3.2): jedes Payload trägt zusätzlich den per-Device
+        // Ratchet-Header (Pflicht — sonst unentschlüsselbar) + optional init/sig.
+        // Ein v4-Payload ohne gültigen Header ist unbrauchbar → ganze Nachricht
+        // ablehnen (Client fällt auf Legacy zurück; kein stiller Device-Verlust).
+        if (v === 4) {
+          if (typeof p.header_b64 !== "string" || p.header_b64.length < 8 || p.header_b64.length > MAX_HEADER_B64) {
+            return json(request, { error: "v4 payload missing header_b64" }, 400);
+          }
+          entry.header_b64 = p.header_b64;
+          if (typeof p.sig === "string" && p.sig.length > 0 && p.sig.length <= 200) entry.sig = p.sig;
+          if (p.init && typeof p.init === "object") {
+            let ok = false;
+            try { ok = JSON.stringify(p.init).length <= MAX_INIT_JSON; } catch {}
+            if (!ok) return json(request, { error: "v4 payload invalid init" }, 400);
+            entry.init = p.init;
+          }
+        }
+        cleaned.push(entry);
       }
       if (cleaned.length > 10) {
         return json(request, { error: "Too many device payloads" }, 400);

@@ -459,6 +459,29 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
     if (cached) return { text: cached.text, verified: cached.verified, replyText: cached.replyText, _cached: true };
   }
 
+  // ── P3.2 v4 MULTI-DEVICE: payloads[] mit per-Device header_b64 → mein Payload
+  // selektieren, dann wie single decrypten. Deckt auch Self-Sync ab (eine
+  // Nachricht von meinem ANDEREN Gerät trägt ein Payload für dieses Gerät). ──
+  if (Array.isArray(msg.payloads) && msg.payloads.some(p => p && p.header_b64)) {
+    if (msg.id) {
+      const st = await loadV4Plaintext(msg.id);   // forward-secret Store zuerst (History/eigene Sends/Redelivery)
+      if (st) return { text: st.text, verified: st.verified, replyText: null, _cached: true };
+    }
+    const myDev = getDeviceId();
+    const mine = msg.payloads.find(p => p && p.deviceId === myDev && p.header_b64);
+    if (!mine) return { text: null, verified: null };   // kein Payload für dieses Gerät → locked (kein Ratchet-Advance)
+    const from = String(msg.from || peerHandle || '').toLowerCase();
+    const senderDev = msg.deviceId || msg.device_id;
+    let sigPub = null;
+    try {
+      sigPub = await getSigPubForDevice(from, senderDev);
+      if (!sigPub) { const devs = await fetchPeerDevices(from).catch(() => []); sigPub = (devs || []).find(d => d.deviceId === senderDev)?.sigPub || null; }
+    } catch {}
+    const r = await ratchetDecrypt(from, senderDev, { header_b64: mine.header_b64, ivB64: mine.ivB64, ctB64: mine.ctB64, sig: mine.sig, init: mine.init }, sigPub);
+    if (r && r.text != null && msg.id) await storeV4Plaintext(msg.id, r.text, r.verified);
+    return r || { text: null, verified: null };
+  }
+
   // ── P3.1 v4 Double-Ratchet: header_b64 vorhanden → Ratchet-Decrypt (nicht
   // CMK). Receive-Capability ist IMMER an (kein Flag). ──
   if (msg.header_b64) {

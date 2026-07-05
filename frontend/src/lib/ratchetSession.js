@@ -222,7 +222,7 @@ async function _fanoutTargets(peer, myHandle, myDeviceId) {
       .filter(d => d.deviceId !== myDeviceId)
       .map(d => ({ handle: myHandle, deviceId: d.deviceId }));
   }
-  return [...peerDevs, ...mine].slice(0, FANOUT_MAX);
+  return [...peerDevs, ...mine];   // NICHT truncaten — Overflow behandelt der Aufrufer (Legacy)
 }
 
 /** Stellt (falls nötig) eine Initiator-Session gegen EIN exaktes (handle,dev)-Ziel her. Single-flight. */
@@ -277,6 +277,9 @@ export async function ratchetEncryptMulti(peerHandle, plaintext, { myHandle = ''
 
     const targets = await _fanoutTargets(peer, myH, myDeviceId);
     if (targets.length === 0) return null;                      // kein pq-Ziel → Legacy
+    // Overflow NIE truncaten (sonst bekämen weggelassene Devices keine lesbare
+    // Kopie = stiller Verlust) → lieber Legacy für alle.
+    if (targets.length > FANOUT_MAX) return null;
 
     // All-or-nothing-Bereitschaft: fehlt EINEM Ziel die Session → Legacy diese
     // Runde, fehlende im Hintergrund primen.

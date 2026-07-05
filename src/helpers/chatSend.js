@@ -515,18 +515,20 @@ export async function handleChatSend(request, env, ctx) {
     if (hasMultiE2E) {
       const cleaned = [];
       for (const p of payloads) {
-        if (!p) continue;
-        const { deviceId, ivB64, ctB64, fromDeviceId } = p;
-        if (
-          typeof deviceId !== "string" || deviceId.length < 4 || deviceId.length > 64 ||
-          typeof ivB64 !== "string" || ivB64.length < 16 || ivB64.length > MAX_IV_B64 ||
-          typeof ctB64 !== "string" || ctB64.length < 16 || ctB64.length > MAX_CT_B64
-        ) continue;
-        const entry = { deviceId, ivB64, ctB64, fromDeviceId };
-        // v4-Fan-out (P3.2): jedes Payload trägt zusätzlich den per-Device
-        // Ratchet-Header (Pflicht — sonst unentschlüsselbar) + optional init/sig.
-        // Ein v4-Payload ohne gültigen Header ist unbrauchbar → ganze Nachricht
-        // ablehnen (Client fällt auf Legacy zurück; kein stiller Device-Verlust).
+        const basicBad = !p ||
+          typeof p.deviceId !== "string" || p.deviceId.length < 4 || p.deviceId.length > 64 ||
+          typeof p.ivB64 !== "string" || p.ivB64.length < 16 || p.ivB64.length > MAX_IV_B64 ||
+          typeof p.ctB64 !== "string" || p.ctB64.length < 16 || p.ctB64.length > MAX_CT_B64;
+        // ⚠️ v4 = STRIKT all-or-nothing: EIN malformtes Payload → ganze Nachricht
+        // ablehnen (Client fällt auf Legacy zurück, alle Devices lesbar). Stilles
+        // Skippen würde ein Device verlieren UND den Sender-Ratchet desyncen
+        // (2026-05-15-Klasse; Ratchet-Desync heilt nicht durch Re-Fetch).
+        // v2/GSK behalten das bisherige Skip-Verhalten (stateless, harmlos).
+        if (basicBad) {
+          if (v === 4) return json(request, { error: "v4 payload malformed" }, 400);
+          continue;
+        }
+        const entry = { deviceId: p.deviceId, ivB64: p.ivB64, ctB64: p.ctB64, fromDeviceId: p.fromDeviceId };
         if (v === 4) {
           if (typeof p.header_b64 !== "string" || p.header_b64.length < 8 || p.header_b64.length > MAX_HEADER_B64) {
             return json(request, { error: "v4 payload missing header_b64" }, 400);
@@ -541,6 +543,10 @@ export async function handleChatSend(request, env, ctx) {
           }
         }
         cleaned.push(entry);
+      }
+      // v4 mit leerem Ergebnis wäre unentschlüsselbar → ablehnen (Client → Legacy).
+      if (v === 4 && cleaned.length === 0) {
+        return json(request, { error: "v4 requires >=1 payload" }, 400);
       }
       if (cleaned.length > 10) {
         return json(request, { error: "Too many device payloads" }, 400);

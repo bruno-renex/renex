@@ -288,6 +288,14 @@ describe('P3.2-A Multi-Device-Fan-out (ratchetEncryptMulti)', () => {
     expect(await ratchetEncryptMulti('nopq', 'x', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
   });
 
+  it('>FANOUT_MAX Ziele → null (Legacy, KEIN stilles Truncaten)', async () => {
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobmany' ? Array.from({ length: 12 }, (_, i) => ({ deviceId: 'md' + i, hasKem: true, caps: { hybrid: true } }))
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockResolvedValue({ ok: false, status: 404, data: null });
+    expect(await ratchetEncryptMulti('bobmany', 'x', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
+  });
+
   it('2026-05-15-REGRESSION: per-Device-Sessions ISOLIERT — kein Cross-Device-Clobber, out-of-order pro Device ok', async () => {
     // Der Vorfall 2026-05-15 war ein GETEILTER-Zustand-Clobber (ein Device
     // zerstörte den State der anderen). v4 hat pro (peer,device) eine EIGENE

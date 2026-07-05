@@ -27,6 +27,7 @@
   import { getRecoveryStatus } from './lib/recovery.js';
   import { uploadInboxKeyIfNeeded } from './lib/e2eKeys.js';
   import { publishPqxdhBundleIfNeeded } from './lib/pqxdhPublish.js';
+  import { invalidateRecipientCache } from './lib/sesame.js';
   import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer, ensureSecureDmSession, republishCMKForPeer, decryptPulse } from './lib/chatPipeline.js';
   // (sendNod wird im ChatHeader genutzt, decryptPulse hier für Empfang)
   import { pulseStore } from './stores/pulseStore.svelte.js';
@@ -955,6 +956,13 @@
         console.log("📱 device_added", msg);
         const me = userStore.myUser;
         if (!me) return;
+
+        // P3.2: sesame-Recipient-Cache des betroffenen Handles SOFORT invalidieren
+        // → der v4-Fan-out (ratchetSession._fanoutTargets → getRecipientDevices)
+        // sieht ein neu hinzugefügtes Device beim nächsten Send frisch, statt bis
+        // zu 60 s (Cache-TTL) → sonst bekäme das neue Device keine v4-Kopie
+        // (stiller Verlust, 2026-05-15-Klasse).
+        if (msg.from) invalidateRecipientCache(String(msg.from).toLowerCase());
 
         // Push enthält jetzt deviceId+jwk vom neuen Device — wird für KV-Eventual-
         // Consistency-Schutz an redistribute übergeben (retry bis Device in fetch-list).

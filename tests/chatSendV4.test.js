@@ -145,6 +145,21 @@ describe('chatSend v4-Transit', () => {
     expect(res.status).toBe(400);
   });
 
+  it('v4-MULTI STRIKT: EIN malformtes Payload (kurzes ct) → 400 (all-or-nothing, kein stiller Skip)', async () => {
+    const payloads = [
+      { deviceId: 'dev_bob_1', header_b64: HDR, ivB64: IV, ctB64: CT },
+      { deviceId: 'dev_bob_2', header_b64: HDR, ivB64: IV, ctB64: 'short' },   // ct < 16
+    ];
+    const res = await handleChatSend(req({ to: 'bob', e2e: true, v: 4, deviceId: 'd', payloads }), buildEnv());
+    expect(res.status).toBe(400);
+  });
+
+  it('v4-MULTI STRIKT: alle Payloads malformt → leeres Ergebnis → 400 (nicht still gespeichert)', async () => {
+    const payloads = [{ deviceId: 'dev_bob_1', header_b64: HDR, ivB64: 'x', ctB64: 'y' }];   // iv/ct zu kurz
+    const res = await handleChatSend(req({ to: 'bob', e2e: true, v: 4, deviceId: 'd', payloads }), buildEnv());
+    expect(res.status).toBe(400);
+  });
+
   it('v4-MULTI mit convoId → 400 (DM-only gilt auch für multi)', async () => {
     const body = { to: 'bob', convoId: 'grp', e2e: true, v: 4, deviceId: 'd', payloads: [{ deviceId: 'dev_bob_1', header_b64: HDR, ivB64: IV, ctB64: CT }] };
     const res = await handleChatSend(req(body), buildEnv());

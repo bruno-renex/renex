@@ -106,6 +106,10 @@ export async function handleChatSend(request, env, ctx) {
   const MAX_TYPE_LEN = 32;    // control message type
   const MAX_HEADER_B64 = 512; // P3.1 v4 Double-Ratchet-Header (base64)
   const MAX_INIT_JSON  = 4096;// P3.1 v4 PQXDH-InitHdr (JSON)
+  // P3.2-B pq_kem_ct: ML-KEM-768-CT = 1088 B → exakt 1452 b64-Zeichen. Enges
+  // Fenster (kein Smuggling-Kanal à la init); Algorithmus-Wechsel = v-Bump.
+  const MIN_PQ_CT_B64  = 1400;
+  const MAX_PQ_CT_B64  = 1600;
 
   // v4 (Double-Ratchet, P3.1): eigene Wire-Felder. Kein sid/epoch.
   const headerB64 = body.header_b64;
@@ -540,6 +544,17 @@ export async function handleChatSend(request, env, ctx) {
             try { ok = JSON.stringify(p.init).length <= MAX_INIT_JSON; } catch {}
             if (!ok) return json(request, { error: "v4 payload invalid init" }, 400);
             entry.init = p.init;
+          }
+          // P3.2-B: per-Device ML-KEM-Rekey-CT (optional). STRIKT wie der Rest
+          // des v4-Kontrakts: vorhanden-aber-malformt → 400 (nie still strippen —
+          // ein still verlorener CT hieße Sender mischt, Empfänger nie → Desync).
+          // Persistenz: reist im payloads-JSON automatisch in D1 + /chat/list.
+          if (p.pq_kem_ct !== undefined) {
+            if (typeof p.pq_kem_ct !== "string" ||
+                p.pq_kem_ct.length < MIN_PQ_CT_B64 || p.pq_kem_ct.length > MAX_PQ_CT_B64) {
+              return json(request, { error: "v4 payload invalid pq_kem_ct" }, 400);
+            }
+            entry.pq_kem_ct = p.pq_kem_ct;
           }
         }
         cleaned.push(entry);

@@ -174,4 +174,49 @@ describe('chatSend v4-Transit', () => {
     expect(pushed.header_b64).toBeUndefined();
     expect(pushed.v).toBe(2);
   });
+
+  // ── P3.2-B: pq_kem_ct (per-Device ML-KEM-Rekey-CT) ──────────────────────
+  const PQ_CT = 'C'.repeat(1452);   // exakte b64-Länge eines 1088B-ML-KEM-768-CT
+
+  it('v4-MULTI mit gültigem pq_kem_ct → 200, im Push UND im persistierten payloads-JSON', async () => {
+    const env = buildEnv();
+    const payloads = [
+      { deviceId: 'dev_bob_1', header_b64: HDR, ivB64: IV, ctB64: CT, sig: 's1', pq_kem_ct: PQ_CT },
+      { deviceId: 'dev_bob_2', header_b64: HDR, ivB64: IV, ctB64: CT, sig: 's2' },   // ohne = ok (optional)
+    ];
+    const res = await handleChatSend(req({ to: 'bob', e2e: true, v: 4, deviceId: 'dev_alice_1', payloads }), env);
+    expect(res.status).toBe(200);
+    const pushed = pushToUserDO.mock.calls.find(c => c[1] === 'bob')?.[2];
+    expect(pushed.payloads[0].pq_kem_ct).toBe(PQ_CT);
+    expect(pushed.payloads[1].pq_kem_ct).toBeUndefined();
+    const ins = env._binds.find(b => /INSERT OR IGNORE INTO messages/.test(b.sql));
+    expect(JSON.stringify(ins.args)).toContain(PQ_CT);           // reist im payloads-JSON nach D1
+  });
+
+  it('v4-MULTI mit 1 Payload + pq_kem_ct → 200 (Rekey-Sends nutzen payloads[] auch bei 1 Ziel)', async () => {
+    const env = buildEnv();
+    const payloads = [{ deviceId: 'dev_bob_1', header_b64: HDR, ivB64: IV, ctB64: CT, pq_kem_ct: PQ_CT }];
+    const res = await handleChatSend(req({ to: 'bob', e2e: true, v: 4, deviceId: 'dev_alice_1', payloads }), env);
+    expect(res.status).toBe(200);
+    const pushed = pushToUserDO.mock.calls.find(c => c[1] === 'bob')?.[2];
+    expect(pushed.payloads.length).toBe(1);
+    expect(pushed.payloads[0].pq_kem_ct).toBe(PQ_CT);
+  });
+
+  it('v4-MULTI STRIKT: malformtes pq_kem_ct (zu kurz/zu lang/kein String) → 400, nie still gestrippt', async () => {
+    for (const bad of ['x'.repeat(100), 'x'.repeat(1700), 12345]) {
+      const payloads = [{ deviceId: 'dev_bob_1', header_b64: HDR, ivB64: IV, ctB64: CT, pq_kem_ct: bad }];
+      const res = await handleChatSend(req({ to: 'bob', e2e: true, v: 4, deviceId: 'd', payloads }), buildEnv());
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('v2-MULTI (CMK-Control-Pfad): pq_kem_ct wird gestrippt, kein 400 (v4-Kontrakt gilt nur für v4)', async () => {
+    const env = buildEnv();
+    const payloads = [{ deviceId: 'dev_bob_1', ivB64: IV, ctB64: CT, pq_kem_ct: PQ_CT }];
+    const res = await handleChatSend(req({ to: 'bob', e2e: true, v: 2, type: 'cmk', sid: 'alice:bob', deviceId: 'dev_alice_1', payloads }), env);
+    expect(res.status).toBe(200);
+    const pushed = pushToUserDO.mock.calls.find(c => c[1] === 'bob')?.[2];
+    expect(pushed.payloads[0].pq_kem_ct).toBeUndefined();
+  });
 });

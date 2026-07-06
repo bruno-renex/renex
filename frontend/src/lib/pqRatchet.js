@@ -47,6 +47,7 @@
 // Parameter — kein IDB, kein Netz, kein Date.now() hier.
 // ======================================================
 import { sha256 } from '@noble/hashes/sha2.js';
+import { hmac } from '@noble/hashes/hmac.js';
 import {
   PQ, mlKemEncapsulate, mlKemDecapsulate, deriveHybridWrapKey,
 } from './pqCrypto.js';
@@ -64,7 +65,7 @@ export function initPqState(now = 0) {
   return {
     count: 0,            // Nachrichten (send+recv) seit letzter Aktivierung
     lastAt: now,         // ms-Timestamp der letzten Aktivierung (bzw. Erstkontakt)
-    pendingOut: null,    // Announcer: {tgt, ctB64, ssB64, fpB64, peerKemEkB64, sends, phase:'announced'|'activated'}
+    pendingOut: null,    // Announcer: {tgt, ctB64, ssB64, fpB64, confB64?, peerKemEkB64, sends, phase:'announced'|'activated'}
     pendingIn: null,     // Empfänger: {tgt, ctB64} (geharvesteter CT, Decaps erst bei Aktivierung)
     confirmedEpoch: 0,   // höchste vom Peer bestätigte eigene Epoche
   };
@@ -73,6 +74,17 @@ export function initPqState(now = 0) {
 // ── CT-Fingerprint (Header-Feld pqFp: bindet den CT via AAD+Sig) ───────────
 export function pqFingerprintCt(ct) {
   return bytesToB64(sha256(ct).slice(0, 8));
+}
+
+// ── Key-Confirmation-Tag (Header-Feld pqConf auf Aktivierungs-Nachrichten) ─
+// 8B-HMAC über den GEMISCHTEN Root (one-way, domain-separiert). Der Empfänger
+// verifiziert VOR dem Commit des Mixes: rotierte/verlorene KEM-Identität
+// (ML-KEM Implicit Rejection liefert sonst STILL ein falsches ss) wird so zum
+// diagnostizierbaren `mix_mismatch`-locked statt zur stillen Root-Divergenz —
+// und liefert das Dark-Launch-Gate (mismatch≈0, Muster P3.0).
+const CONF_DOMAIN = new TextEncoder().encode('renex:pqratchet:conf:v1');
+export function pqConfTag(rkMixed) {
+  return bytesToB64(hmac(sha256, rkMixed, CONF_DOMAIN).slice(0, 8));
 }
 
 // ── Der CT-bindende Root-Mix (§6: Combiner, überall identisch) ─────────────
@@ -120,13 +132,21 @@ export function pqAnnounce(pq, state, peerKemEk) {
 /**
  * Wire-/Header-Felder für den nächsten Send (oder null): solange pendingOut
  * existiert und der Send-Cap nicht erreicht ist, reitet der CT mit.
- * Der Aufrufer merged pqTgt/pqFp in den Header (vor encodeRatchetHeader) und
- * legt pqCtB64 als eigenes Wire-Feld (pq_kem_ct) ab, dann pqMarkCtSent().
+ * Der Aufrufer merged pqTgt/pqFp (+pqConf nach Aktivierung) in den Header
+ * (vor encodeRatchetHeader) und legt pqCtB64 als eigenes Wire-Feld
+ * (pq_kem_ct) ab.
+ * ⚠️ pqMarkCtSent() erst NACH erfolgreichem Transmit rufen (r.ok) — ein
+ * fehlgeschlagener Send darf das CT-Budget nicht verbrennen, sonst kann ein
+ * Netz-Ausfall alle MAX_CT_SENDS Träger kosten, ohne dass je ein CT den
+ * Server (= die D1-History als Recovery-Pfad) erreicht hat.
  */
 export function pqSendFields(pq) {
   const po = pq.pendingOut;
   if (!po || po.sends >= PQRK.MAX_CT_SENDS) return null;
-  return { pqTgt: po.tgt, pqFp: po.fpB64, pqCtB64: po.ctB64 };
+  return {
+    pqTgt: po.tgt, pqFp: po.fpB64, pqCtB64: po.ctB64,
+    ...(po.confB64 ? { pqConf: po.confB64 } : {}),   // erst ab Aktivierung bekannt
+  };
 }
 export function pqMarkCtSent(pq) {
   if (pq.pendingOut) pq.pendingOut.sends += 1;
@@ -193,8 +213,14 @@ export function pqReceivePrep(pq, state, header, { pqCtB64 = null, kemDk = null,
       return { locked: true, reason: 'no_kem_identity', anomalies };
     }
     const ct = b64ToBytes(pin.ctB64);
+    const ss = mlKemDecapsulate(ct, kemDk);                  // Implicit Rejection: falsches dk/ct → stilles falsches ss …
+    // … deshalb Key-Confirmation VOR dem Commit: state.rk ist zwischen hier
+    // und dem preR1-Hook garantiert unverändert (dazwischen liegen nur
+    // Skipped-Chain-Ops ohne Root-Kontakt), der Check ist also verbindlich.
+    if (header.pqConf && pqConfTag(mixRoot(state.rk, ss, ct, header.dh, ownKemEk, hdrEpoch)) !== header.pqConf) {
+      return { locked: true, reason: 'mix_mismatch', anomalies };       // KEM-Identität rotiert/CT fremd → diagnostizierbar locked
+    }
     hooks.preR1 = (rk, dhrNew) => {
-      const ss = mlKemDecapsulate(ct, kemDk);                // Implicit Rejection: falscher CT → Tag-Fail später
       const mixed = mixRoot(rk, ss, ct, dhrNew, ownKemEk, hdrEpoch);
       state.kemEpoch = hdrEpoch;
       pq.pendingIn = null;
@@ -217,6 +243,7 @@ export function pqReceivePrep(pq, state, header, { pqCtB64 = null, kemDk = null,
       state.kemEpoch = po.tgt;
       po.phase = 'activated';
       po.ssB64 = null;                                       // ss nicht länger als nötig at-rest
+      po.confB64 = pqConfTag(mixed);                         // Key-Confirmation für die Aktivierungs-Header
       pq.count = 0;
       pq.lastAt = now;
       return mixed;

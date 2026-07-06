@@ -85,14 +85,17 @@ export function initResponder(rk0, spkPair) {
 
 // ── Header-Codec (Wire §4.4: header_b64) ───────────────
 /**
- * {v:4, dh, pn, n, kemEpoch, pqTgt?, pqFp?} → b64(JSON).
+ * {v:4, dh, pn, n, kemEpoch, pqTgt?, pqFp?, pqConf?} → b64(JSON).
  * pqTgt/pqFp (P3.2-B, additiv): angekündigte Ziel-Epoche + 8B-SHA-256-
  * Fingerprint des mitreisenden pq_kem_ct — via AAD=header_b64 + msgv4-Sig
  * gedeckt (der 1088B-CT selbst passt nicht in den Header, Server-Cap 512).
+ * pqConf: 8B-Key-Confirmation über den gemischten Root (pqRatchet.pqConfTag)
+ * auf Aktivierungs-Nachrichten — Empfänger prüft VOR dem Mix-Commit.
  */
-export function encodeRatchetHeader({ dh, pn, n, kemEpoch = 0, pqTgt = null, pqFp = null }) {
+export function encodeRatchetHeader({ dh, pn, n, kemEpoch = 0, pqTgt = null, pqFp = null, pqConf = null }) {
   const h = { v: 4, dh: bytesToB64(dh), pn, n, kemEpoch };
   if (pqTgt) { h.pqTgt = pqTgt; h.pqFp = pqFp; }
+  if (pqConf) h.pqConf = pqConf;
   const json = JSON.stringify(h);
   return bytesToB64(new TextEncoder().encode(json));
 }
@@ -110,6 +113,10 @@ export function decodeRatchetHeader(headerB64) {
     }
     out.pqTgt = h.pqTgt;
     out.pqFp = h.pqFp;
+  }
+  if (h.pqConf !== undefined) {
+    if (typeof h.pqConf !== 'string' || h.pqConf.length > 24) throw new Error('ratchet_header_invalid');
+    out.pqConf = h.pqConf;
   }
   return out;
 }

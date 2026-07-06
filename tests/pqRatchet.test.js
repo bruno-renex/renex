@@ -16,7 +16,7 @@ import {
   serializeRatchetState, deserializeRatchetState,
 } from '../frontend/src/lib/ratchet.js';
 import {
-  PQRK, initPqState, pqFingerprintCt, mixRoot,
+  PQRK, initPqState, pqFingerprintCt, pqConfTag, mixRoot,
   pqRekeyDue, pqAnnounce, pqSendFields, pqMarkCtSent,
   pqNoteSend, pqNoteRecv, pqReceivePrep,
 } from '../frontend/src/lib/pqRatchet.js';
@@ -41,7 +41,8 @@ function send(side, peer, now = T0) {
   const fields = pqSendFields(side.pq);
   const { mk, header } = nextSendKey(side.state);
   const headerB64 = encodeRatchetHeader({
-    ...header, ...(fields ? { pqTgt: fields.pqTgt, pqFp: fields.pqFp } : {}),
+    ...header,
+    ...(fields ? { pqTgt: fields.pqTgt, pqFp: fields.pqFp, pqConf: fields.pqConf || null } : {}),
   });
   if (fields) pqMarkCtSent(side.pq);
   pqNoteSend(side.pq);
@@ -178,6 +179,7 @@ describe('Voller Epoch-Rekey (Happy Path)', () => {
     // Alices erste Nachricht der neuen Kette aktiviert Bob (preR1).
     const m2 = send(p.alice, p.bob);
     expect(decodeRatchetHeader(m2.headerB64).kemEpoch).toBe(1);
+    expect(decodeRatchetHeader(m2.headerB64).pqConf).toBe(p.alice.pq.pendingOut.confB64);  // Key-Confirmation reist mit
     expect(m2.pqCtB64).not.toBeNull();                             // CT bis Confirm
     deliver(p.alice, p.bob, m2);
     expect(p.bob.state.kemEpoch).toBe(1);
@@ -305,6 +307,42 @@ describe('CT-Verlust/-Strip: locked statt Desync, Recovery via Redelivery', () =
     expect(r.locked).toBeUndefined();
     expect(r.anomalies).toContain('fp_mismatch');
     expect(p.bob.pq.pendingIn).toBeNull();
+  });
+
+  it('rotierte KEM-Identität während offener Epoche → mix_mismatch (diagnostizierbar), State unangetastet', () => {
+    const p = makePair();
+    establish(p);
+    p.alice.pq.count = PQRK.MSG_LIMIT;
+    deliver(p.alice, p.bob, send(p.alice, p.bob));                 // Announce+CT (gegen Bobs ALTES ek)
+    deliver(p.bob, p.alice, send(p.bob, p.alice));                 // Alice aktiviert (pqConf entsteht)
+
+    // Bob verliert/regeneriert seine KEM-Identität (kemIdentity „korrupt → neu").
+    p.bob.kem = mlKemKeygen();
+
+    const mAct = send(p.alice, p.bob);
+    const rkBefore = new Uint8Array(p.bob.state.rk);
+    const r = recv(p.bob, mAct);
+    expect(r.locked).toBe('mix_mismatch');                         // statt stiller Root-Divergenz
+    expect(eq(p.bob.state.rk, rkBefore)).toBe(true);
+    expect(p.bob.state.kemEpoch).toBe(0);
+  });
+});
+
+describe('pqConfTag (Key-Confirmation)', () => {
+  it('deterministisch, 12 Zeichen b64 (8B), key-abhängig', () => {
+    const rk = new Uint8Array(32).fill(1);
+    expect(pqConfTag(rk)).toBe(pqConfTag(new Uint8Array(32).fill(1)));
+    expect(pqConfTag(rk).length).toBe(12);
+    expect(pqConfTag(rk)).not.toBe(pqConfTag(new Uint8Array(32).fill(2)));
+  });
+  it('Header-Codec: pqConf round-trippt; malformt wirft', () => {
+    const dh = x25519Keygen().pub;
+    const h = decodeRatchetHeader(encodeRatchetHeader({ dh, pn: 0, n: 0, kemEpoch: 1, pqConf: 'AAAAAAAAAAA=' }));
+    expect(h.pqConf).toBe('AAAAAAAAAAA=');
+    const mk = (o) => bytesToB64(new TextEncoder().encode(JSON.stringify(o)));
+    const base = { v: 4, dh: bytesToB64(dh), pn: 0, n: 0, kemEpoch: 0 };
+    expect(() => decodeRatchetHeader(mk({ ...base, pqConf: 42 }))).toThrow();
+    expect(() => decodeRatchetHeader(mk({ ...base, pqConf: 'x'.repeat(25) }))).toThrow();
   });
 });
 

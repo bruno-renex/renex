@@ -4,8 +4,10 @@
 // Signal-Double-Ratchet über dem PQXDH-RK0 (hybridSession, §4.0/§4.4).
 // NUR die Schlüssel-Maschine: KDF-Kette, DH-Ratchet-Steps, Header-Codec,
 // Skipped-Key-Ableitung. KEIN encrypt/decrypt (P3.1), KEIN IDB (ratchetSession,
-// P3.1), KEIN PQ-Epoch-Rekey (pqRatchet, P3.2 — Header trägt kemEpoch=0 als
-// Forward-Compat-Feld).
+// P3.1). PQ-Epoch-Rekey (P3.2-B) lebt in pqRatchet.js — dieser Kern bleibt
+// PQ-agnostisch und bietet dafür nur: state.kemEpoch (im Header signalisiert),
+// optionale pqTgt/pqFp-Header-Felder und generische Root-Mix-Hooks am DH-Step
+// (preR1/preR2 in deriveReceiveKey → _dhStep).
 //
 // Bauplan-fixierte KDFs (§4.4):
 //   kdfRootKey(RK, dhOut) → (RK', CK)   HKDF-SHA256(ikm=dhOut, salt=RK, info=DOMAIN, 64)
@@ -60,6 +62,7 @@ export function initInitiator(rk0, spkBPub) {
     rk, dhsPriv: dhs.priv, dhsPub: dhs.pub, dhr: spkBPub,
     cks: ck, ckr: null,
     ns: 0, nr: 0, pn: 0,
+    kemEpoch: 0,               // aktivierte PQ-Epoche (P3.2-B, pqRatchet.js)
     skipped: {},               // "dhPubB64:n" → mkB64 (Cap MAX_SKIP via Ableitung)
   };
 }
@@ -75,14 +78,22 @@ export function initResponder(rk0, spkPair) {
     rk: rk0, dhsPriv: spkPair.priv, dhsPub: spkPair.pub, dhr: null,
     cks: null, ckr: null,
     ns: 0, nr: 0, pn: 0,
+    kemEpoch: 0,
     skipped: {},
   };
 }
 
 // ── Header-Codec (Wire §4.4: header_b64) ───────────────
-/** {v:4, dh, pn, n, kemEpoch} → b64(JSON). pqCt folgt P3.2 (additiv). */
-export function encodeRatchetHeader({ dh, pn, n, kemEpoch = 0 }) {
-  const json = JSON.stringify({ v: 4, dh: bytesToB64(dh), pn, n, kemEpoch });
+/**
+ * {v:4, dh, pn, n, kemEpoch, pqTgt?, pqFp?} → b64(JSON).
+ * pqTgt/pqFp (P3.2-B, additiv): angekündigte Ziel-Epoche + 8B-SHA-256-
+ * Fingerprint des mitreisenden pq_kem_ct — via AAD=header_b64 + msgv4-Sig
+ * gedeckt (der 1088B-CT selbst passt nicht in den Header, Server-Cap 512).
+ */
+export function encodeRatchetHeader({ dh, pn, n, kemEpoch = 0, pqTgt = null, pqFp = null }) {
+  const h = { v: 4, dh: bytesToB64(dh), pn, n, kemEpoch };
+  if (pqTgt) { h.pqTgt = pqTgt; h.pqFp = pqFp; }
+  const json = JSON.stringify(h);
   return bytesToB64(new TextEncoder().encode(json));
 }
 export function decodeRatchetHeader(headerB64) {
@@ -90,7 +101,17 @@ export function decodeRatchetHeader(headerB64) {
   if (h?.v !== 4 || typeof h.dh !== 'string' || !Number.isInteger(h.pn) || !Number.isInteger(h.n)) {
     throw new Error('ratchet_header_invalid');
   }
-  return { v: 4, dh: b64ToBytes(h.dh), pn: h.pn, n: h.n, kemEpoch: h.kemEpoch || 0 };
+  const kemEpoch = h.kemEpoch ?? 0;
+  if (!Number.isInteger(kemEpoch) || kemEpoch < 0) throw new Error('ratchet_header_invalid');
+  const out = { v: 4, dh: b64ToBytes(h.dh), pn: h.pn, n: h.n, kemEpoch };
+  if (h.pqTgt !== undefined || h.pqFp !== undefined) {
+    if (!Number.isInteger(h.pqTgt) || h.pqTgt < 1 || typeof h.pqFp !== 'string' || h.pqFp.length > 24) {
+      throw new Error('ratchet_header_invalid');
+    }
+    out.pqTgt = h.pqTgt;
+    out.pqFp = h.pqFp;
+  }
+  return out;
 }
 
 // ── Senden: nächster MK + Header ───────────────────────
@@ -98,7 +119,7 @@ export function decodeRatchetHeader(headerB64) {
 export function nextSendKey(state) {
   if (!state.cks) throw new Error('ratchet_no_send_chain');   // Responder vor erstem Empfang
   const { ck, mk } = kdfChainKey(state.cks);
-  const header = { dh: state.dhsPub, pn: state.pn, n: state.ns, kemEpoch: 0 };
+  const header = { dh: state.dhsPub, pn: state.pn, n: state.ns, kemEpoch: state.kemEpoch || 0 };
   state.cks = ck;
   state.ns += 1;
   return { mk, header };
@@ -120,15 +141,22 @@ function _skipTo(state, until) {
 }
 
 // DH-Ratchet-Step bei neuem Remote-Pub (§4.4 dhRatchetStep).
-function _dhStep(state, dhrNew) {
+// hooks (P3.2-B, pqRatchet.js): optionale Root-Mixe an den zwei deterministisch
+// positionierten Punkten — preR1(rk, dhrNew) VOR der Empfangsketten-KDF (der
+// ankommende Pub ist ein Aktivierungs-Pub), preR2(rk, newOwnPub) NACH dem
+// keygen VOR der Sendeketten-KDF (der eigene neue Pub aktiviert die eigene
+// Ankündigung). Beide geben rk' zurück; ohne Hooks exakt das alte Verhalten.
+function _dhStep(state, dhrNew, hooks = {}) {
   state.pn = state.ns;
   state.ns = 0;
   state.nr = 0;
   state.dhr = dhrNew;
+  if (hooks.preR1) state.rk = hooks.preR1(state.rk, dhrNew);
   const r1 = kdfRootKey(state.rk, x25519Shared(state.dhsPriv, state.dhr));
   state.rk = r1.rk; state.ckr = r1.ck;
   const dhs = x25519Keygen();
   state.dhsPriv = dhs.priv; state.dhsPub = dhs.pub;
+  if (hooks.preR2) state.rk = hooks.preR2(state.rk, state.dhsPub);
   const r2 = kdfRootKey(state.rk, x25519Shared(state.dhsPriv, state.dhr));
   state.rk = r2.rk; state.cks = r2.ck;
 }
@@ -138,9 +166,11 @@ function _dhStep(state, dhrNew) {
  * DH-Steps). Konsumiert Skipped-Einträge (one-time).
  * @param {object} state  mutiert
  * @param {{dh:Uint8Array, pn:number, n:number}} header
+ * @param {{preR1?:Function, preR2?:Function}} [hooks] PQ-Root-Mixe (P3.2-B),
+ *        laufen NUR im _dhStep — Skipped-Cache-Hits berühren den Root nie.
  * @returns {Uint8Array} mk
  */
-export function deriveReceiveKey(state, header) {
+export function deriveReceiveKey(state, header, hooks = {}) {
   // 1) Bereits übersprungener Key?
   const cached = state.skipped[_skKey(header.dh, header.n)];
   if (cached) {
@@ -151,7 +181,7 @@ export function deriveReceiveKey(state, header) {
   const isNewDh = !state.dhr || bytesToB64(header.dh) !== bytesToB64(state.dhr);
   if (isNewDh) {
     _skipTo(state, header.pn);
-    _dhStep(state, header.dh);
+    _dhStep(state, header.dh, hooks);
   }
   // 3) Innerhalb der (jetzt) aktuellen Kette bis n skippen, dann ableiten.
   _skipTo(state, header.n);
@@ -168,13 +198,15 @@ export function serializeRatchetState(s) {
   return {
     role: s.role, rk: _b(s.rk), dhsPriv: _b(s.dhsPriv), dhsPub: _b(s.dhsPub),
     dhr: _b(s.dhr), cks: _b(s.cks), ckr: _b(s.ckr),
-    ns: s.ns, nr: s.nr, pn: s.pn, skipped: { ...s.skipped },
+    ns: s.ns, nr: s.nr, pn: s.pn, kemEpoch: s.kemEpoch || 0,
+    skipped: { ...s.skipped },
   };
 }
 export function deserializeRatchetState(o) {
   return {
     role: o.role, rk: _u(o.rk), dhsPriv: _u(o.dhsPriv), dhsPub: _u(o.dhsPub),
     dhr: _u(o.dhr), cks: _u(o.cks), ckr: _u(o.ckr),
-    ns: o.ns, nr: o.nr, pn: o.pn, skipped: { ...(o.skipped || {}) },
+    ns: o.ns, nr: o.nr, pn: o.pn, kemEpoch: o.kemEpoch || 0,   // Alt-Records: 0
+    skipped: { ...(o.skipped || {}) },
   };
 }

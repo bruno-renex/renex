@@ -295,7 +295,12 @@ export async function uploadInboxKeyIfNeeded() {
     let kemFields = {};
     try {
       const ek = await getKemPublicKey();
-      kemFields = { kemEk: bytesToB64(ek), caps: { hybrid: true, ratchet: false } };
+      // caps = Empfangs-CAPABILITY (nicht Send-Flag): pqrekey=true sobald der
+      // Code deployed ist → andere Clients dürfen mir eine P3.2-B-Rekey-Epoche
+      // announcen (Empfangs-/Aktivierungspfad ist immer an). Ohne diese cap
+      // würde ein Announcer mich (dann alter v4-Empfänger) nach der Aktivierung
+      // locken → capability-Gate ist zwingend.
+      kemFields = { kemEk: bytesToB64(ek), caps: { hybrid: true, ratchet: false, pqrekey: true } };
     } catch (e) {
       console.warn('📮 kemEk-Publishing übersprungen (non-fatal):', e?.message);
     }

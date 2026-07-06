@@ -498,6 +498,19 @@ export async function getSigPubForDevice(fromHandle, fromDeviceId) {
 }
 
 /**
+ * Findet das ML-KEM-768-`kemEk` (b64) eines Peer-Devices für P3.2-B-Rekey
+ * (Encaps-Ziel). NUR aus dem lokalen peer-devices-Cache (befüllt via
+ * `/e2e/inbox/get`) — KEIN Netz am Send-Pfad. Cache-Miss → null → der
+ * Aufrufer überspringt den Rekey diese Runde (klassischer Ratchet läuft
+ * weiter, kein Desync). Self-Sync (eigenes Handle) nutzt denselben Cache.
+ */
+export async function getKemEkForDevice(handle, deviceId) {
+  const devices = await loadPeerDevicesIdb(handle);
+  const d = devices.find(x => x.deviceId === deviceId);
+  return (d && typeof d.kemEk === 'string') ? d.kemEk : null;
+}
+
+/**
  * Findet die historischen Sig-Pubkeys eines Peer-Devices (nach Device-Key-Rotation).
  * Fallback für Sig-Verify alter Messages: wenn Verify mit dem aktuellen Pubkey
  * fehlschlägt, kann der Caller durch die Historie iterieren.

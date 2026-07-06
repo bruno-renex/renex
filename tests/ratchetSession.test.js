@@ -24,6 +24,11 @@ import { buildPublishBundle, decodeInitiatorBundle } from '../frontend/src/lib/p
 import {
   initInitiator, initResponder, nextSendKey, deriveReceiveKey, decodeRatchetHeader, encodeRatchetHeader,
 } from '../frontend/src/lib/ratchet.js';
+import {
+  initPqState, pqRekeyDue, pqAnnounce, pqSendFields, pqMarkCtSent, pqNoteSend, pqReceivePrep,
+} from '../frontend/src/lib/pqRatchet.js';
+import { getOrCreateKemIdentity } from '../frontend/src/lib/kemIdentity.js';
+import { storePeerDevices } from '../frontend/src/lib/cmk.js';
 import { e2eEncrypt, e2eDecrypt } from '../frontend/src/lib/chatCrypto.js';
 import { verifyMessageSigV4 } from '../frontend/src/lib/messageSig.js';
 import {
@@ -343,6 +348,148 @@ describe('P3.2-A Multi-Device-Fan-out (ratchetEncryptMulti)', () => {
     // Beide Devices vollständig + unabhängig → das rd2-Out-of-Order hat rd1 NICHT
     // beeinflusst (isolierte Chains).
     expect(P(0, 'rd1').header_b64).not.toBe(P(0, 'rd2').header_b64);   // verschiedene Ketten
+  });
+});
+
+describe('P3.2-B PQ-Triple-Rekey (Verkabelung ratchetSession)', () => {
+  // Alice = Initiator (pure), spiegelt _encryptForDevice/pqReceivePrep, damit MEIN
+  // ratchetSession als Responder getestet wird. Encaps-Ziel = mein echtes kemEk.
+  // Ein einziges Schlüsselpaar für initiatorRoot UND initHdr (sonst Root-Mismatch).
+  async function makeAlice() {
+    const pub = await buildPublishBundle({ opkCount: 3 });
+    const usedOpk = pub.opks[0];
+    const aIkX = x25519Keygen(), aEk = x25519Keygen(), aIkEd = ed25519Keygen();
+    const { rk0, kemCt } = initiatorRoot({
+      ikAPriv: aIkX.priv, ekAPriv: aEk.priv,
+      bundle: decodeInitiatorBundle({ ik: pub.ik, spk: pub.spk, pqspk: pub.pqspk, opk: usedOpk }),
+    });
+    const st = initInitiator(rk0, b64ToBytes(pub.spk.spk));
+    const pq = initPqState(1);
+    const initHdr = {
+      v: 3, alg: ALG,
+      ikA25519: bytesToB64(aIkX.pub), ikAEd: bytesToB64(aIkEd.pub), ekA25519: bytesToB64(aEk.pub),
+      usedSpkId: pub.spk.spkId, usedOpkId: usedOpk.opkId, usedPqspkId: pub.pqspk.pqspkId,
+      mlkemCt: bytesToB64(kemCt),
+      hdrSig: bytesToB64(signInitHdr({
+        v: 3, alg: ALG, ikA25519: aIkX.pub, ekA25519: aEk.pub,
+        usedSpkId: pub.spk.spkId, usedOpkId: usedOpk.opkId, usedPqspkId: pub.pqspk.pqspkId, mlkemCt: kemCt,
+      }, aIkEd.priv)),
+    };
+    return { st, pq, initHdr };
+  }
+
+  it('EMPFÄNGER e2e: Alice announced+aktiviert gegen mein echtes kemEk → ich harveste, aktiviere, entschlüssele', async () => {
+    const myEk = (await getOrCreateKemIdentity()).ek;
+    const A = await makeAlice();
+
+    const aliceSend = async (text, withInit) => {
+      const pqf = pqSendFields(A.pq);
+      const { mk, header } = nextSendKey(A.st);
+      const header_b64 = encodeRatchetHeader(pqf ? { ...header, pqTgt: pqf.pqTgt, pqFp: pqf.pqFp, pqConf: pqf.pqConf || null } : header);
+      const { ivB64, ctB64 } = await aesEncrypt(mk, text, header_b64);
+      if (pqf) pqMarkCtSent(A.pq); pqNoteSend(A.pq);
+      return { v: 4, header_b64, ivB64, ctB64, ...(pqf ? { pq_kem_ct: pqf.pqCtB64 } : {}), ...(withInit ? { init: A.initHdr } : {}) };
+    };
+    const aliceRecv = (msg) => {
+      const header = decodeRatchetHeader(msg.header_b64);
+      const prep = pqReceivePrep(A.pq, A.st, header, { now: 2 });
+      deriveReceiveKey(A.st, header, prep.hooks);
+    };
+
+    // 1) Alice → init → ich werde Responder (kemEpoch 0).
+    const r1 = await ratchetDecrypt('alicepq', 'apqdev', await aliceSend('hallo', true), null);
+    expect(r1?.text).toBe('hallo');
+
+    // 2) Alice announced gegen mein kemEk (Rolle initiator).
+    expect(pqAnnounce(A.pq, A.st, myEk)).toBe(true);
+    expect(A.pq.pendingOut.tgt).toBe(1);
+
+    // 3) Ich sende zurück → Alice ratcht auf meinen neuen Pub → preR2 aktiviert.
+    getRecipientDevices.mockResolvedValue([{ deviceId: 'apqdev', hasKem: true, caps: { hybrid: true } }]);
+    const back = await ratchetEncrypt('alicepq', 'antwort');
+    expect(back?.v).toBe(4);
+    aliceRecv(back);
+    expect(A.st.kemEpoch).toBe(1);
+    expect(A.pq.pendingOut.confB64).toBeTruthy();
+
+    // 4) Alice sendet kemEpoch=1 + CT + pqConf → ich harveste+aktiviere+entschlüssele.
+    const m2 = await aliceSend('nach rekey 🔐', false);
+    expect(decodeRatchetHeader(m2.header_b64).kemEpoch).toBe(1);
+    expect(m2.pq_kem_ct).toBeTruthy();
+    const r2 = await ratchetDecrypt('alicepq', 'apqdev', m2, null);
+    expect(r2?.text).toBe('nach rekey 🔐');
+
+    // 5) Folge-Nachricht der neuen Epoche bleibt lesbar (Root synchron geblieben).
+    const m3 = await aliceSend('folge', false);
+    expect((await ratchetDecrypt('alicepq', 'apqdev', m3, null))?.text).toBe('folge');
+  });
+
+  it('SENDER: nach MSG_LIMIT Sends announct der Fan-out (pq_kem_ct + mode:multi), Capability-gegated', async () => {
+    _ls.set('renex_ratchet_send', '1');
+    _ls.set('renex_pq_rekey', '1');
+    const peerKem = mlKemKeygen();
+    const bob = makeBobWire('bpq1');
+    // Peer-Device-Cache mit kemEk + caps.pqrekey (Encaps-Ziel; KEIN Netz).
+    await storePeerDevices('bobpqs', [{ deviceId: 'bpq1', kemEk: bytesToB64(peerKem.ek) }]);
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobpqs' ? [{ deviceId: 'bpq1', hasKem: true, caps: { hybrid: true, pqrekey: true } }]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: bob.wire });
+
+    await ratchetEncryptMulti('bobpqs', 'x', { myHandle: 'me', myDeviceId: 'medev' });
+    await primePair('bobpqs', 'bpq1');
+
+    // MSG_LIMIT (50) Sends: alle single, KEIN pq_kem_ct.
+    let announced = null;
+    for (let i = 0; i < 51; i++) {
+      const out = await ratchetEncryptMulti('bobpqs', 'm' + i, { myHandle: 'me', myDeviceId: 'medev' });
+      const p = out.mode === 'multi' ? out.payloads[0] : out;
+      if (p.pq_kem_ct) { announced = out; break; }
+      expect(out.mode).toBe('single');   // vor dem Rekey: single-Wire
+    }
+    expect(announced).not.toBeNull();
+    expect(announced.mode).toBe('multi');                 // Rekey erzwingt payloads[]-Format
+    expect(announced.payloads[0].pq_kem_ct.length).toBeGreaterThan(1400);
+    const stats = JSON.parse(_ls.get('renex_pqrk_stats') || '{}');
+    expect(stats.announce).toBeGreaterThanOrEqual(1);
+  });
+
+  it('SENDER: Peer OHNE caps.pqrekey → nie ein Announce (alte v4-Empfänger würden locken)', async () => {
+    _ls.set('renex_ratchet_send', '1');
+    _ls.set('renex_pq_rekey', '1');
+    const peerKem = mlKemKeygen();
+    const bob = makeBobWire('bpq2');
+    await storePeerDevices('bobnopq', [{ deviceId: 'bpq2', kemEk: bytesToB64(peerKem.ek) }]);
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobnopq' ? [{ deviceId: 'bpq2', hasKem: true, caps: { hybrid: true } }]   // KEIN pqrekey
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: bob.wire });
+    await ratchetEncryptMulti('bobnopq', 'x', { myHandle: 'me', myDeviceId: 'medev' });
+    await primePair('bobnopq', 'bpq2');
+    for (let i = 0; i < 55; i++) {
+      const out = await ratchetEncryptMulti('bobnopq', 'm' + i, { myHandle: 'me', myDeviceId: 'medev' });
+      const p = out.mode === 'multi' ? out.payloads[0] : out;
+      expect(p.pq_kem_ct).toBeUndefined();               // Capability-Gate: nie ein CT
+    }
+  });
+
+  it('SENDER: pq-Flag AUS → nie ein Announce (auch wenn fällig+capable)', async () => {
+    _ls.set('renex_ratchet_send', '1');
+    _ls.delete('renex_pq_rekey');
+    const peerKem = mlKemKeygen();
+    const bob = makeBobWire('bpq3');
+    await storePeerDevices('bobflag', [{ deviceId: 'bpq3', kemEk: bytesToB64(peerKem.ek) }]);
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobflag' ? [{ deviceId: 'bpq3', hasKem: true, caps: { hybrid: true, pqrekey: true } }]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: bob.wire });
+    await ratchetEncryptMulti('bobflag', 'x', { myHandle: 'me', myDeviceId: 'medev' });
+    await primePair('bobflag', 'bpq3');
+    for (let i = 0; i < 55; i++) {
+      const out = await ratchetEncryptMulti('bobflag', 'm' + i, { myHandle: 'me', myDeviceId: 'medev' });
+      const p = out.mode === 'multi' ? out.payloads[0] : out;
+      expect(p.pq_kem_ct).toBeUndefined();
+    }
   });
 });
 

@@ -446,7 +446,7 @@ async function _decryptIncomingV4(msg, myHandle, peerHandle) {
       sigPub = (devs || []).find(d => d.deviceId === deviceId)?.sigPub || null;
     }
   } catch {}
-  const r = await ratchetDecrypt(from, deviceId, { header_b64: msg.header_b64, ivB64, ctB64, sig: msg.sig, init: msg.init }, sigPub);
+  const r = await ratchetDecrypt(from, deviceId, { header_b64: msg.header_b64, ivB64, ctB64, sig: msg.sig, init: msg.init, pq_kem_ct: msg.pq_kem_ct }, sigPub);
   if (!r) return { text: null, verified: null };
   return { text: r.text, verified: r.verified, replyText: null };
 }
@@ -477,7 +477,7 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
       sigPub = await getSigPubForDevice(from, senderDev);
       if (!sigPub) { const devs = await fetchPeerDevices(from).catch(() => []); sigPub = (devs || []).find(d => d.deviceId === senderDev)?.sigPub || null; }
     } catch {}
-    const r = await ratchetDecrypt(from, senderDev, { header_b64: mine.header_b64, ivB64: mine.ivB64, ctB64: mine.ctB64, sig: mine.sig, init: mine.init }, sigPub);
+    const r = await ratchetDecrypt(from, senderDev, { header_b64: mine.header_b64, ivB64: mine.ivB64, ctB64: mine.ctB64, sig: mine.sig, init: mine.init, pq_kem_ct: mine.pq_kem_ct }, sigPub);
     if (r && r.text != null && msg.id) await storeV4Plaintext(msg.id, r.text, r.verified);
     return r || { text: null, verified: null };
   }

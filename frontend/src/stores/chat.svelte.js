@@ -922,7 +922,12 @@ async function _decryptAllE2E(peerHandle, myHandle) {
   const snapshot = _messages.filter(m =>
     m.e2e &&
     m.text === "🔐 …" &&
-    (m._raw?.ivB64 || m._raw?.iv_b64)
+    (m._raw?.ivB64 || m._raw?.iv_b64 ||
+     // v4-MULTI (P3.2): Ciphertext steckt per-Device in payloads[], NICHT
+     // top-level → sonst filtert der History-Sweep v4-multi-Nachrichten aus
+     // und sie bleiben nach Chat-Reopen 🔐 (der forward-secret Klartext-Store
+     // wird dann nie konsultiert). v4-single hat weiterhin top-level ivB64.
+     (Array.isArray(m._raw?.payloads) && m._raw.payloads.some(p => p && p.header_b64)))
   );
   console.log(`🔓 _decryptAllE2E: peer=${peerHandle} totalMsgs=${_messages.length} toDecrypt=${snapshot.length}`);
 

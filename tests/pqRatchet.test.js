@@ -40,13 +40,12 @@ function send(side, peer, now = T0) {
   if (pqRekeyDue(side.pq, now)) pqAnnounce(side.pq, side.state, peer.kem.ek);
   const fields = pqSendFields(side.pq);
   const { mk, header } = nextSendKey(side.state);
-  const headerB64 = encodeRatchetHeader({
-    ...header,
-    ...(fields ? { pqTgt: fields.pqTgt, pqFp: fields.pqFp, pqConf: fields.pqConf || null } : {}),
-  });
-  if (fields) pqMarkCtSent(side.pq);
+  const headerB64 = encodeRatchetHeader(
+    fields ? { ...header, pqTgt: fields.pqTgt ?? null, pqFp: fields.pqFp ?? null, pqConf: fields.pqConf ?? null } : header
+  );
+  if (fields?.pqCtB64) pqMarkCtSent(side.pq);   // Budget nur bei tatsächlichem CT (wie _encryptForDevice)
   pqNoteSend(side.pq);
-  return { mk, headerB64, pqCtB64: fields ? fields.pqCtB64 : null };
+  return { mk, headerB64, pqCtB64: fields?.pqCtB64 ?? null };
 }
 
 /** Empfang: prep (Harvest/Hooks/Confirm) → deriveReceiveKey. */
@@ -307,6 +306,40 @@ describe('CT-Verlust/-Strip: locked statt Desync, Recovery via Redelivery', () =
     expect(r.locked).toBeUndefined();
     expect(r.anomalies).toContain('fp_mismatch');
     expect(p.bob.pq.pendingIn).toBeNull();
+  });
+
+  it('REVIEW-FIX: pqConf reitet auch nach CT-Budget-Erschöpfung mit → mix_mismatch bleibt diagnostizierbar', () => {
+    const p = makePair();
+    establish(p);
+    p.alice.pq.count = PQRK.MSG_LIMIT;
+
+    // m0 trägt den CT → Bob harvestet; danach 31 weitere Sends OHNE Zustellung
+    // erschöpfen Alices CT-Budget (32), BEVOR Bob antwortet (talk-heavy Burst).
+    const m0 = send(p.alice, p.bob);
+    deliver(p.alice, p.bob, m0);
+    expect(p.bob.pq.pendingIn?.tgt).toBe(1);
+    for (let i = 0; i < PQRK.MAX_CT_SENDS - 1; i++) send(p.alice, p.bob);
+    expect(pqSendFields(p.alice.pq)).toBeNull();            // Budget erschöpft, noch nicht aktiviert
+
+    // Jetzt antwortet Bob → Alice aktiviert (preR2), confB64 entsteht.
+    deliver(p.bob, p.alice, send(p.bob, p.alice));
+    expect(p.alice.state.kemEpoch).toBe(1);
+    expect(p.alice.pq.pendingOut.confB64).toBeTruthy();
+
+    // Aktivierungs-Nachricht: CT-Budget erschöpft → KEIN pq_kem_ct, aber pqConf
+    // MUSS mitreiten (das ist der Fix).
+    const mAct = send(p.alice, p.bob);
+    const h = decodeRatchetHeader(mAct.headerB64);
+    expect(mAct.pqCtB64).toBeNull();                        // kein CT mehr
+    expect(h.pqTgt).toBeUndefined();
+    expect(h.pqConf).toBe(p.alice.pq.pendingOut.confB64);   // Confirmation reitet trotz Budget
+
+    // Bob rotiert seine KEM-Identität → falsches ss → dank pqConf DIAGNOSTIZIERBAR.
+    p.bob.kem = mlKemKeygen();
+    const rkBefore = new Uint8Array(p.bob.state.rk);
+    const r = recv(p.bob, mAct);
+    expect(r.locked).toBe('mix_mismatch');                  // NICHT stiller Desync
+    expect(eq(p.bob.state.rk, rkBefore)).toBe(true);
   });
 
   it('rotierte KEM-Identität während offener Epoche → mix_mismatch (diagnostizierbar), State unangetastet', () => {

@@ -302,24 +302,24 @@ async function _encryptForDevice(handle, dev, plaintext, tgt = {}) {
         if (pqAnnounce(rec.pq, rec.state, b64ToBytes(tgt.kemEkB64))) pqStat('announce');
       } catch (e) { console.warn('🔗 pqAnnounce skip:', e?.message); }
     }
-    const pqf = pqSendFields(rec.pq);                     // {pqTgt,pqFp,pqCtB64,pqConf?} oder null
+    const pqf = pqSendFields(rec.pq);                     // {pqTgt?,pqFp?,pqCtB64?,pqConf?} oder null
 
     const { mk, header } = nextSendKey(rec.state);        // header.kemEpoch = aktivierte Epoche
     const headerB64 = encodeRatchetHeader(
-      pqf ? { ...header, pqTgt: pqf.pqTgt, pqFp: pqf.pqFp, pqConf: pqf.pqConf || null } : header
+      pqf ? { ...header, pqTgt: pqf.pqTgt ?? null, pqFp: pqf.pqFp ?? null, pqConf: pqf.pqConf ?? null } : header
     );
     const aesKey = await _aesKey(mk);
     const { ivB64, ctB64 } = await e2eEncrypt(aesKey, plaintext, headerB64);
     const sig = await signMessageV4(headerB64, ivB64, ctB64);
     const carryInit = rec.role === 'initiator' && !rec.peerSeen && rec.initHdr && (rec.initSends || 0) < MAX_INIT_SENDS;
     if (carryInit) rec.initSends = (rec.initSends || 0) + 1;
-    if (pqf) pqMarkCtSent(rec.pq);                        // optimistisch: Budget 32 tolerant ggü. Send-Fails
+    if (pqf?.pqCtB64) pqMarkCtSent(rec.pq);               // Budget nur zählen wenn der CT tatsächlich mitritt
     pqNoteSend(rec.pq);
     await _save(handle, dev, rec);
     return {
       header_b64: headerB64, ivB64, ctB64, sig,
       ...(carryInit ? { init: rec.initHdr } : {}),
-      ...(pqf ? { pq_kem_ct: pqf.pqCtB64 } : {}),
+      ...(pqf?.pqCtB64 ? { pq_kem_ct: pqf.pqCtB64 } : {}),
     };
   });
 }

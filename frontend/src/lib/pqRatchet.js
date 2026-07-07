@@ -142,9 +142,17 @@ export function pqAnnounce(pq, state, peerKemEk) {
  */
 export function pqSendFields(pq) {
   const po = pq.pendingOut;
-  if (!po || po.sends >= PQRK.MAX_CT_SENDS) return null;
+  if (!po) return null;
+  const withinBudget = po.sends < PQRK.MAX_CT_SENDS;
+  // Der CT (groß, 1088 B) reitet NUR im Budget mit. pqConf (winzig, ab
+  // Aktivierung) MUSS dagegen bis zum Confirm IMMER mitreiten — auch nach
+  // Budget-Erschöpfung. Sonst überspringt der Empfänger den mix_mismatch-Guard
+  // (pqReceivePrep) und eine zwischen Harvest und Aktivierung rotierte
+  // KEM-Identität diffundiert den Root STILL, statt diagnostizierbar zu locken
+  // (Review-Finding: talk-heavy Burst ≥32 Sends vor der Peer-Antwort).
+  if (!withinBudget && !po.confB64) return null;     // nichts mehr zu senden
   return {
-    pqTgt: po.tgt, pqFp: po.fpB64, pqCtB64: po.ctB64,
+    ...(withinBudget ? { pqTgt: po.tgt, pqFp: po.fpB64, pqCtB64: po.ctB64 } : {}),
     ...(po.confB64 ? { pqConf: po.confB64 } : {}),   // erst ab Aktivierung bekannt
   };
 }

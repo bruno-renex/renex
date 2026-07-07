@@ -31,7 +31,7 @@ import {
   serializeRatchetState, deserializeRatchetState,
 } from './ratchet.js';
 import {
-  initPqState, pqRekeyDue, pqAnnounce, pqSendFields, pqMarkCtSent,
+  PQRK, initPqState, pqRekeyDue, pqAnnounce, pqSendFields, pqMarkCtSent,
   pqNoteSend, pqNoteRecv, pqReceivePrep,
 } from './pqRatchet.js';
 import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
@@ -79,6 +79,17 @@ export function ratchetSendEnabled() {
 export function pqRekeyEnabled() {
   try { return localStorage.getItem('renex_pq_rekey') === '1' && ratchetSendEnabled(); }
   catch { return false; }
+}
+
+// DEBUG-Override (nur schnelle Live-Verifikation): senkt die Rekey-Nachrichten-
+// Schwelle. Geclampt auf [1, PQRK.MSG_LIMIT] → kann sie NUR senken, nie heben;
+// ungesetzt/ungültig → Default. Reine Sender-Timing-Frage (nie Korrektheit),
+// darum bewusst kein eigener Deploy-Gate. Setzen: localStorage renex_pq_rekey_msglimit=2.
+function _pqMsgLimit() {
+  try {
+    const v = parseInt(localStorage.getItem('renex_pq_rekey_msglimit'), 10);
+    return (Number.isInteger(v) && v >= 1 && v < PQRK.MSG_LIMIT) ? v : PQRK.MSG_LIMIT;
+  } catch { return PQRK.MSG_LIMIT; }
 }
 
 // ── Rekey-Telemetrie (localStorage, Muster P3.0-Shadow-Stats) ──────────────
@@ -297,7 +308,7 @@ async function _encryptForDevice(handle, dev, plaintext, tgt = {}) {
     // P3.2-B: Rekey-Announce (nur Initiator-Rolle, nur pq-fähiges Ziel mit
     // bekanntem kemEk, nur wenn fällig, nur EINE offene Epoche). KEIN Netz —
     // kemEk kommt aus dem Cache (tgt.kemEkB64). pqAnnounce prüft Rolle intern.
-    if (pqRekeyEnabled() && tgt.pqCapable && tgt.kemEkB64 && pqRekeyDue(rec.pq, Date.now())) {
+    if (pqRekeyEnabled() && tgt.pqCapable && tgt.kemEkB64 && pqRekeyDue(rec.pq, Date.now(), _pqMsgLimit())) {
       try {
         if (pqAnnounce(rec.pq, rec.state, b64ToBytes(tgt.kemEkB64))) pqStat('announce');
       } catch (e) { console.warn('🔗 pqAnnounce skip:', e?.message); }

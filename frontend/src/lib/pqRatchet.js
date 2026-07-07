@@ -103,8 +103,11 @@ export function mixRoot(rk, ssPq, kemCt, dhPub, kemEk, epoch) {
 }
 
 // ── Fälligkeit + Announce (nur Sender-Seite, nur Initiator-Rolle) ──────────
-export function pqRekeyDue(pq, now = 0) {
-  return pq.count >= PQRK.MSG_LIMIT || (now - pq.lastAt) >= PQRK.AGE_MS;
+// msgLimit ist injizierbar (Default PQRK.MSG_LIMIT) — die Session-Schicht darf
+// ihn per Debug-Override SENKEN (nur für schnelle Live-Verifikation), nie über
+// den Default heben. Rein eine Sender-Timing-Frage, nie Korrektheit.
+export function pqRekeyDue(pq, now = 0, msgLimit = PQRK.MSG_LIMIT) {
+  return pq.count >= msgLimit || (now - pq.lastAt) >= PQRK.AGE_MS;
 }
 
 /**

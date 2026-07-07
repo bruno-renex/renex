@@ -454,6 +454,31 @@ describe('P3.2-B PQ-Triple-Rekey (Verkabelung ratchetSession)', () => {
     expect(stats.announce).toBeGreaterThanOrEqual(1);
   });
 
+  it('DEBUG-Override renex_pq_rekey_msglimit=2 → Announce schon nach ~2 Sends (Live-Verify-Pfad)', async () => {
+    _ls.set('renex_ratchet_send', '1');
+    _ls.set('renex_pq_rekey', '1');
+    _ls.set('renex_pq_rekey_msglimit', '2');
+    const peerKem = mlKemKeygen();
+    const bob = makeBobWire('bpqd');
+    await storePeerDevices('bobdbg', [{ deviceId: 'bpqd', kemEk: bytesToB64(peerKem.ek) }]);
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobdbg' ? [{ deviceId: 'bpqd', hasKem: true, caps: { hybrid: true, pqrekey: true } }]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: bob.wire });
+    await ratchetEncryptMulti('bobdbg', 'x', { myHandle: 'me', myDeviceId: 'medev' });
+    await primePair('bobdbg', 'bpqd');
+
+    let announced = null;
+    for (let i = 0; i < 5; i++) {
+      const out = await ratchetEncryptMulti('bobdbg', 'm' + i, { myHandle: 'me', myDeviceId: 'medev' });
+      const p = out.mode === 'multi' ? out.payloads[0] : out;
+      if (p.pq_kem_ct) { announced = i; break; }
+    }
+    expect(announced).not.toBeNull();
+    expect(announced).toBeLessThanOrEqual(2);   // gesenkte Schwelle greift früh
+    _ls.delete('renex_pq_rekey_msglimit');
+  });
+
   it('SENDER: Peer OHNE caps.pqrekey → nie ein Announce (alte v4-Empfänger würden locken)', async () => {
     _ls.set('renex_ratchet_send', '1');
     _ls.set('renex_pq_rekey', '1');

@@ -143,6 +143,13 @@ describe('Announce-Disziplin', () => {
     const pq2 = initPqState(T0);
     expect(pqRekeyDue(pq2, T0 + PQRK.AGE_MS)).toBe(true);
   });
+  it('injizierbares msgLimit (Debug-Override): senkt die Schwelle', () => {
+    const pq = initPqState(T0);
+    pq.count = 2;
+    expect(pqRekeyDue(pq, T0 + 1000)).toBe(false);        // Default 50 → nicht fällig
+    expect(pqRekeyDue(pq, T0 + 1000, 2)).toBe(true);      // Override 2 → fällig
+    expect(pqRekeyDue(pq, T0 + 1000, 3)).toBe(false);     // Override 3 → count 2 < 3
+  });
   it('CT-Attach-Cap: nach MAX_CT_SENDS keine Felder mehr', () => {
     const p = makePair();
     establish(p);

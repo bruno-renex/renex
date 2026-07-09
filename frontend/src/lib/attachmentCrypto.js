@@ -107,41 +107,64 @@ const PLAINTEXT_ATTACHMENT_PREFIX = '__rx_a1__\n';
 
 /**
  * Packt Caption + Attachment-Meta in einen einzigen Plaintext-String,
- * der dann durch die normale E2E-Pipeline läuft.
+ * der dann durch die normale E2E-Pipeline läuft. (Legacy-Signatur.)
  */
 export function wrapAttachmentPlaintext(caption, attachmentMeta) {
-  const payload = {
-    t: caption || '',
-    a: attachmentMeta,
-  };
+  return wrapEnvelope(caption, { attachment: attachmentMeta });
+}
+
+/**
+ * Verallgemeinertes Klartext-Envelope (P3.2-B: Reply/Attachment über v4).
+ * Bettet Caption + optional Attachment-Meta UND/ODER Reply-Vorschau in EINEN
+ * Plaintext ein → der Double-Ratchet verschlüsselt alles per-Device transparent,
+ * ohne separate Wire-/Server-Felder (die Reply-Vorschau ist damit forward-secret
+ * wie der Body; Reload/Redelivery liest sie aus dem v4-Klartext-Store).
+ * `reply` = { id, from, preview }. Ohne beides → bare Caption (rückwärts-kompat,
+ * alte Text-Nachrichten bleiben prefix-frei).
+ */
+export function wrapEnvelope(caption, { attachment = null, reply = null } = {}) {
+  const hasReply = !!(reply && typeof reply.preview === 'string');
+  // Ohne einbettbaren Inhalt → bare Caption (rückwärts-kompat, kein leeres
+  // Envelope, das der Empfänger sonst als rohen Text sähe).
+  if (!attachment && !hasReply) return caption || '';
+  const payload = { t: caption || '' };
+  if (attachment) payload.a = attachment;
+  if (hasReply) payload.r = { id: reply.id, from: reply.from, preview: reply.preview };
   return PLAINTEXT_ATTACHMENT_PREFIX + JSON.stringify(payload);
 }
 
 /**
  * Unpackt einen entschlüsselten Plaintext.
- * Rückgabe:
- *   { caption, attachmentMeta }  wenn Prefix erkannt
- *   { caption: <bare string>, attachmentMeta: null }  sonst
+ * Rückgabe: { caption, attachmentMeta, reply }
+ *   - Prefix erkannt → caption aus `t`, attachmentMeta wenn gültig, reply wenn gültig
+ *   - kein Prefix → { caption: <bare string>, attachmentMeta: null, reply: null }
  */
 export function unwrapAttachmentPlaintext(decryptedText) {
-  if (typeof decryptedText !== 'string') return { caption: '', attachmentMeta: null };
+  if (typeof decryptedText !== 'string') return { caption: '', attachmentMeta: null, reply: null };
   if (!decryptedText.startsWith(PLAINTEXT_ATTACHMENT_PREFIX)) {
-    return { caption: decryptedText, attachmentMeta: null };
+    return { caption: decryptedText, attachmentMeta: null, reply: null };
   }
   try {
     const json = JSON.parse(decryptedText.slice(PLAINTEXT_ATTACHMENT_PREFIX.length));
+    const caption = typeof json.t === 'string' ? json.t : '';
+    let attachmentMeta = null;
     const meta = json?.a;
     if (meta && typeof meta === 'object') {
       // Photo/File: in R2 verschlüsselt → braucht fileKey + iv + r2Key
       const isPhotoOrFile = !!(meta.fileKey && meta.iv && meta.r2Key);
       // GIF: GIPHY-URL direkt, kein R2 → braucht type='gif' + gifUrl
       const isGif = meta.type === 'gif' && typeof meta.gifUrl === 'string';
-      if (isPhotoOrFile || isGif) {
-        return { caption: typeof json.t === 'string' ? json.t : '', attachmentMeta: meta };
-      }
+      if (isPhotoOrFile || isGif) attachmentMeta = meta;
     }
+    let reply = null;
+    const r = json?.r;
+    if (r && typeof r === 'object' && typeof r.preview === 'string') {
+      reply = { id: typeof r.id === 'string' ? r.id : null, from: typeof r.from === 'string' ? r.from : null, preview: r.preview };
+    }
+    // Gültiges Envelope (Attachment ODER Reply) → strukturiert zurückgeben.
+    if (attachmentMeta || reply) return { caption, attachmentMeta, reply };
   } catch {}
-  // Fallback: kaputter Envelope → als bare Text behandeln (Sicht ist „garbled" ist
+  // Fallback: kaputter/leerer Envelope → als bare Text behandeln („garbled" ist
   // immer noch besser als Crash).
-  return { caption: decryptedText, attachmentMeta: null };
+  return { caption: decryptedText, attachmentMeta: null, reply: null };
 }

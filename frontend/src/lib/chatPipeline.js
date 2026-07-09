@@ -28,7 +28,7 @@ import {
   getRotationMap, findCmkForRotationIndex, appendToRotationMap,
 } from './session.js';
 import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
-import { wrapAttachmentPlaintext } from './attachmentCrypto.js';
+import { wrapAttachmentPlaintext, wrapEnvelope } from './attachmentCrypto.js';
 import { signMessage, verifyMessageSig } from './messageSig.js';
 import { sendChatWithPow } from './pow.js';
 import { logWrapVerify } from './wrapSig.js';
@@ -726,24 +726,41 @@ export async function decryptIncomingMessage(msg, myHandle, peerHandle) {
 export async function sendEncryptedDm(myHandle, peerHandle, plaintext, replyTo = null, attachment = null) {
   try {
     // ── P3.2: v4-Double-Ratchet-Fan-out (flag-gegated, Multi-Device) ──
-    // Nur reiner Text (Reply/Attachment bleiben Legacy). ratchetEncryptMulti
-    // fächert an ALLE pq-Ziel-Devices (Peer + eigene andere) auf; all-or-nothing.
-    // null = Flag aus / kein pq-Ziel / eine Session noch nicht bereit → unten der
-    // unveränderte Legacy-v2-Pfad. KEIN Shadow bei v4 (die Session IST der Ratchet).
-    if (!replyTo && !attachment) {
+    // ratchetEncryptMulti fächert an ALLE pq-Ziel-Devices (Peer + eigene andere)
+    // auf; all-or-nothing. null = Flag aus / kein pq-Ziel / eine Session noch
+    // nicht bereit → unten der unveränderte Legacy-v2-Pfad. KEIN Shadow bei v4.
+    // P3.2-B: Reply + Attachment via Klartext-Envelope (wrapEnvelope) — die
+    // Reply-Vorschau + Attachment-Meta reisen IM ratchet-verschlüsselten Body
+    // (per-Device forward-secret, kein separates Wire-/Server-Feld). Nur die
+    // NICHT-geheimen Metadaten (replyToId/replyFrom, attachmentKey/Type) gehen
+    // top-level mit — die fließen versions-unabhängig durch Server + /chat/list.
+    {
       const deviceId = getDeviceId();
-      const v4 = await ratchetEncryptMulti(peerHandle, plaintext, { myHandle, myDeviceId: deviceId });
+      const replyPreview = (replyTo && replyTo.id && typeof replyTo.text === 'string')
+        ? { id: replyTo.id, from: replyTo.from,
+            preview: replyTo.text.length > 200 ? replyTo.text.slice(0, 200) + '…' : replyTo.text }
+        : null;
+      // v4Plain = das, was tatsächlich verschlüsselt (und im v4-Store abgelegt)
+      // wird: bei Attachment/Reply ein Envelope, sonst der nackte Klartext.
+      const v4Plain = (attachment || replyPreview)
+        ? wrapEnvelope(plaintext, { attachment, reply: replyPreview })
+        : plaintext;
+      const v4 = await ratchetEncryptMulti(peerHandle, v4Plain, { myHandle, myDeviceId: deviceId });
       if (v4) {
+        const base = { to: peerHandle, e2e: true, v: 4, deviceId };
+        if (attachment?.r2Key) { base.attachmentKey = attachment.r2Key; base.attachmentType = attachment.type; }
+        if (replyPreview) { base.replyToId = replyPreview.id; base.replyFrom = replyPreview.from; }
         const body = v4.mode === 'multi'
-          ? { to: peerHandle, e2e: true, v: 4, payloads: v4.payloads, deviceId }
-          : { to: peerHandle, e2e: true, v: 4, header_b64: v4.header_b64, ivB64: v4.ivB64, ctB64: v4.ctB64, sig: v4.sig, deviceId, ...(v4.init ? { init: v4.init } : {}) };
+          ? { ...base, payloads: v4.payloads }
+          : { ...base, header_b64: v4.header_b64, ivB64: v4.ivB64, ctB64: v4.ctB64, sig: v4.sig, ...(v4.init ? { init: v4.init } : {}) };
         // PoW über die Top-Level-v4-Felder (bei multi undefined → identisch server-seitig).
         const r = await sendChatWithPow(body, { sid: undefined, epoch: undefined, sig: body.sig, ctB64: body.ctB64 });
         if (r.ok) {
-          // Eigenen Klartext persistieren — v4-MKs sind forward-secret, ohne
-          // Store wäre die eigene Nachricht nach Reload unlesbar.
+          // Eigenen (Envelope-)Klartext persistieren — v4-MKs sind forward-secret,
+          // ohne Store wäre die eigene Nachricht (inkl. Attachment/Reply-Vorschau)
+          // nach Reload unlesbar. Der Store-Reader unwrappt dasselbe Envelope.
           const mid = r.data?.message?.id;
-          if (mid) await storeV4Plaintext(mid, plaintext, true).catch(() => {});
+          if (mid) await storeV4Plaintext(mid, v4Plain, true).catch(() => {});
           return { ok: true, message: r.data?.message };
         }
         console.warn('🔗 v4 send failed → Legacy-Fallback:', r.error || r.status);

@@ -827,8 +827,8 @@ async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
       if (!result._cached) {
         console.log(`🔓 decrypt OK id=${rawMsg.id?.slice(0,8)} from=${rawMsg.from}`);
       }
-      // Attachment-Envelope auspacken: Magic-Prefix → Caption + AttachmentMeta.
-      const { caption, attachmentMeta } = unwrapAttachmentPlaintext(text);
+      // Attachment-Envelope auspacken: Magic-Prefix → Caption + AttachmentMeta (+ Reply).
+      const { caption, attachmentMeta, reply } = unwrapAttachmentPlaintext(text);
       const patch = { text: caption, verified };
       if (attachmentMeta) {
         // Attachment-Meta mit den (Plaintext-)attachment_key/_type vom Server mergen.
@@ -853,10 +853,14 @@ async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
       // _normalizeMessage hat replyTo bereits mit Placeholder "🔐" angelegt — text dort patchen.
       // WICHTIG: id mit-rüberretten, sonst verliert der Empfänger den Jump-to-Original-Klick
       // (Bubble rendert ohne id einen nicht-klickbaren <div> statt <button>).
-      const replyToId = rawMsg.replyToId || rawMsg.reply_to_id;
-      if (replyToId && typeof replyText === 'string') {
-        const replyFrom = rawMsg.replyFrom || rawMsg.reply_from;
-        patch.replyTo = { id: replyToId, from: replyFrom, text: replyText };
+      // v4 (P3.2-B): Vorschau kommt aus dem Envelope (reply.preview, forward-secret) —
+      // hat Vorrang, damit sie auch nach Reload aus dem v4-Store sichtbar ist; Legacy
+      // v2 nutzt weiter die separat entschlüsselte result.replyText.
+      const replyToId = rawMsg.replyToId || rawMsg.reply_to_id || reply?.id;
+      const previewText = (reply && typeof reply.preview === 'string') ? reply.preview : replyText;
+      if (replyToId && typeof previewText === 'string') {
+        const replyFrom = rawMsg.replyFrom || rawMsg.reply_from || reply?.from;
+        patch.replyTo = { id: replyToId, from: replyFrom, text: previewText };
       }
       _patchMessage(rawMsg.id, patch);
       // unavailable-Flag clearen: erfolgreicher Decrypt zeigt dass ein CMK

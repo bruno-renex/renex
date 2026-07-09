@@ -27,6 +27,7 @@
   import { getRecoveryStatus } from './lib/recovery.js';
   import { uploadInboxKeyIfNeeded } from './lib/e2eKeys.js';
   import { publishPqxdhBundleIfNeeded } from './lib/pqxdhPublish.js';
+  import { startRolloutPolling } from './lib/rollout.js';
   import { invalidateRecipientCache } from './lib/sesame.js';
   import { redistributeCMKToPeer, redistributeCMKsForSelfDeviceAdded, mirrorRotateCMKForPeer, ensureSecureDmSession, republishCMKForPeer, decryptPulse } from './lib/chatPipeline.js';
   // (sendNod wird im ChatHeader genutzt, decryptPulse hier für Empfang)
@@ -1433,6 +1434,11 @@
     // Upload ist idempotent — Backend macht UPSERT in D1 + KV.
     // Heartbeat erst NACH erfolgreichem Upload, damit das Device im Backend
     // existiert (sonst returnt /heartbeat 404 für unbekannte deviceIds).
+    // P3.2 GA-Rollout: server-gesteuerte Default-Aktivierung der v4-Schichten
+    // holen + periodisch pollen (Kill-Switch/Rollout ohne Redeploy). Non-blocking,
+    // fail-safe AUS. Nur eingeloggte Konten (Gäste senden kein v4).
+    if (!userStore.isGuest) startRolloutPolling();
+
     void (async () => {
       const result = await uploadInboxKeyIfNeeded();
       if (result?.ok) {

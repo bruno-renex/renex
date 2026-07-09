@@ -40,6 +40,7 @@ import { ensureHybridSession, acceptHybridSession } from './hybridSession.js';
 import { getRecipientDevices } from './sesame.js';
 import { getKemEkForDevice } from './cmk.js';
 import { getOrCreateKemIdentity } from './kemIdentity.js';
+import { rolloutDefault } from './rollout.js';
 
 const STORE_INFO = 'renex:ratchetsession:store:v1';
 const IDB_PREFIX = 'ratchet:';
@@ -65,20 +66,33 @@ export async function loadV4Plaintext(msgId) {
   catch { return null; }
 }
 
-// Sender-Flag (P3.1). DEFAULT AUS (opt-in) — im Gegensatz zum Shadow, der
-// standardmäßig läuft. Empfangen von v4 ist IMMER an (deployed capability);
-// dieses Flag steuert nur, ob ICH v4 SENDE.
+// Sender-Flag (P3.1). Empfangen von v4 ist IMMER an (deployed capability);
+// dieses Flag steuert nur, ob ICH v4 SENDE. PRÄZEDENZ: explizites per-Device-
+// localStorage ('1'/'0') übersteuert IMMER den server-gesteuerten Rollout-
+// Default (rollout.js) — Test-Geräte + per-Device-Opt-out bleiben so möglich.
+// Ohne expliziten Wert entscheidet der Rollout (fail-safe AUS, s. rollout.js).
 export function ratchetSendEnabled() {
-  try { return localStorage.getItem('renex_ratchet_send') === '1'; } catch { return false; }
+  try {
+    const explicit = localStorage.getItem('renex_ratchet_send');
+    if (explicit === '1') return true;
+    if (explicit === '0') return false;
+    return rolloutDefault('ratchetSend');
+  } catch { return false; }
 }
 
-// PQ-Triple-Rekey-Flag (P3.2-B). DEFAULT AUS (opt-in, ZUSÄTZLICH zu
-// renex_ratchet_send — Rekey setzt v4-Senden voraus). Steuert nur das ANNOUNCE
-// (Senden von pq_kem_ct); die Empfangs-/Aktivierungs-Seite läuft IMMER, sobald
-// deployed (capability, via caps.pqrekey advertised). Kill-Switch: entfernen/0.
+// PQ-Triple-Rekey-Flag (P3.2-B). Setzt v4-Senden voraus. Steuert nur das
+// ANNOUNCE (Senden von pq_kem_ct); die Empfangs-/Aktivierungs-Seite läuft
+// IMMER, sobald deployed (capability, via caps.pqrekey advertised). Gleiche
+// Präzedenz: explizites localStorage übersteuert den Rollout-Default.
+// Kill-Switch pro Gerät: renex_pq_rekey='0'; global: KV rollout:flags.
 export function pqRekeyEnabled() {
-  try { return localStorage.getItem('renex_pq_rekey') === '1' && ratchetSendEnabled(); }
-  catch { return false; }
+  try {
+    if (!ratchetSendEnabled()) return false;
+    const explicit = localStorage.getItem('renex_pq_rekey');
+    if (explicit === '1') return true;
+    if (explicit === '0') return false;
+    return rolloutDefault('pqRekey');
+  } catch { return false; }
 }
 
 // DEBUG-Override (nur schnelle Live-Verifikation): senkt die Rekey-Nachrichten-

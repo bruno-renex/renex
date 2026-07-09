@@ -610,6 +610,30 @@ export async function handleE2eRoutes(request, env, path, params) {
     }
 
     // ======================================================
+    // ROLLOUT-FLAGS (P3.2 GA-Rollout): server-gesteuerter, reversibler Default
+    // für die v4-Krypto-Schichten. KV-Key `rollout:flags` (JSON), leer → alles
+    // AUS (fail-safe). Global umschaltbar via `wrangler kv key put` OHNE Redeploy
+    // (Kill-Switch greift, sobald Clients neu pollen). Nicht-geheim; per-Device-
+    // localStorage übersteuert weiterhin (Test-/Opt-out pro Gerät).
+    // ======================================================
+    case "/e2e/rollout": {
+      if (request.method === "GET") {
+        const session = await requireAnySession(request, env);
+        if (!session) return json(request, { error: "Not authenticated" }, 401);
+        let flags = { ratchetSend: false, pqRekey: false };
+        try {
+          const raw = await env.RENEX_KV.get("rollout:flags");
+          if (raw) {
+            const p = JSON.parse(raw);
+            flags = { ratchetSend: p.ratchetSend === true, pqRekey: p.pqRekey === true };
+          }
+        } catch { /* fail-safe: Defaults (alles AUS) */ }
+        return json(request, flags);
+      }
+      break;
+    }
+
+    // ======================================================
     // PQXDH (M2): Prekey-Bundle-Publish + atomarer Consume + OPK-Count.
     // Dark-Launch PUBLISH-ONLY (§4.3): Prekeys publizieren, Consume live
     // beobachten (verify+log). Alles additiv → Legacy-Clients unberührt.

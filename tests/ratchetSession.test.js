@@ -29,12 +29,14 @@ import {
 } from '../frontend/src/lib/pqRatchet.js';
 import { getOrCreateKemIdentity } from '../frontend/src/lib/kemIdentity.js';
 import { storePeerDevices } from '../frontend/src/lib/cmk.js';
+import { fetchRolloutFlags } from '../frontend/src/lib/rollout.js';
 import { e2eEncrypt, e2eDecrypt } from '../frontend/src/lib/chatCrypto.js';
 import { verifyMessageSigV4 } from '../frontend/src/lib/messageSig.js';
 import {
   ratchetEncrypt, ratchetDecrypt, primeRatchetSession, pqDeviceCount,
   storeV4Plaintext, loadV4Plaintext,
   ratchetEncryptMulti, primePair,
+  ratchetSendEnabled, pqRekeyEnabled,
 } from '../frontend/src/lib/ratchetSession.js';
 
 const ALG = 'pqxdh-x25519-mlkem768';
@@ -53,7 +55,14 @@ beforeAll(async () => {
   sigPub = await crypto.subtle.exportKey('jwk', pair.publicKey);
   await idbSet('sig_keypair', { pub: sigPub, priv: await crypto.subtle.exportKey('jwk', pair.privateKey) });
 });
-beforeEach(() => { vi.clearAllMocks(); _ls.set('renex_ratchet_send', '1'); });   // Send-Flag AN für die Round-Trip-Tests
+beforeEach(async () => {
+  vi.clearAllMocks();
+  _ls.set('renex_ratchet_send', '1');            // Send-Flag AN für die Round-Trip-Tests
+  // Rollout-State vor jedem Test neutralisieren (kein Leak zwischen Tests):
+  apiFetch.mockResolvedValue({ ok: true, data: { ratchetSend: false, pqRekey: false } });
+  await fetchRolloutFlags();
+  vi.clearAllMocks();
+});
 
 // AES-GCM-Decrypt mit rohem MK (Gegenseite im Test).
 async function aesDecrypt(mk, ivB64, ctB64, aad) {
@@ -291,6 +300,34 @@ describe('P3.2-A Multi-Device-Fan-out (ratchetEncryptMulti)', () => {
   it('kein pq-Ziel → null (Legacy)', async () => {
     getRecipientDevices.mockResolvedValue([]);
     expect(await ratchetEncryptMulti('nopq', 'x', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
+  });
+
+  it('REVIEW-HIGH: gemischte Flotte (1 pq + 1 non-pq Peer-Device) → null (Legacy für ALLE, kein Lock)', async () => {
+    // Peer hat ein pq-Gerät UND ein aktives non-pq-Gerät (altes Build / stale SW).
+    // v4 darf NICHT engagen — sonst bekäme das non-pq-Gerät nie eine lesbare Kopie.
+    const b = makeBobWire('mixed_pq');
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobmix' ? [
+        { deviceId: 'mixed_pq', hasKem: true, caps: { hybrid: true } },
+        { deviceId: 'mixed_old', hasKem: false, caps: null },        // non-pq → blockt v4
+      ]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: b.wire });
+    await primePair('bobmix', 'mixed_pq');   // Session steht sogar
+    expect(await ratchetEncryptMulti('bobmix', 'x', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
+  });
+
+  it('REVIEW-HIGH: eigenes non-pq Zweitgerät (Self-Sync-Flotte gemischt) → null (Legacy)', async () => {
+    const b = makeBobWire('sfp');
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === 'bobself' ? [{ deviceId: 'sfp', hasKem: true, caps: { hybrid: true } }]
+      : h === 'me' ? [
+        { deviceId: 'medev', hasKem: true, caps: { hybrid: true } },
+        { deviceId: 'myold', hasKem: false, caps: null },            // eigenes non-pq Gerät
+      ] : []);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: b.wire });
+    await primePair('bobself', 'sfp');
+    expect(await ratchetEncryptMulti('bobself', 'x', { myHandle: 'me', myDeviceId: 'medev' })).toBe(null);
   });
 
   it('>FANOUT_MAX Ziele → null (Legacy, KEIN stilles Truncaten)', async () => {
@@ -576,5 +613,47 @@ describe('Gates: Flag + single-device', () => {
     apiFetch.mockResolvedValue({ ok: true, status: 200, data: makeBobWire('p1').wire });
     expect(await primeRatchetSession('peerx', { myHandle: 'me' })).toBe(null);
     expect(apiFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('Rollout-Default + pqRekey-Präzedenz (Review-Fixes)', () => {
+  // Rollout-State AN setzen (danach neutralisiert die File-beforeEach ihn wieder).
+  async function rolloutOn(flags) {
+    apiFetch.mockResolvedValue({ ok: true, data: flags });
+    await fetchRolloutFlags();
+    vi.clearAllMocks();
+  }
+
+  it('Rollout ratchetSend=true → v4-Senden default AN ohne explizites Flag', async () => {
+    await rolloutOn({ ratchetSend: true, pqRekey: false });
+    _ls.delete('renex_ratchet_send');
+    expect(ratchetSendEnabled()).toBe(true);
+    expect(pqRekeyEnabled()).toBe(false);
+  });
+
+  it('per-Device renex_ratchet_send=0 übersteuert Rollout-AN (Opt-out)', async () => {
+    await rolloutOn({ ratchetSend: true, pqRekey: false });
+    _ls.set('renex_ratchet_send', '0');
+    expect(ratchetSendEnabled()).toBe(false);
+  });
+
+  it('REVIEW-LOW: stray renex_pq_rekey=1 wird NICHT durch Rollout-send scharf', async () => {
+    await rolloutOn({ ratchetSend: true, pqRekey: false });
+    _ls.delete('renex_ratchet_send');            // send kommt nur aus dem Rollout
+    _ls.set('renex_pq_rekey', '1');              // vergessenes Flag
+    expect(ratchetSendEnabled()).toBe(true);
+    expect(pqRekeyEnabled()).toBe(false);        // bleibt AUS (un-GA PQ-Triple nicht scharf)
+  });
+
+  it('echtes Testgerät (beide Flags explizit) → pqRekey AN', () => {
+    _ls.set('renex_ratchet_send', '1');
+    _ls.set('renex_pq_rekey', '1');
+    expect(pqRekeyEnabled()).toBe(true);
+  });
+
+  it('per-Device renex_pq_rekey=0 killt trotz Rollout pqRekey=true', async () => {
+    await rolloutOn({ ratchetSend: true, pqRekey: true });
+    _ls.set('renex_pq_rekey', '0');
+    expect(pqRekeyEnabled()).toBe(false);
   });
 });

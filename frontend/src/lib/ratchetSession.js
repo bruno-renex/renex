@@ -89,8 +89,13 @@ export function pqRekeyEnabled() {
   try {
     if (!ratchetSendEnabled()) return false;
     const explicit = localStorage.getItem('renex_pq_rekey');
-    if (explicit === '1') return true;
-    if (explicit === '0') return false;
+    if (explicit === '0') return false;                          // per-Device-Kill immer geehrt
+    // Ein per-Device pqRekey='1' aktiviert die (noch nicht GA'te) PQ-Triple-
+    // Schicht NUR, wenn v4-Senden auf DIESEM Gerät AUCH explizit opt-in war —
+    // NICHT wenn ratchetSend bloß aus dem Rollout-Default kommt. Sonst würde ein
+    // globaler ratchetSend-Flip einen vergessenen pq_rekey='1' retroaktiv scharf
+    // schalten (Review-LOW). Rollout hält pqRekey sonst für alle AUS (false).
+    if (explicit === '1' && localStorage.getItem('renex_ratchet_send') === '1') return true;
     return rolloutDefault('pqRekey');
   } catch { return false; }
 }
@@ -275,20 +280,29 @@ const FANOUT_MAX = 9;   // Server-Cap ist 10; ein Slot Reserve
  * lokalen Cache (KEIN Netz; Miss → null → kein Rekey für dieses Device).
  */
 async function _fanoutTargets(peer, myHandle, myDeviceId) {
-  const pq = (list) => (list || []).filter(d => d.hasKem && d.caps?.hybrid);
+  const isPq = (d) => !!(d && d.hasKem && d.caps?.hybrid);
   const enrich = async (handle, d) => ({
     handle, deviceId: d.deviceId,
     pqCapable: !!d.caps?.pqrekey,
     kemEkB64: await getKemEkForDevice(handle, d.deviceId).catch(() => null),
   });
-  const peerDevs = await Promise.all(pq(await getRecipientDevices(peer).catch(() => [])).map(d => enrich(peer, d)));
-  let mine = [];
-  if (myHandle) {
-    mine = await Promise.all(pq(await getRecipientDevices(myHandle).catch(() => []))
-      .filter(d => d.deviceId !== myDeviceId)
-      .map(d => enrich(myHandle, d)));
-  }
-  return [...peerDevs, ...mine];   // NICHT truncaten — Overflow behandelt der Aufrufer (Legacy)
+  const peerAll = await getRecipientDevices(peer).catch(() => []);
+  const mineAll = myHandle
+    ? (await getRecipientDevices(myHandle).catch(() => [])).filter(d => d.deviceId !== myDeviceId)
+    : [];
+  // ⚠️ FLOTTEN-VOLLSTÄNDIGKEIT (Review-HIGH, GA-Rollout-Blocker): v4 darf NUR
+  // engagen, wenn JEDES aktive Empfänger-Device (Peer + eigene andere) pq-fähig
+  // ist. Sonst bekäme ein non-pq-Device (altes Build / Pre-caps.hybrid-Inbox-Key
+  // / stale-SW iOS-PWA) KEINE lesbare Kopie — der Legacy-CMK-Pfad (der an ALLE
+  // Inbox-Devices wrappt) wird bei v4-Erfolg übersprungen → permanent gesperrte
+  // Nachricht (Ratchet-MK einmalig, heilt nicht). Gemischte Flotte → complete=false
+  // → Aufrufer sendet Legacy an ALLE. (Autoritativ = devset/D1-active; die
+  // Inbox-Index-Divergenz-Restkante ist kleiner und separat.)
+  const complete = peerAll.every(isPq) && mineAll.every(isPq);
+  const peerDevs = await Promise.all(peerAll.filter(isPq).map(d => enrich(peer, d)));
+  const mine = await Promise.all(mineAll.filter(isPq).map(d => enrich(myHandle, d)));
+  // NICHT truncaten — Overflow behandelt der Aufrufer (Legacy)
+  return { targets: [...peerDevs, ...mine], complete };
 }
 
 /** Stellt (falls nötig) eine Initiator-Session gegen EIN exaktes (handle,dev)-Ziel her. Single-flight. */
@@ -364,8 +378,11 @@ export async function ratchetEncryptMulti(peerHandle, plaintext, { myHandle = ''
     if (!peer || typeof plaintext !== 'string') return null;
     const myH = String(myHandle || '').toLowerCase();
 
-    const targets = await _fanoutTargets(peer, myH, myDeviceId);
-    if (targets.length === 0) return null;                      // kein pq-Ziel → Legacy
+    const { targets, complete } = await _fanoutTargets(peer, myH, myDeviceId);
+    // Flotten-Vollständigkeit (Review-HIGH): ist auch nur EIN aktives Device
+    // (Peer oder eigenes) non-pq → Legacy für ALLE, sonst bliebe es gesperrt.
+    if (!complete) return null;
+    if (targets.length === 0) return null;                      // kein Ziel → Legacy
     // Overflow NIE truncaten (sonst bekämen weggelassene Devices keine lesbare
     // Kopie = stiller Verlust) → lieber Legacy für alle.
     if (targets.length > FANOUT_MAX) return null;

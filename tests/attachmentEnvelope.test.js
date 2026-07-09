@@ -74,6 +74,17 @@ describe('Robustheit', () => {
     expect(u.attachmentMeta).toBeNull();
     expect(u.reply).toBeNull();
   });
+  it('Prefix + parsebar aber UNBEKANNTE Feld-Form → Caption (json.t), NIE Roh-JSON (Review-MEDIUM)', () => {
+    // Ein neuerer Client sendet ein Envelope mit noch unbekanntem Feld (z.B. {t,x}).
+    const future = '__rx_a1__\n' + JSON.stringify({ t: 'sichtbarer text', x: { neu: 1 } });
+    const u = unwrapAttachmentPlaintext(future);
+    expect(u.caption).toBe('sichtbarer text');   // degradiert zur Caption …
+    expect(u.attachmentMeta).toBeNull();
+    expect(u.reply).toBeNull();
+    // … und zeigt NIEMALS das rohe __rx_a1__-JSON an.
+    expect(u.caption).not.toContain('__rx_a1__');
+    expect(u.caption).not.toContain('"neu"');
+  });
   it('Envelope mit ungültiger Attachment-Meta aber gültiger Reply → nur Reply', () => {
     const bad = wrapEnvelope('c', { attachment: { type: 'photo' } /* fehlt fileKey/iv/r2Key */, reply });
     const u = unwrapAttachmentPlaintext(bad);

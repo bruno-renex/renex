@@ -161,10 +161,14 @@ export function unwrapAttachmentPlaintext(decryptedText) {
     if (r && typeof r === 'object' && typeof r.preview === 'string') {
       reply = { id: typeof r.id === 'string' ? r.id : null, from: typeof r.from === 'string' ? r.from : null, preview: r.preview };
     }
-    // Gültiges Envelope (Attachment ODER Reply) → strukturiert zurückgeben.
-    if (attachmentMeta || reply) return { caption, attachmentMeta, reply };
+    // Prefix erkannt UND JSON geparst → IMMER die Caption (json.t) zurückgeben,
+    // NIE das rohe Envelope-JSON. Ein von einem neueren Client mit einer noch
+    // unbekannten Feld-Form (a/r fehlen/ungültig) gesendetes Envelope degradiert
+    // so graceful zur Caption statt „__rx_a1__{…}" im Chat anzuzeigen
+    // (Review-MEDIUM: Payload-Shape-Skew ohne Wire-v-Bump).
+    return { caption, attachmentMeta, reply };
   } catch {}
-  // Fallback: kaputter/leerer Envelope → als bare Text behandeln („garbled" ist
-  // immer noch besser als Crash).
+  // Nur bei ECHTEM Parse-Fehler (korrupter Envelope) → als bare Text behandeln
+  // („garbled" ist immer noch besser als Crash).
   return { caption: decryptedText, attachmentMeta: null, reply: null };
 }

@@ -1152,8 +1152,10 @@ function _normalizeMessage(m, myHandle) {
       id: replyToId,        // ID der Original-Message — für Jump-to-Original-Klick
       from: replyFrom,
       // Bei E2E-Reply mit verschlüsselter Preview: Placeholder bis Decrypt patcht.
+      // v4 (P3.2-B) trägt die Preview im Envelope → KEIN top-level replyCt, aber
+      // m.e2e ist gesetzt → auch dann 🔐 (sonst leere Zitat-Zeile bis/while locked).
       // Sonst (Plaintext-Group oder kein Preview): Plaintext direkt.
-      text: hasReplyCt ? "🔐" : (m.replyMessage || m.reply_message || ""),
+      text: (hasReplyCt || m.e2e) ? "🔐" : (m.replyMessage || m.reply_message || ""),
     } : undefined,
     attachment: m.attachment_key ? {
       type: m.attachment_type,

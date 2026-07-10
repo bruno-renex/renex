@@ -36,14 +36,23 @@ import {
 } from './pqRatchet.js';
 import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
 import { signMessageV4, verifyMessageSigV4 } from './messageSig.js';
-import { ensureHybridSession, acceptHybridSession } from './hybridSession.js';
+import { ensureHybridSession, acceptHybridSession, myInitWins } from './hybridSession.js';
+import { getOrCreateIdentity } from './pqxdhKeys.js';
 import { getRecipientDevices } from './sesame.js';
 import { getKemEkForDevice } from './cmk.js';
 import { getOrCreateKemIdentity } from './kemIdentity.js';
 import { rolloutDefault } from './rollout.js';
 
 const STORE_INFO = 'renex:ratchetsession:store:v1';
-const IDB_PREFIX = 'ratchet:';
+// ⚠️ SESSION-GENERATION `:g2:` (Hotfix 2026-07-10): einmaliger Bump wegen der
+// Beide-Initiator-Kollision (RCA) — die vor dem Fix eingefrorenen Sessions
+// heilen NICHT von selbst. Der neue Prefix orphaned alle Alt-`ratchet:`-Recs
+// → sauberer Neu-Handshake, der via Ratchet-Tie-Break (ratchetDecrypt)
+// deterministisch konvergiert. Der v4-Klartext-Store (v4msg:) bleibt UNBERÜHRT
+// → entschlüsselte History bleibt lesbar. hybridsession: wird in hybridSession.js
+// synchron gebumpt (sonst würde ensureHybridSession den alten RK0 wiederverwenden).
+const IDB_PREFIX = 'ratchet:g2:';
+const ARCH_PREFIX = 'ratchetarch:g2:';   // archivierte Verlierer-Session (Tie-Break)
 const V4MSG_PREFIX = 'v4msg:';           // persistenter Klartext-Store (siehe unten)
 const SKIPPED_CAP = 512;                 // harte Gesamtgrenze des Skipped-Stores (über MAX_SKIP hinaus)
 const MAX_INIT_SENDS = 32;               // InitHdr höchstens so oft mitschicken (danach liegt es in der History)
@@ -154,6 +163,25 @@ async function _save(peer, dev, rec) {
     for (const k of keys.slice(0, keys.length - SKIPPED_CAP)) delete sk[k];   // älteste raus (Insertion-Order)
   }
   await idbSet(_idbKey(peer, dev), await sealJson(await _key(), { ...rec, state: serializeRatchetState(rec.state) }));
+}
+// Verlierer-Session eines Tie-Breaks archivieren (nicht löschen → bereits
+// entschlüsselte Nachrichten liegen ohnehin im v4-Klartext-Store).
+async function _archiveSession(peer, dev, rec) {
+  try {
+    await idbSet(`${ARCH_PREFIX}${peer}:${dev}`, await sealJson(await _key(), { ...rec, state: serializeRatchetState(rec.state) }));
+  } catch {}
+}
+// Accept eines eingehenden InitHdr → frische Responder-Session, SOFORT
+// persistiert (OPK-Verwaisungs-Fix). Wirft weiter (acceptHybridSession).
+async function _acceptResponder(peer, dev, initHdr) {
+  const hs = await acceptHybridSession(peer, dev, initHdr);          // KONSUMIERT die one-time-OPK
+  const spkPriv = b64ToBytes(hs.ownSpkPriv);
+  const rec = {
+    role: 'responder', peerSeen: true, initHdr: null,
+    state: initResponder(hs.rootKey, { priv: spkPriv, pub: x25519PublicKey(spkPriv) }),
+  };
+  await _save(peer, dev, rec);
+  return rec;
 }
 async function _findExisting(peer) {
   const pfx = `${IDB_PREFIX}${peer}:`;
@@ -442,17 +470,33 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
       let rec = await _load(peer, dev);
       if (!rec) {
         if (!msg.init) return null;                                   // Init verpasst → (Aufrufer: retry/locked)
-        const hs = await acceptHybridSession(peer, dev, msg.init);    // KONSUMIERT die one-time-OPK
-        const spkPriv = b64ToBytes(hs.ownSpkPriv);
-        rec = {
-          role: 'responder', peerSeen: true, initHdr: null,
-          state: initResponder(hs.rootKey, { priv: spkPriv, pub: x25519PublicKey(spkPriv) }),
-        };
-        // OPK-Verbrauch SOFORT mit persistierter Session paaren: ein späterer
-        // Decrypt-Fehler kann die Session nicht mehr verwaisen lassen (sonst
-        // würde der Retry acceptHybridSession erneut aufrufen → opk_consumed →
-        // permanenter Lockout). Kritischer Datenverlust-Fix.
-        await _save(peer, dev, rec);
+        // OPK-Verbrauch SOFORT mit persistierter Session paaren (Verwaisungs-Fix):
+        // ein späterer Decrypt-Fehler kann die Session nicht mehr verwaisen lassen.
+        rec = await _acceptResponder(peer, dev, msg.init);
+      }
+      // ── BEIDE-INITIATOR-KOLLISION (RCA 2026-07-10): ich habe eine UNGENUTZTE
+      // Initiator-Session, aber der Peer hat AUCH initiiert (msg.init liegt an).
+      // Seit dem GA-Rollout primet jeder Empfänger selbst → genau dieser Glare.
+      // Ratchet-Ebenen-Tie-Break (D4, deterministisch via myInitWins): GENAU eine
+      // Seite (höhere IK → !myInitWins) flippt zu Responder und übernimmt den RK0
+      // des Gewinners → beide konvergieren, kein Oszillieren. Der Gewinner behält
+      // seine Initiator-Session; diese Peer-Nachricht bleibt bei ihm unlesbar
+      // (null), bis der Peer beim Empfang MEINES init spiegelbildlich flippt.
+      // Guard streng: NUR ungenutzte Initiator-rec (!peerSeen) + eingehendes init.
+      // Ein legitimer Responder-Peer sendet nie init → dieser Zweig feuert dort
+      // nicht (msg.init fehlt), reguläre Sessions bleiben unberührt.
+      else if (rec.role === 'initiator' && !rec.peerSeen && msg.init) {
+        try {
+          const { ikX } = await getOrCreateIdentity();
+          if (!myInitWins(ikX.pub, b64ToBytes(msg.init.ikA25519))) {
+            await _archiveSession(peer, dev, rec);
+            rec = await _acceptResponder(peer, dev, msg.init);       // frische OPK (nie zuvor accept) → kein Re-Consume
+            pqStat('tiebreak_flip');
+          }
+        } catch (e) {
+          // Tie-Break best-effort; bei Fehler regulärer Decrypt-Versuch (failt → null).
+          console.warn('🔗 ratchet tie-break skip (non-fatal):', e?.message);
+        }
       }
       rec.pq = rec.pq || initPqState(Date.now());                    // Alt-Records migrieren
 

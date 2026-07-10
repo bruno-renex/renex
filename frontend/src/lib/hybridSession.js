@@ -35,8 +35,12 @@ const ALG = 'pqxdh-x25519-mlkem768';
 const ALGO_VERSION = 3;
 const STORE_INFO = 'renex:hybridsession:store:v1';
 const _key = () => deriveStorageKey(STORE_INFO);
-const _idbKey = (peer, dev) => `hybridsession:${peer}:${dev}`;
-const _archiveKey = (peer, dev) => `hybridsession:archive:${peer}:${dev}`;
+// Session-Generation `:g2:` synchron zu ratchetSession.js (Hotfix 2026-07-10,
+// Beide-Initiator-Kollision): der Bump erzwingt frische PQXDH-Handshakes (neuer
+// RK0), sonst würde ensureHybridSession den alten Initiator-RK0 wiederverwenden
+// und die Kollision nach dem ratchet:-Bump reproduzieren.
+const _idbKey = (peer, dev) => `hybridsession:g2:${peer}:${dev}`;
+const _archiveKey = (peer, dev) => `hybridsession:archive:g2:${peer}:${dev}`;
 
 // Single-flight: dedupliziert nebenläufige ensure-Aufrufe pro (peer,dev), sonst
 // würden zwei Aufrufe zwei OPKs des Peers verbrauchen.

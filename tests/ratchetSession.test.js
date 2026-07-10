@@ -20,7 +20,8 @@ import { idbSet } from '../frontend/src/lib/idb.js';
 import { bytesToB64, b64ToBytes } from '../frontend/src/lib/bytes.js';
 import { x25519Keygen, ed25519Keygen, mlKemKeygen } from '../frontend/src/lib/pqCrypto.js';
 import { initiatorRoot, responderRoot, signPrekey, signInitHdr } from '../frontend/src/lib/pqxdh.js';
-import { buildPublishBundle, decodeInitiatorBundle } from '../frontend/src/lib/pqxdhKeys.js';
+import { buildPublishBundle, decodeInitiatorBundle, getOrCreateIdentity } from '../frontend/src/lib/pqxdhKeys.js';
+import { compareBytes } from '../frontend/src/lib/hybridSession.js';
 import {
   initInitiator, initResponder, nextSendKey, deriveReceiveKey, decodeRatchetHeader, encodeRatchetHeader,
 } from '../frontend/src/lib/ratchet.js';
@@ -613,6 +614,76 @@ describe('Gates: Flag + single-device', () => {
     apiFetch.mockResolvedValue({ ok: true, status: 200, data: makeBobWire('p1').wire });
     expect(await primeRatchetSession('peerx', { myHandle: 'me' })).toBe(null);
     expect(apiFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('Beide-Initiator-Kollision → Ratchet-Tie-Break (Hotfix 2026-07-10)', () => {
+  // Alice initiiert (pure) gegen MEIN publiziertes Bundle → RK0_A, mit init.
+  async function aliceInitiatesToMe(text) {
+    const pub = await buildPublishBundle({ opkCount: 5 });
+    const usedOpk = pub.opks[0];
+    const aIkX = x25519Keygen(), aEk = x25519Keygen(), aIkEd = ed25519Keygen();
+    const { rk0, kemCt } = initiatorRoot({
+      ikAPriv: aIkX.priv, ekAPriv: aEk.priv,
+      bundle: decodeInitiatorBundle({ ik: pub.ik, spk: pub.spk, pqspk: pub.pqspk, opk: usedOpk }),
+    });
+    const st = initInitiator(rk0, b64ToBytes(pub.spk.spk));
+    const { mk, header } = nextSendKey(st);
+    const header_b64 = encodeRatchetHeader(header);
+    const { ivB64, ctB64 } = await aesEncrypt(mk, text, header_b64);
+    const init = {
+      v: 3, alg: ALG,
+      ikA25519: bytesToB64(aIkX.pub), ikAEd: bytesToB64(aIkEd.pub), ekA25519: bytesToB64(aEk.pub),
+      usedSpkId: pub.spk.spkId, usedOpkId: usedOpk.opkId, usedPqspkId: pub.pqspk.pqspkId,
+      mlkemCt: bytesToB64(kemCt),
+      hdrSig: bytesToB64(signInitHdr({
+        v: 3, alg: ALG, ikA25519: aIkX.pub, ekA25519: aEk.pub,
+        usedSpkId: pub.spk.spkId, usedOpkId: usedOpk.opkId, usedPqspkId: pub.pqspk.pqspkId, mlkemCt: kemCt,
+      }, aIkEd.priv)),
+    };
+    return { v: 4, header_b64, ivB64, ctB64, init, aliceIk: aIkX.pub, aliceState: st };
+  }
+  async function aliceCollision(text, wantMeToLose) {
+    const myIk = (await getOrCreateIdentity()).ikX.pub;
+    for (let i = 0; i < 60; i++) {
+      const m = await aliceInitiatesToMe(text);
+      if ((compareBytes(myIk, m.aliceIk) > 0) === wantMeToLose) return m;
+    }
+    throw new Error('IK-Ordnung nicht erreichbar');
+  }
+  async function primeMyInitiatorTo(peer, dev) {
+    const bob = makeBobWire(dev);
+    getRecipientDevices.mockResolvedValue([{ deviceId: dev, hasKem: true, caps: { hybrid: true } }]);
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: bob.wire });
+    await primePair(peer, dev);
+  }
+
+  it('ICH VERLIERE (höhere IK) → flippe zu Responder, entschlüssele + Folgenachricht lesbar', async () => {
+    await primeMyInitiatorTo('alicel', 'adl');
+    const m1 = await aliceCollision('kollision 🔐', true);
+    const r = await ratchetDecrypt('alicel', 'adl', m1, null);
+    expect(r?.text).toBe('kollision 🔐');
+    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').tiebreak_flip).toBeGreaterThanOrEqual(1);
+    const nx = nextSendKey(m1.aliceState);
+    const hb = encodeRatchetHeader(nx.header);
+    const enc = await aesEncrypt(nx.mk, 'zweite', hb);
+    const r2 = await ratchetDecrypt('alicel', 'adl', { v: 4, header_b64: hb, ivB64: enc.ivB64, ctB64: enc.ctB64 }, null);
+    expect(r2?.text).toBe('zweite');
+  });
+
+  it('ICH GEWINNE (niedrigere IK) → behalte Initiator, Peer-Initiator-Msg bleibt null bis Peer flippt', async () => {
+    await primeMyInitiatorTo('alicew', 'adw');
+    const m1 = await aliceCollision('vom verlierer', false);
+    const r = await ratchetDecrypt('alicew', 'adw', m1, null);
+    expect(r).toBe(null);
+  });
+
+  it('KEINE Kollision: reguläre init-Nachricht ohne Vor-Session → normaler Accept (Tie-Break feuert nicht)', async () => {
+    _ls.delete('renex_pqrk_stats');   // Stat aus vorigem Test (Modul-globales localStorage) leeren
+    const m1 = await aliceInitiatesToMe('normal');
+    const r = await ratchetDecrypt('alicefresh', 'adf', m1, null);
+    expect(r?.text).toBe('normal');
+    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').tiebreak_flip).toBeUndefined();
   });
 });
 

@@ -619,9 +619,10 @@ describe('Gates: Flag + single-device', () => {
 
 describe('Beide-Initiator-Kollision → Ratchet-Tie-Break (Hotfix 2026-07-10)', () => {
   // Alice initiiert (pure) gegen MEIN publiziertes Bundle → RK0_A, mit init.
-  async function aliceInitiatesToMe(text) {
-    const pub = await buildPublishBundle({ opkCount: 5 });
-    const usedOpk = pub.opks[0];
+  // Baut ein Initiator-Handshake+Nachricht gegen ein GEGEBENES Bundle+OPK (frische
+  // Ephemerals pro Aufruf). Erlaubt zwei verschiedene Handshakes gegen dasselbe
+  // Bundle (verschiedene OPKs) für den Peer-Reinit-Test.
+  async function aliceInitAgainst(pub, usedOpk, text) {
     const aIkX = x25519Keygen(), aEk = x25519Keygen(), aIkEd = ed25519Keygen();
     const { rk0, kemCt } = initiatorRoot({
       ikAPriv: aIkX.priv, ekAPriv: aEk.priv,
@@ -643,6 +644,10 @@ describe('Beide-Initiator-Kollision → Ratchet-Tie-Break (Hotfix 2026-07-10)', 
     };
     return { v: 4, header_b64, ivB64, ctB64, init, aliceIk: aIkX.pub, aliceState: st };
   }
+  async function aliceInitiatesToMe(text) {
+    const pub = await buildPublishBundle({ opkCount: 5 });
+    return aliceInitAgainst(pub, pub.opks[0], text);
+  }
   async function aliceCollision(text, wantMeToLose) {
     const myIk = (await getOrCreateIdentity()).ikX.pub;
     for (let i = 0; i < 60; i++) {
@@ -653,9 +658,12 @@ describe('Beide-Initiator-Kollision → Ratchet-Tie-Break (Hotfix 2026-07-10)', 
   }
   async function primeMyInitiatorTo(peer, dev) {
     const bob = makeBobWire(dev);
-    getRecipientDevices.mockResolvedValue([{ deviceId: dev, hasKem: true, caps: { hybrid: true } }]);
+    getRecipientDevices.mockImplementation(async (h) =>
+      h === peer ? [{ deviceId: dev, hasKem: true, caps: { hybrid: true } }]
+      : h === 'me' ? [{ deviceId: 'medev', hasKem: true, caps: { hybrid: true } }] : []);
     apiFetch.mockResolvedValue({ ok: true, status: 200, data: bob.wire });
     await primePair(peer, dev);
+    return bob;   // Alice's Bundle+Privs (für Round-Trip-Simulation ihres Flips)
   }
 
   it('ICH VERLIERE (höhere IK) → flippe zu Responder, entschlüssele + Folgenachricht lesbar', async () => {
@@ -663,7 +671,7 @@ describe('Beide-Initiator-Kollision → Ratchet-Tie-Break (Hotfix 2026-07-10)', 
     const m1 = await aliceCollision('kollision 🔐', true);
     const r = await ratchetDecrypt('alicel', 'adl', m1, null);
     expect(r?.text).toBe('kollision 🔐');
-    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').tiebreak_flip).toBeGreaterThanOrEqual(1);
+    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').reconcile_flip).toBeGreaterThanOrEqual(1);
     const nx = nextSendKey(m1.aliceState);
     const hb = encodeRatchetHeader(nx.header);
     const enc = await aesEncrypt(nx.mk, 'zweite', hb);
@@ -678,12 +686,75 @@ describe('Beide-Initiator-Kollision → Ratchet-Tie-Break (Hotfix 2026-07-10)', 
     expect(r).toBe(null);
   });
 
-  it('KEINE Kollision: reguläre init-Nachricht ohne Vor-Session → normaler Accept (Tie-Break feuert nicht)', async () => {
+  it('KEINE Kollision: reguläre init-Nachricht ohne Vor-Session → normaler Accept (Reconcile feuert nicht)', async () => {
     _ls.delete('renex_pqrk_stats');   // Stat aus vorigem Test (Modul-globales localStorage) leeren
     const m1 = await aliceInitiatesToMe('normal');
     const r = await ratchetDecrypt('alicefresh', 'adf', m1, null);
     expect(r?.text).toBe('normal');
-    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').tiebreak_flip).toBeUndefined();
+    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').reconcile_flip).toBeUndefined();
+  });
+
+  it('STALE-RESPONDER: Peer re-initiiert (neues init, andere OPK) → Re-Accept + entschlüsselt', async () => {
+    _ls.delete('renex_pqrk_stats');
+    const pub = await buildPublishBundle({ opkCount: 5 });
+    // 1. Handshake: Alice init_1 → ich werde Responder (RK0_1).
+    const m1 = await aliceInitAgainst(pub, pub.opks[0], 'erste');
+    expect((await ratchetDecrypt('alicereinit', 'adri', m1, null))?.text).toBe('erste');
+    // Alice verliert ihre Session + re-initiiert: init_2, anderer Ephemeral, andere OPK.
+    const m2 = await aliceInitAgainst(pub, pub.opks[1], 'nach reinit 🔐');
+    const r2 = await ratchetDecrypt('alicereinit', 'adri', m2, null);
+    expect(r2?.text).toBe('nach reinit 🔐');                        // Re-Accept → lesbar
+    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').reconcile_flip).toBeGreaterThanOrEqual(1);
+  });
+
+  it('REPLAY-GUARD: dieselbe Session-Nachricht (gleicher Ephemeral) triggert KEIN Re-Accept', async () => {
+    _ls.delete('renex_pqrk_stats');
+    const pub = await buildPublishBundle({ opkCount: 5 });
+    const m1 = await aliceInitAgainst(pub, pub.opks[0], 'einmalig');
+    expect((await ratchetDecrypt('alicereplay', 'adrp', m1, null))?.text).toBe('einmalig');
+    // Exakt dieselbe Nachricht nochmal (Redelivery): MK verbraucht → decrypt failt,
+    // aber gleicher Ephemeral wie rec.initEk → KEIN Re-Accept (kein OPK-Doppel-Consume).
+    const r2 = await ratchetDecrypt('alicereplay', 'adrp', m1, null);
+    expect(r2).toBe(null);
+    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').reconcile_flip).toBeUndefined();
+  });
+
+  it('ROUND-TRIP: Gewinner-Initiator liest die Antwort des Verlierers NACH dessen Flip (volle Konvergenz)', async () => {
+    // M = Initiator (Gewinner-Rolle). M sendet mit init; Alice (Verlierer) flippt
+    // zu Responder (übernimmt M's RK0), liest M, antwortet — M liest die Antwort.
+    const bob = await primeMyInitiatorTo('alicert', 'adrt');
+    const out = await ratchetEncryptMulti('alicert', 'hallo von M', { myHandle: 'me', myDeviceId: 'medev' });
+    const mp = out.mode === 'multi' ? out.payloads[0] : out;
+    expect(mp.init).toBeTruthy();                                   // M trägt init (initiator, !peerSeen)
+
+    // Alice flippt: responderRoot gegen M's init → Alice-Session = M's RK0.
+    const aRk0 = responderRoot({
+      ikBPriv: bob.ikX.priv, spkBPriv: bob.spk.priv, opkBPriv: bob.opk.priv, pqspkDk: bob.pq.dk,
+      ikAX: b64ToBytes(mp.init.ikA25519), ekAX: b64ToBytes(mp.init.ekA25519),
+      kemCt: b64ToBytes(mp.init.mlkemCt), usedOpk: !!mp.init.usedOpkId,
+    });
+    const aState = initResponder(aRk0, { priv: bob.spk.priv, pub: bob.spk.pub });
+    // Alice liest M's Nachricht (Konvergenz Richtung M→Alice):
+    const mMk = deriveReceiveKey(aState, decodeRatchetHeader(mp.header_b64));
+    expect(await aesDecrypt(mMk, mp.ivB64, mp.ctB64, mp.header_b64)).toBe('hallo von M');
+    // Alice antwortet als Responder (unter M's RK0, KEIN init):
+    const anx = nextSendKey(aState);
+    const ahb = encodeRatchetHeader(anx.header);
+    const aEnc = await aesEncrypt(anx.mk, 'antwort von alice 🔓', ahb);
+    // M empfängt Alices Antwort → M's Initiator-Session liest sie → KONVERGIERT.
+    const r = await ratchetDecrypt('alicert', 'adrt', { v: 4, header_b64: ahb, ivB64: aEnc.ivB64, ctB64: aEnc.ctB64 }, null);
+    expect(r?.text).toBe('antwort von alice 🔓');
+  });
+
+  it('INIT-FLUSS: Initiator trägt init auf JEDER Nachricht solange !peerSeen (kein 32er-Cap)', async () => {
+    await primeMyInitiatorTo('aliceflow', 'adfl');
+    // 40 Sends (> altes MAX_INIT_SENDS=32) — jeder muss init tragen, weil der Peer
+    // nie antwortet (peerSeen bleibt false).
+    for (let i = 0; i < 40; i++) {
+      const out = await ratchetEncryptMulti('aliceflow', 'm' + i, { myHandle: 'me', myDeviceId: 'medev' });
+      const p = out.mode === 'multi' ? out.payloads[0] : out;
+      expect(p.init).toBeTruthy();   // init NIE ausgehungert
+    }
   });
 });
 

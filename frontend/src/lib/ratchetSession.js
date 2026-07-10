@@ -178,6 +178,10 @@ async function _acceptResponder(peer, dev, initHdr) {
   const spkPriv = b64ToBytes(hs.ownSpkPriv);
   const rec = {
     role: 'responder', peerSeen: true, initHdr: null,
+    // Handshake-Fingerprint = Ephemeral-Pub des Initiators (frisch pro Handshake).
+    // Erlaubt der Reconciliation, ein NEUES init (Peer re-initiiert) von einem
+    // Replay derselben Session zu unterscheiden → kein doppeltes Re-Accept.
+    initEk: initHdr.ekA25519 || null,
     state: initResponder(hs.rootKey, { priv: spkPriv, pub: x25519PublicKey(spkPriv) }),
   };
   await _save(peer, dev, rec);
@@ -378,8 +382,16 @@ async function _encryptForDevice(handle, dev, plaintext, tgt = {}) {
     const aesKey = await _aesKey(mk);
     const { ivB64, ctB64 } = await e2eEncrypt(aesKey, plaintext, headerB64);
     const sig = await signMessageV4(headerB64, ivB64, ctB64);
-    const carryInit = rec.role === 'initiator' && !rec.peerSeen && rec.initHdr && (rec.initSends || 0) < MAX_INIT_SENDS;
-    if (carryInit) rec.initSends = (rec.initSends || 0) + 1;
+    // init MUSS mitfließen, SOLANGE die Session noch nicht bestätigt ist
+    // (!peerSeen) — KEIN Zähler-Cap mehr. Der Empfänger braucht das init für die
+    // Kollisions-Reconciliation (Tie-Break/Reinit); das frühere MAX_INIT_SENDS=32
+    // hungerte den Tie-Break aus, wenn viele Nachrichten in eine ungelöste
+    // Kollision liefen → dauerhaft 🔐. peerSeen wird gesetzt, sobald ich die erste
+    // Peer-Nachricht lese → dann stoppt init (Session ist konvergiert). Signal-
+    // Semantik: PreKeyMessage, bis der Peer antwortet. Bandbreite unkritisch
+    // (init ~2 KB, nur bei tatsächlichem Send an einen noch stummen Peer).
+    const carryInit = rec.role === 'initiator' && !rec.peerSeen && !!rec.initHdr;
+    if (carryInit) rec.initSends = (rec.initSends || 0) + 1;   // nur Telemetrie
     if (pqf?.pqCtB64) pqMarkCtSent(rec.pq);               // Budget nur zählen wenn der CT tatsächlich mitritt
     pqNoteSend(rec.pq);
     await _save(handle, dev, rec);
@@ -445,6 +457,49 @@ export async function ratchetEncryptMulti(peerHandle, plaintext, { myHandle = ''
   }
 }
 
+// EIN Decrypt-Versuch mit einer GEGEBENEN rec (mutiert rec.state/rec.pq NUR
+// in-memory; der Aufrufer persistiert ausschließlich im Erfolgspfad). Discriminated:
+//   { ok:true, text, verified }  – entschlüsselt (rec.peerSeen ggf. gesetzt)
+//   { ok:false, locked:true }    – PQ-Rekey locked (transient → NICHT reconcilen)
+//   { ok:false }                 – Decrypt-Fehler (Kandidat für Reconciliation)
+async function _decryptWithRec(rec, header, msg, sigPubJwk) {
+  try {
+    rec.pq = rec.pq || initPqState(Date.now());
+    // KEM-Identität (kein Netz) NUR bei echtem Epoch-Vorlauf entsiegeln.
+    const kemAdvance = (header.kemEpoch || 0) > (rec.state.kemEpoch || 0);
+    let kemId = null;
+    if (kemAdvance) { try { kemId = await getOrCreateKemIdentity(); } catch {} }
+    const prep = pqReceivePrep(rec.pq, rec.state, header, {
+      pqCtB64: msg.pq_kem_ct || null,
+      kemDk: kemId?.dk || null, ownKemEk: kemId?.ek || null,
+      now: Date.now(),
+    });
+    pqStatAnomalies(prep.anomalies);
+    if (prep.locked) {
+      pqStat(`locked_${prep.reason}`);
+      console.warn(`🔗 pq rekey locked (${prep.reason})`);
+      return { ok: false, locked: true };
+    }
+    const mk = deriveReceiveKey(rec.state, header, prep.hooks);      // Hooks mischen ss_pq nur im DH-Step
+    const aesKey = await _aesKey(mk);
+    const text = await e2eDecrypt(aesKey, msg.ivB64, msg.ctB64, msg.header_b64);  // AES-GCM-Tag = Integrität inkl. Header
+    pqNoteRecv(rec.pq);
+    if (prep.hooks?.preR1) pqStat('activate_recv');
+    if (prep.hooks?.preR2) pqStat('activate_send');
+    let verified = null;
+    if (msg.sig && sigPubJwk) {
+      verified = await verifyMessageSigV4(msg.header_b64, msg.ivB64, msg.ctB64, msg.sig, sigPubJwk);
+      if (!verified) console.warn('🔗 ratchet_session v4 sig ungültig');
+    }
+    if (rec.role === 'initiator') rec.peerSeen = true;              // Session bestätigt → init stoppt
+    return { ok: true, text, verified };
+  } catch (e) {
+    // Tag-Mismatch / Replay / skip_limit → Decrypt-Fehler (Reconciliation-Kandidat).
+    console.warn('🔗 ratchet_session decrypt fail (non-fatal):', e?.message);
+    return { ok: false };
+  }
+}
+
 // ======================================================
 // EMPFANGEN (v4). null → Aufrufer behandelt als „noch nicht entschlüsselbar".
 // ======================================================
@@ -470,90 +525,64 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
       let rec = await _load(peer, dev);
       if (!rec) {
         if (!msg.init) return null;                                   // Init verpasst → (Aufrufer: retry/locked)
-        // OPK-Verbrauch SOFORT mit persistierter Session paaren (Verwaisungs-Fix):
-        // ein späterer Decrypt-Fehler kann die Session nicht mehr verwaisen lassen.
-        rec = await _acceptResponder(peer, dev, msg.init);
+        rec = await _acceptResponder(peer, dev, msg.init);            // sofort persistiert (OPK-Verwaisungs-Fix)
       }
-      // ── BEIDE-INITIATOR-KOLLISION (RCA 2026-07-10): ich habe eine UNGENUTZTE
-      // Initiator-Session, aber der Peer hat AUCH initiiert (msg.init liegt an).
-      // Seit dem GA-Rollout primet jeder Empfänger selbst → genau dieser Glare.
-      // Ratchet-Ebenen-Tie-Break (D4, deterministisch via myInitWins): GENAU eine
-      // Seite (höhere IK → !myInitWins) flippt zu Responder und übernimmt den RK0
-      // des Gewinners → beide konvergieren, kein Oszillieren.
-      // ⚠️ BOUNDED RESIDUUM (Review 2026-07-10, akzeptiert): Der Gewinner behält
-      // seine Initiator-Session; DIESE konkrete Glare-Nachricht des Verlierers ist
-      // unter dessen aufgegebenem RK0 versiegelt und wird NICHT neu gesendet →
-      // bleibt beim Gewinner DAUERHAFT 🔐 (return null → deriveReceiveKey failt).
-      // Nur die FOLGENDEN Verlierer-Nachrichten (unter dem Gewinner-RK0, nach
-      // dessen Flip) konvergieren. Das ist der Simultan-Erst-Send-Fall, eine
-      // Richtung, ≤ wenige Nachrichten — ein RIESIGER Netto-Gewinn ggü. dem
-      // beidseitig-permanent-gesperrten Bug, den dieser Fix behebt.
-      // Guard streng: NUR ungenutzte Initiator-rec (!peerSeen) + eingehendes init.
-      // Ein legitimer Responder-Peer sendet nie init → dieser Zweig feuert dort
-      // nicht (msg.init fehlt), reguläre Sessions bleiben unberührt.
-      else if (rec.role === 'initiator' && !rec.peerSeen && msg.init) {
+
+      // ── 1) VERSUCH mit der aktuellen Session ────────────────────
+      const r1 = await _decryptWithRec(rec, header, msg, sigPubJwk);
+      if (r1.ok) { await _save(peer, dev, rec); return { text: r1.text, verified: r1.verified }; }
+      if (r1.locked) return null;                                     // PQ-Rekey-Lock (transient) → NICHT reconcilen
+
+      // ── 2) KANONISCHE RECONCILIATION (RCA 2026-07-10) ───────────
+      // Decrypt scheiterte UND ein init liegt an → die Session divergiert. Zwei
+      // Formen, seit v4 beidseitig default-an ist (Empfänger initiiert selbst):
+      //   (a) BOTH-INITIATOR-GLARE (rec = ungenutzter Initiator): D4-Tie-Break via
+      //       myInitWins — beide Seiten rechnen dieselbe strikte Total-Ordnung →
+      //       GENAU der Verlierer (höhere IK) flippt zu Responder und übernimmt den
+      //       RK0 des Gewinners. Kein Oszillieren. (Der Gewinner behält seine
+      //       Initiator-Session, liest DIESE Glare-Nachricht nicht — heilt, sobald
+      //       der Verlierer nach seinem Flip unter dem Gewinner-RK0 sendet. init
+      //       fließt beidseitig bis !peerSeen fällt → Konvergenz garantiert.)
+      //   (b) STALE-RESPONDER / PEER-REINIT (rec = Responder mit anderem Handshake,
+      //       ODER konvergenter Initiator der plötzlich nicht mehr liest): der Peer
+      //       hat NEU initiiert → dem neuen init folgen. Replay-Guard: nur bei
+      //       ABWEICHENDEM Initiator-Ephemeral (rec.initEk) → kein OPK-Doppel-Consume.
+      if (msg.init) {
+        let adopt = false;
         try {
-          const { ikX } = await getOrCreateIdentity();
-          if (!myInitWins(ikX.pub, b64ToBytes(msg.init.ikA25519))) {
-            await _archiveSession(peer, dev, rec);
-            rec = await _acceptResponder(peer, dev, msg.init);       // frische OPK (nie zuvor accept) → kein Re-Consume
-            pqStat('tiebreak_flip');
+          if (rec.role === 'responder') {
+            adopt = !!msg.init.ekA25519 && msg.init.ekA25519 !== rec.initEk;       // (b) neuer Handshake vom Peer
+          } else if (!rec.peerSeen) {
+            const { ikX } = await getOrCreateIdentity();                            // (a) Glare → nur Verlierer flippt
+            adopt = !myInitWins(ikX.pub, b64ToBytes(msg.init.ikA25519));
+          } else {
+            adopt = true;   // konvergenter Initiator + init, der nicht liest → Peer re-initiiert → folgen
           }
-        } catch (e) {
-          // Tie-Break best-effort; bei Fehler regulärer Decrypt-Versuch (failt → null).
-          console.warn('🔗 ratchet tie-break skip (non-fatal):', e?.message);
+        } catch (e) { console.warn('🔗 reconcile decide skip:', e?.message); }
+
+        if (adopt) {
+          try {
+            await _archiveSession(peer, dev, rec);                    // Verlierer-/Alt-Session sichern (nicht löschen)
+            const rec2 = await _acceptResponder(peer, dev, msg.init); // frische Responder-Session, sofort persistiert
+            pqStat('reconcile_flip');
+            const r2 = await _decryptWithRec(rec2, header, msg, sigPubJwk);
+            if (r2.ok) { await _save(peer, dev, rec2); return { text: r2.text, verified: r2.verified }; }
+            // Diese eine Nachricht evtl. out-of-order/skip_limit → rec2 ist bereits
+            // sauber persistiert (durch _acceptResponder); Folge-Nachrichten
+            // konvergieren. NICHT den mutierten rec2 überschreiben.
+            return null;
+          } catch (e) {
+            // acceptHybridSession-Wurf (z.B. opk_consumed_or_unknown bei Replay
+            // eines schon konsumierten init): Alt-rec bleibt unter _idbKey erhalten
+            // (archive schrieb einen SEPARATEN Key) → keine Verwaisung, locked.
+            console.warn('🔗 reconcile accept skip:', e?.message);
+            return null;
+          }
         }
       }
-      rec.pq = rec.pq || initPqState(Date.now());                    // Alt-Records migrieren
-
-      // P3.2-B: Rekey-Vorbereitung (CT-Harvest, Aktivierungs-Hooks, Confirm).
-      // Reine In-Memory-Mutation VOR dem AEAD-Erfolg → bei Decrypt-Fehler wird
-      // rec verworfen (kein _save) → Replay/Retry mischt den Root NIE doppelt.
-      // Eigene KEM-Identität (kein Netz) NUR laden, wenn der Header eine HÖHERE
-      // Epoche signalisiert als meine aktuelle — nur DANN decapsuliert die
-      // Empfänger-Aktivierung (preR1) mit dem dk. Harvest/Confirm/Announcer-
-      // preR2 brauchen es nicht → kein per-Nachricht-dk-Entsiegeln im ein-
-      // geschwungenen Zustand (Header trägt dann kemEpoch===meine).
-      const kemAdvance = (header.kemEpoch || 0) > (rec.state.kemEpoch || 0);
-      let kemId = null;
-      if (kemAdvance) { try { kemId = await getOrCreateKemIdentity(); } catch {} }
-      const prep = pqReceivePrep(rec.pq, rec.state, header, {
-        pqCtB64: msg.pq_kem_ct || null,
-        kemDk: kemId?.dk || null, ownKemEk: kemId?.ek || null,
-        now: Date.now(),
-      });
-      pqStatAnomalies(prep.anomalies);
-      if (prep.locked) {
-        pqStat(`locked_${prep.reason}`);
-        console.warn(`🔗 pq rekey locked (${prep.reason}) ${peer}:${dev}`);
-        return null;                                                 // nie steppen → Retry/History
-      }
-
-      const mk = deriveReceiveKey(rec.state, header, prep.hooks);    // Hooks mischen ss_pq nur im DH-Step
-      const aesKey = await _aesKey(mk);
-      // Entschlüsseln (AES-GCM-Tag beweist Integrität inkl. header via AAD).
-      const text = await e2eDecrypt(aesKey, msg.ivB64, msg.ctB64, msg.header_b64);
-      // Erst NACH bewiesener Integrität: Empfangs-Zähler + Rekey-Telemetrie.
-      pqNoteRecv(rec.pq);
-      if (prep.hooks?.preR1) pqStat('activate_recv');
-      if (prep.hooks?.preR2) pqStat('activate_send');
-
-      // Identitäts-Signatur über den Header (verify+log; Auth-Tag ist der harte
-      // Schutz). verified=null wenn kein Pubkey vorhanden → NICHT als Fehler.
-      let verified = null;
-      if (msg.sig && sigPubJwk) {
-        verified = await verifyMessageSigV4(msg.header_b64, msg.ivB64, msg.ctB64, msg.sig, sigPubJwk);
-        if (!verified) console.warn(`🔗 ratchet_session v4 sig ungültig ${peer}:${dev}`);
-      }
-
-      if (rec.role === 'initiator') rec.peerSeen = true;
-      await _save(peer, dev, rec);
-      return { text, verified };
+      return null;
     } catch (e) {
-      // Decrypt-Fehler (Tag-Mismatch / Replay / skip_limit) → null: Aufrufer
-      // retryt/zeigt locked, wirft NICHT. Kein Sentry (Replays sind normal;
-      // echte Probleme zeigen sich als dauerhaft-locked = beobachtbar).
-      console.warn('🔗 ratchet_session decrypt fail (non-fatal):', e?.message);
+      console.warn('🔗 ratchet_session decrypt fail (outer, non-fatal):', e?.message);
       return null;
     }
   });

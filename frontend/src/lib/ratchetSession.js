@@ -479,9 +479,15 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
       // Seit dem GA-Rollout primet jeder Empfänger selbst → genau dieser Glare.
       // Ratchet-Ebenen-Tie-Break (D4, deterministisch via myInitWins): GENAU eine
       // Seite (höhere IK → !myInitWins) flippt zu Responder und übernimmt den RK0
-      // des Gewinners → beide konvergieren, kein Oszillieren. Der Gewinner behält
-      // seine Initiator-Session; diese Peer-Nachricht bleibt bei ihm unlesbar
-      // (null), bis der Peer beim Empfang MEINES init spiegelbildlich flippt.
+      // des Gewinners → beide konvergieren, kein Oszillieren.
+      // ⚠️ BOUNDED RESIDUUM (Review 2026-07-10, akzeptiert): Der Gewinner behält
+      // seine Initiator-Session; DIESE konkrete Glare-Nachricht des Verlierers ist
+      // unter dessen aufgegebenem RK0 versiegelt und wird NICHT neu gesendet →
+      // bleibt beim Gewinner DAUERHAFT 🔐 (return null → deriveReceiveKey failt).
+      // Nur die FOLGENDEN Verlierer-Nachrichten (unter dem Gewinner-RK0, nach
+      // dessen Flip) konvergieren. Das ist der Simultan-Erst-Send-Fall, eine
+      // Richtung, ≤ wenige Nachrichten — ein RIESIGER Netto-Gewinn ggü. dem
+      // beidseitig-permanent-gesperrten Bug, den dieser Fix behebt.
       // Guard streng: NUR ungenutzte Initiator-rec (!peerSeen) + eingehendes init.
       // Ein legitimer Responder-Peer sendet nie init → dieser Zweig feuert dort
       // nicht (msg.init fehlt), reguläre Sessions bleiben unberührt.

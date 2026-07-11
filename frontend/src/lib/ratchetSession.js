@@ -581,6 +581,12 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
         // NICHT: ein nie live gesehenes Glare-init (Reorder/Sweep) wäre „neu".
         // Nebeneffekt: Replays erreichen _acceptResponder nicht mehr → kein
         // OPK-Verbrauch durch redelivered inits.
+        // AKZEPTIERTES RESIDUUM (Review f7cc244): ein FEINDLICHER Peer kann ein
+        // aufgegebenes init aktiv re-POSTen (frischer Server-ts) → adopt. Das ist
+        // äquivalent zu seiner ohnehin vorhandenen Fähigkeit, echt zu re-initiieren
+        // und die Session nie zu benutzen (Pair-DoS durch Kontakt, keine
+        // Vertraulichkeitsverletzung) — strukturelle Antwort = TOFU-Pinning/
+        // InitHdr-Sig-Enforcement (P3), nicht dieses Gate.
         const fresh = msgTs > (rec.aliveTs || 0);
         let adopt = false;
         try {

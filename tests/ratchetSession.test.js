@@ -618,12 +618,16 @@ describe('Gates: Flag + single-device', () => {
 });
 
 describe('Beide-Initiator-Kollision → Ratchet-Tie-Break (Hotfix 2026-07-10)', () => {
+  // Monoton steigender Server-ts (Rezenz-Anker der Reconciliation). Strikt
+  // aufsteigend statt Date.now() → kein Same-ms-Flake im Rezenz-Gate.
+  let _tsq = Date.now();
+  const nextTs = () => ++_tsq;
   // Alice initiiert (pure) gegen MEIN publiziertes Bundle → RK0_A, mit init.
   // Baut ein Initiator-Handshake+Nachricht gegen ein GEGEBENES Bundle+OPK (frische
   // Ephemerals pro Aufruf). Erlaubt zwei verschiedene Handshakes gegen dasselbe
   // Bundle (verschiedene OPKs) für den Peer-Reinit-Test.
-  async function aliceInitAgainst(pub, usedOpk, text) {
-    const aIkX = x25519Keygen(), aEk = x25519Keygen(), aIkEd = ed25519Keygen();
+  async function aliceInitAgainst(pub, usedOpk, text, aIkXGiven = null) {
+    const aIkX = aIkXGiven || x25519Keygen(), aEk = x25519Keygen(), aIkEd = ed25519Keygen();
     const { rk0, kemCt } = initiatorRoot({
       ikAPriv: aIkX.priv, ekAPriv: aEk.priv,
       bundle: decodeInitiatorBundle({ ik: pub.ik, spk: pub.spk, pqspk: pub.pqspk, opk: usedOpk }),
@@ -642,19 +646,26 @@ describe('Beide-Initiator-Kollision → Ratchet-Tie-Break (Hotfix 2026-07-10)', 
         usedSpkId: pub.spk.spkId, usedOpkId: usedOpk.opkId, usedPqspkId: pub.pqspk.pqspkId, mlkemCt: kemCt,
       }, aIkEd.priv)),
     };
-    return { v: 4, header_b64, ivB64, ctB64, init, aliceIk: aIkX.pub, aliceState: st };
+    return { v: 4, header_b64, ivB64, ctB64, init, ts: nextTs(), aliceIk: aIkX.pub, aliceState: st };
   }
-  async function aliceInitiatesToMe(text) {
+  async function aliceInitiatesToMe(text, aIkX = null) {
     const pub = await buildPublishBundle({ opkCount: 5 });
-    return aliceInitAgainst(pub, pub.opks[0], text);
+    return aliceInitAgainst(pub, pub.opks[0], text, aIkX);
   }
-  async function aliceCollision(text, wantMeToLose) {
+  // Alice-IK mit gewünschter Ordnung relativ zu MEINER IK vorwürfeln (billig,
+  // nur Keygen — kein Handshake). Vorher: 60 volle Handshakes würfeln = bei
+  // extremer eigener IK kippen ALLE Draws gleich → ~1/61 Flake pro Loop
+  // (live gebissen 2026-07-11: „IK-Ordnung nicht erreichbar").
+  async function drawAliceIk(wantMeToLose) {
     const myIk = (await getOrCreateIdentity()).ikX.pub;
-    for (let i = 0; i < 60; i++) {
-      const m = await aliceInitiatesToMe(text);
-      if ((compareBytes(myIk, m.aliceIk) > 0) === wantMeToLose) return m;
+    for (let i = 0; i < 100000; i++) {
+      const cand = x25519Keygen();
+      if ((compareBytes(myIk, cand.pub) > 0) === wantMeToLose) return cand;
     }
     throw new Error('IK-Ordnung nicht erreichbar');
+  }
+  async function aliceCollision(text, wantMeToLose) {
+    return aliceInitiatesToMe(text, await drawAliceIk(wantMeToLose));
   }
   async function primeMyInitiatorTo(peer, dev) {
     const bob = makeBobWire(dev);
@@ -755,6 +766,101 @@ describe('Beide-Initiator-Kollision → Ratchet-Tie-Break (Hotfix 2026-07-10)', 
       const p = out.mode === 'multi' ? out.payloads[0] : out;
       expect(p.init).toBeTruthy();   // init NIE ausgehungert
     }
+  });
+
+  // ── REZENZ-GATE (Review wwyxt0uev 2026-07-10): ein stale-init-Replay darf
+  // NIE eine lebende Session opfern ──────────────────────────────────────────
+  // Konvergiertes Paar herstellen (ich = Gewinner-Initiator) und Alices STALE
+  // Glare-init-Nachricht ZURÜCKBEHALTEN — bewusst nie live zugestellt: das ist
+  // der Reorder-/Sweep-Fall, den ein reiner ek-Vergleich nicht abfangen könnte.
+  async function convergedWinnerWithStaleGlare(peer, dev) {
+    const bob = await primeMyInitiatorTo(peer, dev);
+    const pub = await buildPublishBundle({ opkCount: 5 });
+    // wantMeToLose=false → Alice hat die HÖHERE IK → ich bin der Glare-Gewinner.
+    const stale = await aliceInitAgainst(pub, pub.opks[0], 'glare (verlierer, bleibt 🔐)', await drawAliceIk(false));
+    // Konvergenz: ich sende mit init; Alice flippt zu Responder (übernimmt mein
+    // RK0), liest mich und antwortet — ihre Antwort (ts NEUER als das stale
+    // init) setzt bei mir peerSeen + aliveTs.
+    const out = await ratchetEncryptMulti(peer, 'hallo von M', { myHandle: 'me', myDeviceId: 'medev' });
+    const mp = out.mode === 'multi' ? out.payloads[0] : out;
+    const aRk0 = responderRoot({
+      ikBPriv: bob.ikX.priv, spkBPriv: bob.spk.priv, opkBPriv: bob.opk.priv, pqspkDk: bob.pq.dk,
+      ikAX: b64ToBytes(mp.init.ikA25519), ekAX: b64ToBytes(mp.init.ekA25519),
+      kemCt: b64ToBytes(mp.init.mlkemCt), usedOpk: !!mp.init.usedOpkId,
+    });
+    const aState = initResponder(aRk0, { priv: bob.spk.priv, pub: bob.spk.pub });
+    const mMk = deriveReceiveKey(aState, decodeRatchetHeader(mp.header_b64));
+    expect(await aesDecrypt(mMk, mp.ivB64, mp.ctB64, mp.header_b64)).toBe('hallo von M');
+    const answer = async (text) => {
+      const nx = nextSendKey(aState);
+      const hb = encodeRatchetHeader(nx.header);
+      const enc = await aesEncrypt(nx.mk, text, hb);
+      return { v: 4, header_b64: hb, ivB64: enc.ivB64, ctB64: enc.ctB64, ts: nextTs() };
+    };
+    const conv = await ratchetDecrypt(peer, dev, await answer('antwort (konvergenz)'), null);
+    expect(conv?.text).toBe('antwort (konvergenz)');
+    return { stale, answer, pub };
+  }
+
+  it('REVIEW-HIGH DEADLOCK-REGRESSION: stale Glare-init via History-Sweep flippt den konvergierten Gewinner NICHT (Session bleibt lesbar)', async () => {
+    _ls.delete('renex_pqrk_stats');
+    const { stale, answer } = await convergedWinnerWithStaleGlare('alicedl', 'addl');
+    // History-Sweep (_decryptAllE2E) replayt Alices pre-flip-Nachricht (ts ÄLTER
+    // als die Konvergenz). Ohne Rezenz-Gate: adopt=true, r2 entschlüsselt sogar
+    // „erfolgreich" → der Gewinner würde ZWEITER Responder → beidseitig Responder,
+    // kein init fließt mehr → permanenter Deadlock (Review-Finding, 2× bestätigt).
+    const r = await ratchetDecrypt('alicedl', 'addl', stale, null);
+    expect(r).toBe(null);                                              // bleibt 🔐 (akzeptiertes Glare-Residuum)
+    const stats = JSON.parse(_ls.get('renex_pqrk_stats') || '{}');
+    expect(stats.reconcile_stale_init).toBeGreaterThanOrEqual(1);
+    expect(stats.reconcile_flip).toBeUndefined();                      // NIE geflippt
+    // Beweis Session intakt: Alices nächste Responder-Nachricht bleibt lesbar.
+    const r2 = await ratchetDecrypt('alicedl', 'addl', await answer('leben nach dem replay 🔓'), null);
+    expect(r2?.text).toBe('leben nach dem replay 🔓');
+  });
+
+  it('ECHTES Peer-Reinit auf konvergiertem Initiator (ts NEUER) adoptiert weiterhin', async () => {
+    _ls.delete('renex_pqrk_stats');
+    const { pub } = await convergedWinnerWithStaleGlare('alicerf', 'adrf');
+    // Alice verliert ihren State und initiiert NEU (frischer Ephemeral, andere
+    // OPK, ts neuer als aliveTs) → der else-Zweig (Heilung) bleibt funktionsfähig.
+    const m = await aliceInitAgainst(pub, pub.opks[1], 'nach reinstall 🔐→🔓');
+    const r = await ratchetDecrypt('alicerf', 'adrf', m, null);
+    expect(r?.text).toBe('nach reinstall 🔐→🔓');
+    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').reconcile_flip).toBeGreaterThanOrEqual(1);
+  });
+
+  it('FAIL-SAFE: init OHNE msg.ts recyclet NIE eine bestehende Session (kein Reconcile)', async () => {
+    _ls.delete('renex_pqrk_stats');
+    const pub = await buildPublishBundle({ opkCount: 5 });
+    const m1 = await aliceInitAgainst(pub, pub.opks[0], 'erste');
+    expect((await ratchetDecrypt('alicenots', 'adnt', m1, null))?.text).toBe('erste');
+    const m2 = await aliceInitAgainst(pub, pub.opks[1], 'reinit ohne ts');
+    delete m2.ts;                                                       // Aufrufer vergisst den Server-ts
+    const r = await ratchetDecrypt('alicenots', 'adnt', m2, null);
+    expect(r).toBe(null);                                               // Session-Erhalt > Einzelnachricht
+    const stats = JSON.parse(_ls.get('renex_pqrk_stats') || '{}');
+    expect(stats.reconcile_no_ts).toBeGreaterThanOrEqual(1);
+    expect(stats.reconcile_flip).toBeUndefined();
+  });
+
+  it('MIGRATION: Alt-Record ohne aliveTs wird beim Load gestempelt — altes init danach stale, frisches adoptiert', async () => {
+    _ls.delete('renex_pqrk_stats');
+    const pub = await buildPublishBundle({ opkCount: 5 });
+    // Alt-Record simulieren: Accept OHNE ts → aliveTs=0 (wie Feld-Sessions vor diesem Fix).
+    const m1 = await aliceInitAgainst(pub, pub.opks[0], 'legacy');
+    delete m1.ts;
+    expect((await ratchetDecrypt('alicemig', 'admg', m1, null))?.text).toBe('legacy');
+    // Stale init aus der Vergangenheit → Shim stempelt Date.now() auf den
+    // Alt-Record, Gate weist ab (kein Flip, keine OPK verbrannt).
+    const mOld = await aliceInitAgainst(pub, pub.opks[1], 'stale aus inzident-ära');
+    mOld.ts = Date.now() - 86_400_000;                                  // 1 Tag alt
+    expect(await ratchetDecrypt('alicemig', 'admg', mOld, null)).toBe(null);
+    expect(JSON.parse(_ls.get('renex_pqrk_stats') || '{}').reconcile_stale_init).toBeGreaterThanOrEqual(1);
+    // Frisches Reinit (ts NACH dem Stempel) → adoptiert (Heilung bleibt möglich).
+    const mNew = await aliceInitAgainst(pub, pub.opks[2], 'frisches reinit');
+    mNew.ts = Date.now() + 60_000;
+    expect((await ratchetDecrypt('alicemig', 'admg', mNew, null))?.text).toBe('frisches reinit');
   });
 });
 

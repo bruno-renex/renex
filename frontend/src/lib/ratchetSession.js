@@ -173,7 +173,7 @@ async function _archiveSession(peer, dev, rec) {
 }
 // Accept eines eingehenden InitHdr → frische Responder-Session, SOFORT
 // persistiert (OPK-Verwaisungs-Fix). Wirft weiter (acceptHybridSession).
-async function _acceptResponder(peer, dev, initHdr) {
+async function _acceptResponder(peer, dev, initHdr, msgTs = 0) {
   const hs = await acceptHybridSession(peer, dev, initHdr);          // KONSUMIERT die one-time-OPK
   const spkPriv = b64ToBytes(hs.ownSpkPriv);
   const rec = {
@@ -182,6 +182,9 @@ async function _acceptResponder(peer, dev, initHdr) {
     // Erlaubt der Reconciliation, ein NEUES init (Peer re-initiiert) von einem
     // Replay derselben Session zu unterscheiden → kein doppeltes Re-Accept.
     initEk: initHdr.ekA25519 || null,
+    // Rezenz-Anker fürs Reconcile-Gate: Server-ts der init-Nachricht. Ein
+    // späteres init muss STRIKT neuer sein, um diese Session opfern zu dürfen.
+    aliveTs: msgTs > 0 ? msgTs : 0,
     state: initResponder(hs.rootKey, { priv: spkPriv, pub: x25519PublicKey(spkPriv) }),
   };
   await _save(peer, dev, rec);
@@ -506,7 +509,10 @@ async function _decryptWithRec(rec, header, msg, sigPubJwk) {
 /**
  * @param {string} fromHandle
  * @param {string} senderDeviceId
- * @param {{header_b64:string, ivB64:string, ctB64:string, sig?:string, init?:object, pq_kem_ct?:string}} msg
+ * @param {{header_b64:string, ivB64:string, ctB64:string, sig?:string, init?:object, pq_kem_ct?:string, ts?:number}} msg
+ *   msg.ts = Server-Zeitstempel der Nachricht (ms). PFLICHT für Reconciliation:
+ *   ohne ts wird NIE eine bestehende Session zugunsten eines init geopfert
+ *   (fail-safe — Session-Erhalt schlägt Einzelnachricht).
  * @param {object|null} [sigPubJwk] Sender-Sig-Pubkey (verify+log; null → skip verify)
  * @returns {Promise<{text:string, verified:boolean|null}|null>}
  */
@@ -514,6 +520,7 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
   const peer = String(fromHandle || '').toLowerCase();
   const dev = String(senderDeviceId || '');
   if (!peer || !dev || !msg || !msg.header_b64 || !msg.ivB64 || !msg.ctB64) return null;
+  const msgTs = Number(msg.ts) || 0;
 
   // Header ZUERST validieren (pure Leseoperation, KEINE Mutation) → ein kaputter
   // Header verbrennt keine OPK (acceptHybridSession läuft erst danach).
@@ -525,12 +532,25 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
       let rec = await _load(peer, dev);
       if (!rec) {
         if (!msg.init) return null;                                   // Init verpasst → (Aufrufer: retry/locked)
-        rec = await _acceptResponder(peer, dev, msg.init);            // sofort persistiert (OPK-Verwaisungs-Fix)
+        rec = await _acceptResponder(peer, dev, msg.init, msgTs);     // sofort persistiert (OPK-Verwaisungs-Fix)
+      } else if (rec.peerSeen && !(rec.aliveTs > 0)) {
+        // MIGRATION (einmalig pro Alt-Record): Sessions von vor dem Rezenz-Gate
+        // haben kein aliveTs. Ohne Stempel könnte der ERSTE History-Sweep nach
+        // dem Update noch ein stale Glare-init adoptieren (Feld-Sessions aus der
+        // Inzident-Ära) → als "lebendig ab jetzt" markieren. Client-Uhr statt
+        // Server-ts (hier nicht verfügbar): Skew akzeptiert — ein echtes
+        // Peer-Reinit heilt via carryInit auf dessen nächster frischer Nachricht.
+        rec.aliveTs = Date.now();
+        await _save(peer, dev, rec);
       }
 
       // ── 1) VERSUCH mit der aktuellen Session ────────────────────
       const r1 = await _decryptWithRec(rec, header, msg, sigPubJwk);
-      if (r1.ok) { await _save(peer, dev, rec); return { text: r1.text, verified: r1.verified }; }
+      if (r1.ok) {
+        if (msgTs > (rec.aliveTs || 0)) rec.aliveTs = msgTs;          // Rezenz-Anker fürs Reconcile-Gate
+        await _save(peer, dev, rec);
+        return { text: r1.text, verified: r1.verified };
+      }
       if (r1.locked) return null;                                     // PQ-Rekey-Lock (transient) → NICHT reconcilen
 
       // ── 2) KANONISCHE RECONCILIATION (RCA 2026-07-10) ───────────
@@ -548,9 +568,26 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
       //       hat NEU initiiert → dem neuen init folgen. Replay-Guard: nur bei
       //       ABWEICHENDEM Initiator-Ephemeral (rec.initEk) → kein OPK-Doppel-Consume.
       if (msg.init) {
+        // ── REZENZ-GATE (Review wwyxt0uev, HIGH — 2026-07-10): Eine Adoption
+        // OPFERT die aktuelle Session. Ein init auf einer Nachricht, die NICHT
+        // strikt neuer ist als die letzte erfolgreich entschlüsselte dieser
+        // Session (rec.aliveTs, Server-ts), ist ein Replay — typisch der
+        // _decryptAllE2E-History-Sweep über die dauerhaft-🔐 pre-flip-Nachricht
+        // des Glare-Verlierers. OHNE Gate adoptiert der konvergierte Gewinner
+        // dieses aufgegebene init (r2 entschlüsselt sogar „erfolgreich"!) und
+        // wird zweiter Responder → beidseitig Responder, kein init fließt mehr
+        // → permanenter Deadlock. Ein ECHTES Peer-Reinit ist immer neuer als
+        // aliveTs (Server stempelt ts zur Sendezeit). ek-Vergleich allein reicht
+        // NICHT: ein nie live gesehenes Glare-init (Reorder/Sweep) wäre „neu".
+        // Nebeneffekt: Replays erreichen _acceptResponder nicht mehr → kein
+        // OPK-Verbrauch durch redelivered inits.
+        const fresh = msgTs > (rec.aliveTs || 0);
         let adopt = false;
         try {
-          if (rec.role === 'responder') {
+          if (!fresh) {
+            pqStat(msgTs ? 'reconcile_stale_init' : 'reconcile_no_ts');
+            if (!msgTs) console.warn('🔗 reconcile skip: msg.ts fehlt (Aufrufer muss Server-ts durchreichen)');
+          } else if (rec.role === 'responder') {
             adopt = !!msg.init.ekA25519 && msg.init.ekA25519 !== rec.initEk;       // (b) neuer Handshake vom Peer
           } else if (!rec.peerSeen) {
             const { ikX } = await getOrCreateIdentity();                            // (a) Glare → nur Verlierer flippt
@@ -563,7 +600,7 @@ export async function ratchetDecrypt(fromHandle, senderDeviceId, msg, sigPubJwk 
         if (adopt) {
           try {
             await _archiveSession(peer, dev, rec);                    // Verlierer-/Alt-Session sichern (nicht löschen)
-            const rec2 = await _acceptResponder(peer, dev, msg.init); // frische Responder-Session, sofort persistiert
+            const rec2 = await _acceptResponder(peer, dev, msg.init, msgTs); // frische Responder-Session, sofort persistiert
             pqStat('reconcile_flip');
             const r2 = await _decryptWithRec(rec2, header, msg, sigPubJwk);
             if (r2.ok) { await _save(peer, dev, rec2); return { text: r2.text, verified: r2.verified }; }

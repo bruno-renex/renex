@@ -10,6 +10,7 @@
   import { userStore } from '../stores/user.svelte.js';
   import { apiFetch, API } from '../lib/api.js';
   import { isStandalone } from '../lib/push.js';
+  import { ratchetSendEnabled, pqRekeyEnabled } from '../lib/ratchetSession.js';
 
   let { isOpen = $bindable(false) } = $props();
 
@@ -46,6 +47,49 @@
     setTimeout(() => location.reload(), 300);
   }
   let copyState = $state("idle"); // "idle" | "copied"
+
+  // E2E / v4-Ratchet — Flags per Tri-State-Zyklus schaltbar (unset → '1' → '0' → unset).
+  // Wichtig fürs iPhone-PWA: dort gibt es keine Console, um localStorage zu setzen.
+  // Explizites '1'/'0' übersteuert den Server-Rollout (KV rollout:flags); unset = Rollout.
+  let ratchetSendFlag = $state(_lsGet('renex_ratchet_send'));
+  let pqRekeyFlag = $state(_lsGet('renex_pq_rekey'));
+  let ratchetSendEff = $state(false);
+  let pqRekeyEff = $state(false);
+  let pqrkStatsJson = $state("");
+  let rolloutCacheJson = $state("");
+
+  function _lsGet(key) {
+    try { return localStorage.getItem(key); } catch { return null; }
+  }
+
+  function flagLabel(v) {
+    return v === '1' ? "explizit AN ('1')" : v === '0' ? "explizit AUS ('0')" : "(nicht gesetzt → Rollout)";
+  }
+
+  function nextFlagLabel(v) {
+    return v === null ? "explizit AN" : v === '1' ? "explizit AUS" : "Rollout-Default";
+  }
+
+  function cycleFlag(key) {
+    const cur = _lsGet(key);
+    try {
+      if (cur === null) localStorage.setItem(key, '1');
+      else if (cur === '1') localStorage.setItem(key, '0');
+      else localStorage.removeItem(key);
+    } catch {}
+    refreshE2E();
+  }
+
+  function refreshE2E() {
+    ratchetSendFlag = _lsGet('renex_ratchet_send');
+    pqRekeyFlag = _lsGet('renex_pq_rekey');
+    try { ratchetSendEff = ratchetSendEnabled(); } catch { ratchetSendEff = false; }
+    try { pqRekeyEff = pqRekeyEnabled(); } catch { pqRekeyEff = false; }
+    const stats = _lsGet('renex_pqrk_stats');
+    try { pqrkStatsJson = stats ? JSON.stringify(JSON.parse(stats), null, 2) : ""; }
+    catch { pqrkStatsJson = stats || ""; }
+    rolloutCacheJson = _lsGet('renex_rollout') || "(kein Cache)";
+  }
 
   $effect(() => {
     if (isOpen) {
@@ -109,6 +153,9 @@
     const hasBadge = typeof navigator.setAppBadge === "function";
     badgeApi = hasBadge ? "supported" : "not-supported";
     badgeApiClass = hasBadge ? "ok" : "warn";
+
+    // E2E / v4-Ratchet-Flags
+    refreshE2E();
 
     // /push/status
     try {
@@ -239,6 +286,12 @@
       "Backend /push/status:",
       "  " + pushStatusJson.split("\n").join("\n  "),
       "",
+      "E2E / v4-Ratchet:",
+      `  renex_ratchet_send: ${flagLabel(ratchetSendFlag)} → effektiv ${ratchetSendEff ? "AN" : "AUS"}`,
+      `  renex_pq_rekey:     ${flagLabel(pqRekeyFlag)} → effektiv ${pqRekeyEff ? "AN" : "AUS"}`,
+      `  Rollout-Cache:      ${rolloutCacheJson}`,
+      "  pqrk-Telemetrie:    " + (pqrkStatsJson ? pqrkStatsJson.split("\n").join("\n  ") : "(keine)"),
+      "",
       "Re-Subscribe-Resultat:",
       "  " + (resubLog ? resubLog.split("\n").join("\n  ") : "(nicht ausgeführt)"),
       "",
@@ -311,6 +364,37 @@
           <div class="value {isStandalone() ? 'ok' : 'warn'}">{isStandalone() ? "PWA (standalone)" : "Browser-Tab"}</div>
           <div class="label">User-Agent</div>
           <div class="value ua">{navigator.userAgent}</div>
+        </div>
+      </div>
+
+      <!-- E2E / v4-Ratchet -->
+      <div class="section">
+        <div class="section-title">E2E — v4-Ratchet</div>
+        <div class="grid">
+          <div class="label">renex_ratchet_send</div>
+          <div class="value">{flagLabel(ratchetSendFlag)}</div>
+          <div class="label">→ v4 senden effektiv</div>
+          <div class="value {ratchetSendEff ? 'ok' : 'warn'}">{ratchetSendEff ? "AN" : "AUS"}</div>
+          <div class="label">renex_pq_rekey</div>
+          <div class="value">{flagLabel(pqRekeyFlag)}</div>
+          <div class="label">→ PQ-Rekey effektiv</div>
+          <div class="value {pqRekeyEff ? 'ok' : 'warn'}">{pqRekeyEff ? "AN" : "AUS"}</div>
+          <div class="label">Rollout-Cache</div>
+          <div class="value ua">{rolloutCacheJson}</div>
+        </div>
+        <div class="actions">
+          <button class="btn" onclick={() => cycleFlag('renex_ratchet_send')}>
+            🔁 v4-Send → {nextFlagLabel(ratchetSendFlag)}
+          </button>
+          <button class="btn" onclick={() => cycleFlag('renex_pq_rekey')}>
+            🔁 PQ-Rekey → {nextFlagLabel(pqRekeyFlag)}
+          </button>
+        </div>
+        <div class="output">{pqrkStatsJson || "(keine pqrk-Telemetrie)"}</div>
+        <div class="hint">
+          Explizit ('1'/'0') übersteuert den Server-Rollout, (nicht gesetzt) = Server
+          entscheidet. Wirkt sofort ohne Reload — die 1. Nachricht pro Peer primt
+          (Legacy), ab der 2. läuft v4.
         </div>
       </div>
 

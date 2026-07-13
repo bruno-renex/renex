@@ -581,7 +581,8 @@ export class UserSessionDO {
     await this.env.RENEX_KV.put(
       `presence:${handle}`,
       JSON.stringify({ online: false, lastSeen: Date.now() }),
-      { expirationTtl: 7 * 24 * 3600 }  // 7 Tage — für "zuletzt gesehen"
+      { expirationTtl: 24 * 3600 }  // 24h (war 7d) — "zuletzt gesehen" nur kurz,
+      // danach schlicht offline. Minimiert den rückwirkend ablesbaren Aktivitäts-Trail.
     );
   }
 }

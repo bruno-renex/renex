@@ -77,16 +77,18 @@ describe('_scrubSentryEvent', () => {
     expect(out.message).toBe('leaked: [REDACTED]=base64stuff');
   });
 
-  it('extra-Context wird rekursiv gescrubt', () => {
+  it('extra-Context wird rekursiv gescrubt (inkl. Identitäts-/Beziehungs-Keys)', () => {
     const event = {
       extra: {
-        peer: 'anna',
+        peer: 'anna',            // Handle = Beziehungsdatum → jetzt redacted
+        note: 'harmless',        // nicht-sensibler Key → bleibt
         privateKey: 'xxx',
         nested: { masterKey: 'yyy', innocent: 42 },
       },
     };
     const out = _scrubSentryEvent(event);
-    expect(out.extra.peer).toBe('anna');
+    expect(out.extra.peer).toBe('[REDACTED]');   // Peer-Handle nicht mehr geleakt
+    expect(out.extra.note).toBe('harmless');
     expect(out.extra.privateKey).toBe('[REDACTED]');
     expect(out.extra.nested.masterKey).toBe('[REDACTED]');
     expect(out.extra.nested.innocent).toBe(42);
@@ -106,11 +108,12 @@ describe('_scrubSentryEvent', () => {
     expect(out.exception.values[0].stacktrace.frames[0].vars.someKey).toBe('[REDACTED:bytes]');
   });
 
-  it('Tags werden gescrubt', () => {
-    const event = { tags: { phrase: 'leak', user: 'anna' } };
+  it('Tags werden gescrubt (inkl. user-Identität)', () => {
+    const event = { tags: { phrase: 'leak', user: 'anna', pwa: 'yes' } };
     const out = _scrubSentryEvent(event);
     expect(out.tags.phrase).toBe('[REDACTED]');
-    expect(out.tags.user).toBe('anna');
+    expect(out.tags.user).toBe('[REDACTED]');   // Identität nicht mehr geleakt
+    expect(out.tags.pwa).toBe('yes');
   });
 });
 

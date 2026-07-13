@@ -1936,6 +1936,17 @@ async function channelDetailHandler({ request, env, me }, serverId, channelId) {
     const rlErr = await checkRateLimit(env, 'channelDelete', me, request);
     if (rlErr) return rlErr;
 
+    // R2-Attachment-Blobs VOR dem Cascade-Delete räumen (sonst verwaist =
+    // verschlüsselte Datei liegt für immer in R2, kostet Speicher).
+    if (env.RENEX_FILES) {
+      const atts = await env.RENEX_DB.prepare(
+        `SELECT attachment_key FROM messages WHERE convo_id = ? AND attachment_key IS NOT NULL AND attachment_type != 'gif'`
+      ).bind(channelId).all();
+      for (const a of (atts.results ?? [])) {
+        if (a.attachment_key) await env.RENEX_FILES.delete(a.attachment_key).catch(() => {});
+      }
+    }
+
     // Cascade: messages, channel_permission_overrides, conversation_members
     // (für Private-Channels), conversation
     await env.RENEX_DB.batch([

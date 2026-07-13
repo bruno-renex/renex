@@ -11,6 +11,16 @@ import './app.css';
 // Fire-and-forget: blockiert App-Start nicht.
 void initSentry();
 
+// Persistenten Speicher anfordern: schützt IndexedDB (E2E-Schlüssel + entschlüsselte
+// v4-History) vor Storage-Pressure-Eviction. Ohne das kann iOS/Safari IDB unter
+// Speicherdruck stillschweigend räumen → verlorene Ratchet-Keys = unlesbare History
+// ohne Recovery (besonders für kontolose Gäste kritisch). Fire-and-forget, best-effort.
+if (typeof navigator !== 'undefined' && navigator.storage?.persist) {
+  navigator.storage.persist()
+    .then((granted) => console.log(`💾 Persistent storage: ${granted ? 'granted' : 'best-effort'}`))
+    .catch(() => {});
+}
+
 // Session-Check beim App-Start (einmal, OUTSIDE von $effect — sonst loop).
 // Skip via ?dev=skipSessionCheck — nur für UI-Tests im Dev.
 const params = new URLSearchParams(location.search);

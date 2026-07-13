@@ -12,8 +12,11 @@
 // Stack-Frame-Vars + Breadcrumb-Daten.
 // ======================================================
 
-// Key-Namen die NIE an Sentry gehen sollen (case-insensitive, exact match)
-const _SENSITIVE_KEY_RE = /^(phrase|mnemonic|seed|cmk|cmkBytes|masterKey|masterKeyBytes|privateKey|priv|password|secret|sigKey|recoveryKey|deviceSecret|p256dh|jwk|d|x|y)$/i;
+// Key-Namen die NIE an Sentry gehen sollen (case-insensitive, exact match).
+// Enthält jetzt auch Identitäts-/Beziehungs-Keys (Handle-Paare = Sozialgraph):
+// jede *handle-Variante + Beziehungs-Felder from/to/peer/me/contact/…
+// HALTE identisch mit sentryInit.js (defense-in-depth, zwei Scrub-Stufen).
+const _SENSITIVE_KEY_RE = /^(phrase|mnemonic|seed|cmk|cmkBytes|masterKey|masterKeyBytes|privateKey|priv|password|secret|sigKey|recoveryKey|deviceSecret|p256dh|jwk|d|x|y|[a-z]*handle|from|to|peer|me|user|username|contact|recipient|sender|callee|caller|inviter|invitee)$/i;
 
 // String-Substrings die in Texten redacted werden (Defense gegen Error-Messages
 // die Werte interpolieren — z.B. `throw new Error("decrypt failed for cmk=" + base64)`)

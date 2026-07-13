@@ -134,6 +134,49 @@ export async function scheduled(event, env) {
     console.error("❌ Guest-Cleanup Cron fehlgeschlagen:", e);
   }
 
+  // ── Server-Audit-Log-Retention (90d) ─────────────────────────────────
+  // Das Schema versprach "90 Tage (Cron)", aber der Sweep fehlte → faktisch
+  // unbegrenzte Moderations-Historie (actor/action/target). Jetzt eingelöst.
+  try {
+    const cutoff = Date.now() - 90 * 86400_000;
+    const r = await env.RENEX_DB.prepare(
+      "DELETE FROM server_audit_log WHERE ts < ?"
+    ).bind(cutoff).run();
+    const n = r.meta?.changes ?? 0;
+    if (n > 0) console.log(`🗑️ Audit-Log-Retention: ${n} Einträge gelöscht (>90d)`);
+  } catch (e) {
+    console.error("❌ Audit-Log-Retention fehlgeschlagen:", e);
+  }
+
+  // ── Call-Log-Retention (90d) ─────────────────────────────────────────
+  // call_log (caller/callee/Dauer) hatte KEINE Retention → unbegrenzt
+  // wachsender Anruf-Metadaten-Graph. Anrufliste braucht keine >90d-Historie.
+  try {
+    const cutoff = Date.now() - 90 * 86400_000;
+    const r = await env.RENEX_DB.prepare(
+      "DELETE FROM call_log WHERE started_at < ?"
+    ).bind(cutoff).run();
+    const n = r.meta?.changes ?? 0;
+    if (n > 0) console.log(`📞 Call-Log-Retention: ${n} Einträge gelöscht (>90d)`);
+  } catch (e) {
+    console.error("❌ Call-Log-Retention fehlgeschlagen:", e);
+  }
+
+  // ── Guest-Session-Retention (90d nach Ablauf) ────────────────────────
+  // guest_sessions-Rows (Einlader↔Gast-Graph, msg_count, Terms-Zeitstempel)
+  // wurden NIE gelöscht — der Guest-Cleanup oben räumt nur Mitgliedschaften/
+  // Kontakte. Abgelaufene Sessions 90d nach Ablauf endgültig entfernen.
+  try {
+    const cutoff = Date.now() - 90 * 86400_000;
+    const r = await env.RENEX_DB.prepare(
+      "DELETE FROM guest_sessions WHERE expires_at < ?"
+    ).bind(cutoff).run();
+    const n = r.meta?.changes ?? 0;
+    if (n > 0) console.log(`🧹 Guest-Session-Retention: ${n} abgelaufene Sessions gelöscht (>90d)`);
+  } catch (e) {
+    console.error("❌ Guest-Session-Retention fehlgeschlagen:", e);
+  }
+
   // ======================================================
   // Multi-Device Cron-Sweeps (Phase 1B.1)
   // Spec: docs/MULTI_DEVICE.md §3, §6, §7.4 (Δ6)

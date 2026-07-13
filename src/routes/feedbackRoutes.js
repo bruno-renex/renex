@@ -3,8 +3,21 @@ import { rateLimit, requireSession } from '../auth.js';
 
 const ALLOWED_CATEGORIES = ['bug', 'feature', 'lob', 'allgemein'];
 
-async function hashIp(ip) {
+// Ungesalzener SHA-256 einer IPv4 ist trivial per Enumeration (2^32) reversibel.
+// Mit gesetztem env.IP_HASH_SALT wird daraus ein HMAC (Salt = geheimer Schlüssel)
+// → nicht mehr rückrechenbar. Ohne Salt: Fallback auf Alt-Verhalten (funktioniert,
+// aber schwach) — Secret via `wrangler secret put IP_HASH_SALT` setzen.
+async function hashIp(ip, env) {
   const data = new TextEncoder().encode(ip || 'unknown');
+  const salt = env?.IP_HASH_SALT;
+  if (salt) {
+    const key = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(salt),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const sig = await crypto.subtle.sign('HMAC', key, data);
+    return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
   const buf = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
@@ -24,7 +37,7 @@ export async function handleFeedbackRoutes(request, env, path, params) {
       //   2nd message: after 5 min cooldown
       //   3rd+: after 30 min cooldown
       const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-      const ipHash = await hashIp(ip);
+      const ipHash = await hashIp(ip, env);
       const countKey = `feedback_count:${ipHash}`;
       const cooldownKey = `feedback_cd:${ipHash}`;
 

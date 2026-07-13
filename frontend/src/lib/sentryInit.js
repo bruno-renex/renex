@@ -22,7 +22,7 @@ const SENTRY_CDN_URL    = 'https://browser.sentry-cdn.com/8.40.0/bundle.min.js';
 // daher zweite Stufe HIER nötig (sentry.js Wrapper macht erste Stufe).
 // HALTE diese Patterns IDENTISCH mit sentry.js — beide sind defense-in-depth.
 // ======================================================
-const _SENSITIVE_KEY_RE = /^(phrase|mnemonic|seed|cmk|cmkBytes|masterKey|masterKeyBytes|privateKey|priv|password|secret|sigKey|recoveryKey|deviceSecret|p256dh|jwk|d|x|y)$/i;
+const _SENSITIVE_KEY_RE = /^(phrase|mnemonic|seed|cmk|cmkBytes|masterKey|masterKeyBytes|privateKey|priv|password|secret|sigKey|recoveryKey|deviceSecret|p256dh|jwk|d|x|y|[a-z]*handle|from|to|peer|me|user|username|contact|recipient|sender|callee|caller|inviter|invitee)$/i;
 const _SENSITIVE_VALUE_RE = /\b(phrase|mnemonic|cmkBytes|masterKey(?:Bytes)?|privateKey|deviceSecret|recoveryKey)\b/gi;
 const _MAX_DEPTH = 6;
 
@@ -180,10 +180,9 @@ export async function initSentry() {
 
     window.Sentry.setTag('pwa', window.matchMedia?.('(display-mode: standalone)').matches ? 'yes' : 'no');
 
-    const handle = (() => {
-      try { return localStorage.getItem('my_user'); } catch { return null; }
-    })();
-    if (handle) window.Sentry.setUser({ id: handle });
+    // KEIN setUser mehr: der Handle (= Identität) ging bisher an JEDES Event
+    // (Sentry-EU). Zero-Tracking heißt: Fehler-Telemetrie ohne Nutzer-Identität.
+    // Sentry gruppiert Fehler auch ohne user.id (per Fingerprint/Stacktrace).
 
     const v = document.querySelector('meta[name="renex-version"]')?.content || 'unknown';
     console.log(`📊 Sentry ready (release=${v})`);

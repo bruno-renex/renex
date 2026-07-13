@@ -359,6 +359,16 @@ export async function handleGroupRoutes(request, env, path, params) {
         "SELECT COUNT(*) as c FROM conversation_members WHERE convo_id = ?"
       ).bind(groupId).first();
       if ((remaining?.c ?? 0) === 0) {
+        // R2-Attachment-Blobs VOR dem Message-Delete räumen (sonst verwaist =
+        // verschlüsselte Datei liegt für immer in R2, kostet Speicher).
+        if (env.RENEX_FILES) {
+          const atts = await env.RENEX_DB.prepare(
+            "SELECT attachment_key FROM messages WHERE convo_id = ? AND attachment_key IS NOT NULL AND attachment_type != 'gif'"
+          ).bind(groupId).all();
+          for (const a of (atts.results ?? [])) {
+            if (a.attachment_key) await env.RENEX_FILES.delete(a.attachment_key).catch(() => {});
+          }
+        }
         await env.RENEX_DB.prepare("DELETE FROM conversations WHERE id = ?").bind(groupId).run();
         await env.RENEX_DB.prepare("DELETE FROM messages WHERE convo_id = ?").bind(groupId).run();
       }

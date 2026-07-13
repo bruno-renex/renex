@@ -47,10 +47,12 @@ function makeSentry(request, env, ctx) {
       release: env.APP_VERSION || 'unknown',
       // Sample-Rate: 100% Errors, 10% Performance (Cost-Optimierung)
       tracesSampleRate: 0.1,
-      // PII-Schutz: keine User-Daten leaken
+      // PII-Schutz: keine User-Daten leaken. `handle` (= Identität) NICHT mehr
+      // whitelisten — ging bisher als Query-Param an Sentry-EU. cf-ray (Request-ID)
+      // bleibt für Debugging.
       requestDataOptions: {
-        allowedHeaders: ['user-agent', 'cf-ray'],
-        allowedSearchParams: ['handle'],
+        allowedHeaders: ['cf-ray'],
+        allowedSearchParams: [],
       },
     });
   } catch {

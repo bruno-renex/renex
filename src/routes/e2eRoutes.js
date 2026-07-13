@@ -8,6 +8,12 @@ import { verifyWebAuthnAssertion, createWebAuthnChallenge } from '../helpers/web
 // wo importKey() später unerwartetes Verhalten auslösen könnte.
 // ======================================================
 
+// Handle-Kürzer für Logs: statt voller Kontakt-Paare (me→from = "wer baut mit
+// wem eine E2E-Session") nur ein 3-Zeichen-Präfix, um live-tail-Debugging zu
+// erlauben ohne stehenden Klartext-Sozialgraph in den Logs. (Logs sind ohnehin
+// ephemer — kein [observability]-Block — dies ist Defense-in-depth.)
+const _hp = (h) => (h ? String(h).slice(0, 3) + '…' : '?');
+
 const JWK_BASE64URL = /^[A-Za-z0-9_-]+={0,2}$/;
 
 function _isB64UrlValue(v, minLen = 32, maxLen = 96) {
@@ -316,7 +322,22 @@ export async function handleE2eRoutes(request, env, path, params) {
         // D1-Upsert: Source-of-Truth für Device-State
         const now = Date.now();
         const safeName = (typeof name === "string") ? name.slice(0, 64) : null;
-        const ua = request.headers.get('user-agent')?.slice(0, 256) || null;
+        // Rohe User-Agent (bis 256 Zeichen) = Browser/OS-Fingerprint. Statt dessen
+        // nur eine GROBE Klasse speichern (z.B. "Safari (iOS)") — reicht für die
+        // Geräteliste, taugt aber nicht als Tracking-Fingerprint. Forward-only:
+        // bestehende Rows behalten ihre alte UA bis zur Re-Registrierung.
+        const _rawUa = request.headers.get('user-agent') || '';
+        const _os = /iPhone|iPad|iPod|iOS/.test(_rawUa) ? 'iOS'
+          : /Android/.test(_rawUa) ? 'Android'
+          : /Mac OS X|Macintosh/.test(_rawUa) ? 'macOS'
+          : /Windows/.test(_rawUa) ? 'Windows'
+          : /Linux/.test(_rawUa) ? 'Linux' : 'Other';
+        const _br = /Edg\//.test(_rawUa) ? 'Edge'
+          : /OPR\/|Opera/.test(_rawUa) ? 'Opera'
+          : /Firefox\//.test(_rawUa) ? 'Firefox'
+          : /CriOS|Chrome\//.test(_rawUa) ? 'Chrome'
+          : /Safari\//.test(_rawUa) ? 'Safari' : 'Other';
+        const ua = _rawUa ? `${_br} (${_os})` : null;
 
         await env.RENEX_DB.prepare(`
           INSERT INTO devices (device_id, user_handle, state, name, user_agent, created_at, last_seen_at)
@@ -729,7 +750,7 @@ export async function handleE2eRoutes(request, env, path, params) {
           }
         }
         // Dark-Launch verify+log: Upload→Consume→OPK-Dekrement beobachtbar.
-        console.log(`🔑 pqxdh bundle ${me}→${user}:${device} — opk=${opk ? opk.opkId : "none"} (${reason})`);
+        console.log(`🔑 pqxdh bundle ${_hp(me)}→${_hp(user)}:${device} — opk=${opk ? opk.opkId : "none"} (${reason})`);
         return json(request, {
           deviceId: device,
           ik: stored.ik,
@@ -1071,7 +1092,7 @@ export async function handleE2eRoutes(request, env, path, params) {
         if (!session.isGuest) {
           const ok = await isAcceptedContact(env, me, from);
           if (!ok) {
-            console.warn(`cmk/fetch: ${me}→${from} blocked (not accepted contact)`);
+            console.warn(`cmk/fetch: ${_hp(me)}→${_hp(from)} blocked (not accepted contact)`);
             return json(request, { payload: null });
           }
         }
@@ -1098,7 +1119,7 @@ export async function handleE2eRoutes(request, env, path, params) {
             const oldKey = `e2e:cmk:${oldCid}:${myDeviceId}`;
             raw = await env.RENEX_KV.get(oldKey);
             if (raw) {
-              console.log(`cmk/fetch: ${me}→${from} fallback hit (was ${guestRow.guest_handle}), lazy-migrating wrap`);
+              console.log(`cmk/fetch: ${_hp(me)}→${_hp(from)} fallback hit (was ${_hp(guestRow.guest_handle)}), lazy-migrating wrap`);
               // Lazy-Migration: Wrap zum neuen cid kopieren, alten Key löschen.
               // Identical content — wrap ist device-ECDH-encrypted, handle-agnostisch.
               const newKey = `e2e:cmk:${cid}:${myDeviceId}`;
@@ -1123,10 +1144,10 @@ export async function handleE2eRoutes(request, env, path, params) {
                 }
               } catch {}
             } else {
-              console.warn(`cmk/fetch: ${me}→${from} no wrap (also no fallback under ${guestRow.guest_handle})`);
+              console.warn(`cmk/fetch: ${_hp(me)}→${_hp(from)} no wrap (also no fallback under ${_hp(guestRow.guest_handle)})`);
             }
           } else {
-            console.warn(`cmk/fetch: ${me}→${from} no wrap (no guest-convert history)`);
+            console.warn(`cmk/fetch: ${_hp(me)}→${_hp(from)} no wrap (no guest-convert history)`);
           }
         }
 

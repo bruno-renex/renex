@@ -33,12 +33,13 @@ Pre-beta. Currently stable:
 
 - ✅ Passkey auth (WebAuthn) on all modern browsers
 - ✅ E2E DMs (multi-device, up to 5 devices per user)
+- ✅ Post-quantum E2E (ML-KEM-768 hybrid Double Ratchet "v4", GA since 2026-07-11)
 - ✅ E2E groups (sender-keys pattern, multi-device since 2026-05-10)
 - ✅ E2E voice signaling (1:1 calls, WebRTC with encrypted SDP/ICE, self-hosted coturn on Hetzner DE)
 - ✅ BIP39 recovery (12-word phrase, R2 backup)
 - ✅ PWA (iOS / Android / Desktop, no app-store dependency)
 
-In progress: Discord-style servers/channels (**Phase 3A**), voice channels + Signal Protocol migration (**Phase 8**, Q4 2026), Steam Rich Presence + Hardware-Attestation (**Phase 9**). Full roadmap: [`docs/VISION.md`](./docs/VISION.md) §10.
+Recently shipped: Discord-style servers/channels (**Phase 3A**, 2026-05-27) and the **post-quantum Signal-style migration** — ML-KEM-768 hybrid Double Ratchet, GA since 2026-07-11 (replaces the earlier CMK/GSK key-transport scheme). Roadmap: [`docs/VISION.md`](./docs/VISION.md) §10.
 
 ## Quick Start
 
@@ -49,7 +50,7 @@ If you want to build a RENEX-compatible implementation:
 1. [`docs/MANIFESTO.md`](./docs/MANIFESTO.md) — what we're building for
 2. [`docs/VISION.md`](./docs/VISION.md) — how we're building
 3. [`docs/PROTOCOL.md`](./docs/PROTOCOL.md) — what we're building (Wire-Format v1)
-4. [`docs/MULTI_DEVICE.md`](./docs/MULTI_DEVICE.md), [`docs/RECOVERY.md`](./docs/RECOVERY.md), [`docs/GROUPS_MULTIDEVICE.md`](./docs/GROUPS_MULTIDEVICE.md) — sub-specs
+4. [`docs/RECOVERY.md`](./docs/RECOVERY.md), [`docs/ATTACHMENTS.md`](./docs/ATTACHMENTS.md) — sub-specs
 5. [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md) — security assumptions + acknowledged weaknesses
 
 ### Run the reference implementation locally
@@ -59,7 +60,7 @@ If you want to build a RENEX-compatible implementation:
 git clone https://github.com/bruno-renex/renex.git
 cd renex
 npm install
-npm test                  # Vitest, ~13s, 472 tests
+npm test                  # Vitest, ~13s, 796 tests
 npm run dev               # Frontend dev server
 ```
 
@@ -71,7 +72,7 @@ Full guide: [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) §2.
 Frontend (Svelte 5 + PWA)  ──WebSocket──▶  Cloudflare Workers
    │                                             │
    ├─ WebAuthn (Passkey)                         ├─ D1 (Messages, Users, Devices)
-   ├─ WebCrypto (AES-GCM, ECDH P-256, ECDSA)     ├─ KV (Pubkeys, CMKs hot-cache)
+   ├─ WebCrypto (AES-GCM, ML-KEM-768, X25519)    ├─ KV (Pubkeys, prekey bundles)
    ├─ IndexedDB (encrypted local cache)          ├─ R2 (Recovery bundles)
    └─ WebRTC (Voice, encrypted SDP)              └─ Durable Objects (User sessions)
 ```
@@ -138,12 +139,13 @@ Pre-Beta. Aktuell stable:
 
 - ✅ Passkey-Auth (WebAuthn) auf allen modernen Browsern
 - ✅ E2E-DMs (Multi-Device, bis zu 5 Geräte pro User)
+- ✅ Post-Quantum-E2E (ML-KEM-768 Hybrid Double Ratchet „v4", GA seit 2026-07-11)
 - ✅ E2E-Gruppen (Sender-Keys-Pattern, Multi-Device seit 2026-05-10)
 - ✅ E2E-Voice-Signaling (1:1-Calls, WebRTC mit verschlüsseltem SDP/ICE, self-hosted coturn auf Hetzner DE)
 - ✅ BIP39-Recovery (12-Wort-Phrase, R2-Backup)
 - ✅ PWA (iOS / Android / Desktop, keine App-Store-Abhängigkeit)
 
-In Arbeit: Discord-Style Server/Channels (**Phase 3A**), Voice-Channels + Signal-Protocol-Migration (**Phase 8**, Q4 2026), Steam Rich Presence + Hardware-Attestation (**Phase 9**). Vollständige Roadmap: [`docs/VISION.md`](./docs/VISION.md) §10.
+Kürzlich ausgeliefert: Discord-Style Server/Channels (**Phase 3A**, 2026-05-27) und die **Post-Quantum-Signal-Migration** — ML-KEM-768 Hybrid Double Ratchet, GA seit 2026-07-11 (löst das frühere CMK/GSK-Key-Transport-Schema ab). Roadmap: [`docs/VISION.md`](./docs/VISION.md) §10.
 
 ## Quick Start
 
@@ -154,7 +156,7 @@ Wenn du eine RENEX-kompatible Implementierung bauen willst:
 1. [`docs/MANIFESTO.md`](./docs/MANIFESTO.md) — wofür wir bauen
 2. [`docs/VISION.md`](./docs/VISION.md) — wie wir bauen
 3. [`docs/PROTOCOL.md`](./docs/PROTOCOL.md) — was wir bauen (Wire-Format v1)
-4. [`docs/MULTI_DEVICE.md`](./docs/MULTI_DEVICE.md), [`docs/RECOVERY.md`](./docs/RECOVERY.md), [`docs/GROUPS_MULTIDEVICE.md`](./docs/GROUPS_MULTIDEVICE.md) — Sub-Specs
+4. [`docs/RECOVERY.md`](./docs/RECOVERY.md), [`docs/ATTACHMENTS.md`](./docs/ATTACHMENTS.md) — Sub-Specs
 5. [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md) — Threat-Model + acknowledged weaknesses
 
 ### Reference-Implementation lokal entwickeln
@@ -164,7 +166,7 @@ Wenn du eine RENEX-kompatible Implementierung bauen willst:
 git clone https://github.com/bruno-renex/renex.git
 cd renex
 npm install
-npm test                  # Vitest, ~13s, 472 Tests
+npm test                  # Vitest, ~13s, 796 Tests
 npm run dev               # Frontend Dev-Server
 ```
 
@@ -176,7 +178,7 @@ Volle Anleitung: [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) §2.
 Frontend (Svelte 5 + PWA)  ──WebSocket──▶  Cloudflare Workers
    │                                             │
    ├─ WebAuthn (Passkey)                         ├─ D1 (Messages, Users, Devices)
-   ├─ WebCrypto (AES-GCM, ECDH P-256, ECDSA)     ├─ KV (Pubkeys, CMKs hot-cache)
+   ├─ WebCrypto (AES-GCM, ML-KEM-768, X25519)    ├─ KV (Pubkeys, prekey bundles)
    ├─ IndexedDB (encrypted local cache)          ├─ R2 (Recovery-Bundles)
    └─ WebRTC (Voice, encrypted SDP)              └─ Durable Objects (User-Sessions)
 ```

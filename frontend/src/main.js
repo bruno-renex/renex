@@ -21,6 +21,22 @@ if (typeof navigator !== 'undefined' && navigator.storage?.persist) {
     .catch(() => {});
 }
 
+// iOS-Auto-Zoom-Sicherheitsnetz (2026-07-14): Kern-Fix ist die 16px-Regel in
+// app.css (Touch-Inputs). Zusätzlich unterdrückt maximum-scale=1 auf iOS den
+// Fokus-Auto-Zoom für evtl. übersehene Felder. NUR iOS: Apple ignoriert
+// maximum-scale beim PINCH-Zoom seit iOS 10 (Accessibility bleibt intakt),
+// respektiert es aber beim Fokus-Zoom. Auf Android würde dieselbe Direktive
+// den Pinch-Zoom real deaktivieren (WCAG 1.4.4) → dort bewusst NICHT gesetzt.
+// (iPadOS meldet sich als "MacIntel" mit Touch → zweite Bedingung.)
+const _isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (_isIOS) {
+  const _vp = document.querySelector('meta[name="viewport"]');
+  if (_vp && !/maximum-scale/.test(_vp.content)) {
+    _vp.content += ', maximum-scale=1';
+  }
+}
+
 // Session-Check beim App-Start (einmal, OUTSIDE von $effect — sonst loop).
 // Skip via ?dev=skipSessionCheck — nur für UI-Tests im Dev.
 const params = new URLSearchParams(location.search);

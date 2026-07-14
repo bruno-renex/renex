@@ -86,6 +86,21 @@ input, textarea {
   outline: none;
 }
 
+/* iOS-Auto-Zoom-Fix (2026-07-14): WebKit zoomt beim Fokussieren jedes
+   Eingabefelds mit font-size < 16px automatisch auf das Feld (auch im
+   Standalone-PWA) — und zoomt oft nicht sauber zurück. Fix an der Ursache:
+   auf Touch-Geräten bekommen ALLE fokussierbaren Text-Eingaben 16px.
+   - Nur Touch ((hover:none)+(pointer:coarse)) → Desktop-Design unverändert.
+   - !important ist hier bewusst: Svelte-scoped Komponenten-Styles (z. B.
+     ChatInput textarea 14px) haben höhere Spezifität und würden sonst gewinnen.
+   - 16px ist auf Mobile ohnehin die ergonomisch richtige Eingabegröße
+     (Standard-Praxis; Accessibility-neutral, anders als maximum-scale-Hacks). */
+@media (hover: none) and (pointer: coarse) {
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+}
+
 /* Links */
 a {
   color: var(--accent-voice);

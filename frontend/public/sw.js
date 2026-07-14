@@ -85,18 +85,34 @@ async function handlePush(event) {
     // bewusst minimal.
   }
 
-  // App-Icon Badge
+  // App-Icon Badge — Plattform-Realität (Stand 2026, Chrome-Doku):
+  //   iOS 16.4+ / Desktop: setAppBadge(count) rendert die ZAHL am Icon.
+  //   Android: Badging-API nicht unterstützt — das Icon bekommt automatisch
+  //   einen PUNKT (gekoppelt an die Notification), NIE eine Zahl. setAppBadge
+  //   existiert dort zwar als Funktion, ist fürs Icon aber ein No-Op.
+  // Darum: Count IMMER pflegen (Cache), setAppBadge best-effort aufrufen, und
+  // auf Android die Zahl zusätzlich in den Notification-Body schreiben — der
+  // einzige Ort, an dem Android sie anzeigen kann.
+  let unreadCount = 0;
   try {
+    const cache = await caches.open("renex-badge");
+    const resp = await cache.match("badge-count").catch(() => null);
+    unreadCount = (resp ? parseInt(await resp.text()) || 0 : 0) + 1;
+    await cache.put("badge-count", new Response(String(unreadCount)));
     if (navigator.setAppBadge) {
-      // Chromium: setAppBadge mit inkrementierendem Count
-      const cache = await caches.open("renex-badge");
-      const resp = await cache.match("badge-count").catch(() => null);
-      let count = resp ? parseInt(await resp.text()) || 0 : 0;
-      count++;
-      await cache.put("badge-count", new Response(String(count)));
-      navigator.setAppBadge(count).catch(() => {});
+      navigator.setAppBadge(unreadCount).catch(() => {});
     }
   } catch {}
+
+  // Android: Zahl in die Notification (ab 2 — bei 1 ist der Body selbst die Info).
+  // Nicht bei Anrufen (dort zählt der Call, nicht der Posteingang).
+  if (unreadCount > 1
+      && data?.type !== "voice_call"
+      && /Android/i.test(navigator.userAgent || "")) {
+    options.body = options.body
+      ? `${options.body}\n📬 ${unreadCount} ungelesen`
+      : `📬 ${unreadCount} ungelesen`;
+  }
 
 
   try {

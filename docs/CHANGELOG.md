@@ -4,6 +4,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) ⋅ Daten in `Y
 
 ---
 
+## 2026-07-14 — Android: Unread-Zahl in der Notification 📬
+
+### ✨ Added
+- **Unread-Count im Notification-Body (Android):** Ab 2 ungelesenen Nachrichten
+  hängt der Service Worker `📬 N ungelesen` an die Push-Notification an (nicht
+  bei Anrufen). Grund: **Android unterstützt die Badging-API am PWA-Icon nicht** —
+  das Icon bekommt automatisch nur einen *Punkt* (gekoppelt an die Notification),
+  nie eine Zahl. iOS 16.4+ und Desktop rendern die Zahl weiterhin direkt am Icon
+  via `setAppBadge(count)`. Das ist eine Plattform-Grenze der Web-Badging-API,
+  kein RENEX-Bug ([Chrome-Doku](https://developer.chrome.com/docs/capabilities/web-apis/badging-api)).
+
+### 🔧 Fixed
+- **Debug-Menü:** Die `setAppBadge API`-Zeile zeigte auf Android fälschlich
+  „supported" (die Funktion existiert, ist fürs Icon aber ein No-Op) — jetzt
+  ehrlich: „API da — Icon zeigt nur Punkt (Android), Zahl in Notification".
+- **Badge-Zähler** wird im SW jetzt unabhängig von `setAppBadge`-Verfügbarkeit
+  gepflegt (vorher nur innerhalb des Feature-Checks inkrementiert).
+
+---
+
 ## 2026-06-06 — Pulse vNext: Leuchtkäfer-Look, Handshake & Nicken ✨ (Phase 6.5)
 
 Die zweite Pulse-Iteration macht aus dem MVP-Partikelfeld einen lebendigen

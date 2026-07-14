@@ -149,10 +149,16 @@
       pushSubClass = "error";
     }
 
-    // App Badge API
+    // App Badge API — ehrliche Anzeige: auf Android existiert setAppBadge als
+    // Funktion, rendert am Icon aber NIE eine Zahl (nur automatischer Punkt via
+    // Notification — Plattform-Grenze, kein RENEX-Bug). "supported" wäre dort
+    // ein False-Positive; die Zahl steckt stattdessen im Notification-Body.
     const hasBadge = typeof navigator.setAppBadge === "function";
-    badgeApi = hasBadge ? "supported" : "not-supported";
-    badgeApiClass = hasBadge ? "ok" : "warn";
+    const isAndroid = /Android/i.test(navigator.userAgent || "");
+    badgeApi = !hasBadge ? "not-supported"
+      : isAndroid ? "API da — Icon zeigt nur Punkt (Android), Zahl in Notification"
+      : "supported";
+    badgeApiClass = !hasBadge ? "warn" : isAndroid ? "warn" : "ok";
 
     // E2E / v4-Ratchet-Flags
     refreshE2E();

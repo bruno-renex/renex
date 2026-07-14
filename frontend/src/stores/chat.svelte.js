@@ -896,7 +896,21 @@ async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
     // Legacy (CMK) → grober Ladder, weil auf eine cmk_req-Netzantwort gewartet wird.
     const isV4 = _isV4Msg(rawMsg);
     const ladder = isV4 ? DECRYPT_RETRY_DELAYS_V4_MS : DECRYPT_RETRY_DELAYS_MS;
-    if (attempt >= ladder.length) return;  // aufgeben
+    if (attempt >= ladder.length) {
+      // Store-Miss-Fix (2026-07-14): eine v4-Nachricht, die nach dem VOLLEN Ladder
+      // weder im forward-secret Klartext-Store liegt noch live entschlüsselbar ist,
+      // ist ENDGÜLTIG verloren — Ratchet-Message-Keys sind einmalig und nicht
+      // re-derivbar. Klar markieren statt als „🔐 …" in der Retry-Schleife hängen
+      // zu lassen. Legacy-CMK bewusst NICHT so markieren — dort kann ein späterer
+      // cmk_response (Multi-Device-Race) die Nachricht noch retten.
+      if (isV4) {
+        _patchMessage(rawMsg.id, {
+          text: '🔓✗ Nicht wiederherstellbar (Forward Secrecy)',
+          _unrecoverable: true,
+        });
+      }
+      return;  // aufgeben
+    }
 
     // Pause-on-pending gilt nur für Legacy (v4 wartet auf keine cmk_response).
     const baseDelay = ladder[attempt];

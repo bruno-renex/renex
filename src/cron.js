@@ -53,6 +53,9 @@ export async function scheduled(event, env) {
     console.error("❌ Auto-Delete Cron fehlgeschlagen:", e);
   }
 
+  // ── Globaler Retention-Cap (Default 90d; Channels + Auto-Delete exempt) ──
+  await runRetentionCap(env);
+
   // ── Feedback älter als 30 Tage löschen (DSGVO) ──────────────────────
   try {
     const feedbackCutoff = Date.now() - 30 * 86400_000;
@@ -364,6 +367,58 @@ export async function runDailyFeedbackReport(env, opts = {}) {
   } catch (e) {
     console.error("❌ Feedback-Report fehlgeschlagen:", e);
     return { sent: false, count: 0, error: e.message };
+  }
+}
+
+// ======================================================
+// Globaler Retention-Cap: Standard-Lebensdauer für Nachrichten (eGov Phase 0.3).
+// DMs + Gruppen älter als N Tage werden gelöscht (Default 90, konfigurierbar via
+// env.MSG_RETENTION_DAYS; ≤0 = deaktiviert). EXEMPT:
+//   - Channels (Forum-History = Feature)  → conversations.type = 'channel'
+//   - Convos mit aktivem Auto-Delete      → oben eigenständig verwaltet, respektiert
+//     dadurch auch LÄNGERE Nutzer-Wünsche (z.B. 180d) statt sie mit 90d zu übersteuern
+//   - Control-Rows (type IS NOT NULL, z.B. gsk/request_gsk die Gäste pollen)
+// R2-Attachment-Blobs werden VOR dem D1-Delete geräumt (sonst verwaist).
+// Ehrlichkeit: D1 Time Travel hält gelöschte Rows plattformseitig bis 30d
+// wiederherstellbar — das ist eine Claim-Fußnote, nicht im Code lösbar.
+//
+// Exportiert für Unit-Tests (tests/cronRetentionCap.test.js).
+// @returns {Promise<{deleted:number, days:number}>}
+// ======================================================
+const _CAP_EXEMPT = `
+  AND type IS NULL
+  AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id = messages.convo_id AND c.type = 'channel')
+  AND NOT EXISTS (SELECT 1 FROM auto_delete_settings a WHERE a.convo_id = messages.convo_id AND a.status = 'active')
+`;
+
+export async function runRetentionCap(env) {
+  const days = env?.MSG_RETENTION_DAYS != null ? Number(env.MSG_RETENTION_DAYS) : 90;
+  if (!Number.isFinite(days) || days <= 0) return { deleted: 0, days: 0 };  // deaktiviert
+  const cutoff = Date.now() - days * 86400_000;
+
+  try {
+    // R2-Blobs der zu löschenden Nachrichten zuerst räumen (GIFs haben keinen R2-Key)
+    if (env.RENEX_FILES) {
+      const atts = await env.RENEX_DB.prepare(
+        `SELECT attachment_key FROM messages
+         WHERE ts < ? AND attachment_key IS NOT NULL AND attachment_type != 'gif' ${_CAP_EXEMPT}`
+      ).bind(cutoff).all();
+      for (const a of (atts.results ?? [])) {
+        if (a.attachment_key) await env.RENEX_FILES.delete(a.attachment_key).catch(() => {});
+      }
+    }
+
+    const r = await env.RENEX_DB.prepare(
+      `DELETE FROM messages WHERE ts < ? ${_CAP_EXEMPT}`
+    ).bind(cutoff).run();
+    const deleted = r.meta?.changes ?? 0;
+    if (deleted > 0) {
+      console.log(`🗓️ Retention-Cap: ${deleted} Nachrichten >${days}d gelöscht (DMs+Gruppen; Channels + Auto-Delete-Convos exempt)`);
+    }
+    return { deleted, days };
+  } catch (e) {
+    console.error("❌ Retention-Cap fehlgeschlagen:", e);
+    return { deleted: 0, days };
   }
 }
 

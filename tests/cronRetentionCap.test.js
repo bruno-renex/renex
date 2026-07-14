@@ -68,7 +68,8 @@ describe('runRetentionCap', () => {
   const NEW = now - 10 * DAY;    // < 90d
 
   it('löscht alte DMs+Gruppen, exemptiert Channel / Auto-Delete / Control / aktuelle + räumt R2', async () => {
-    const { env, db, deletedR2 } = makeEnv();
+    // days:90 explizit → Exemption-Semantik entkoppelt vom Default (365).
+    const { env, db, deletedR2 } = makeEnv({ days: 90 });
     db.exec(`
       INSERT INTO conversations (id, type) VALUES
         ('alice:bob','dm'), ('grp1','group'), ('chan1','channel'), ('dm_autodel','dm');
@@ -92,6 +93,18 @@ describe('runRetentionCap', () => {
     expect(res.deleted).toBe(4);
     expect(res.days).toBe(90);
     expect(deletedR2).toEqual(['r2/blob1']);   // nur echter Blob, nur von gelöschten Rows
+  });
+
+  it('Default ohne env = 365 Tage', async () => {
+    const { env, db } = makeEnv();   // kein days-Override → Default
+    db.exec(`INSERT INTO conversations (id, type) VALUES ('alice:bob','dm');`);
+    seed(db, [
+      { id: 'm_100d', convo_id: 'alice:bob', ts: now - 100 * DAY },   // < 365 → bleibt
+      { id: 'm_400d', convo_id: 'alice:bob', ts: now - 400 * DAY },   // > 365 → weg
+    ]);
+    const res = await runRetentionCap(env);
+    expect(res.days).toBe(365);
+    expect(db.prepare('SELECT id FROM messages').all().map(r => r.id)).toEqual(['m_100d']);
   });
 
   it('MSG_RETENTION_DAYS=0 deaktiviert den Cap', async () => {

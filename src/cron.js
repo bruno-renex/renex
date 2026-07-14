@@ -53,7 +53,7 @@ export async function scheduled(event, env) {
     console.error("❌ Auto-Delete Cron fehlgeschlagen:", e);
   }
 
-  // ── Globaler Retention-Cap (Default 90d; Channels + Auto-Delete exempt) ──
+  // ── Globaler Retention-Cap (Default 365d; Channels + Auto-Delete exempt) ──
   await runRetentionCap(env);
 
   // ── Feedback älter als 30 Tage löschen (DSGVO) ──────────────────────
@@ -372,8 +372,13 @@ export async function runDailyFeedbackReport(env, opts = {}) {
 
 // ======================================================
 // Globaler Retention-Cap: Standard-Lebensdauer für Nachrichten (eGov Phase 0.3).
-// DMs + Gruppen älter als N Tage werden gelöscht (Default 90, konfigurierbar via
-// env.MSG_RETENTION_DAYS; ≤0 = deaktiviert). EXEMPT:
+// DMs + Gruppen älter als N Tage werden gelöscht (Default 365, konfigurierbar via
+// env.MSG_RETENTION_DAYS; ≤0 = deaktiviert). Warum 365 statt aggressiver 90:
+// Storage ist KEIN Treiber (DB im MB-Bereich, D1-Free = 5 GB), und solange D1 die
+// einzige Render-Quelle ist, ist Server-Löschung = UI-Verlust auf allen Geräten.
+// 365 = mildes Sicherheitsnetz gegen unbegrenztes Wachstum ohne realen Nutzer-
+// verlust in normaler Nutzung; der aggressive Metadaten-Cap gehört zu Phase 3.1
+// (Local-first), wo eine lokale Client-Kopie ihn verlustfrei macht. EXEMPT:
 //   - Channels (Forum-History = Feature)  → conversations.type = 'channel'
 //   - Convos mit aktivem Auto-Delete      → oben eigenständig verwaltet, respektiert
 //     dadurch auch LÄNGERE Nutzer-Wünsche (z.B. 180d) statt sie mit 90d zu übersteuern
@@ -392,7 +397,7 @@ const _CAP_EXEMPT = `
 `;
 
 export async function runRetentionCap(env) {
-  const days = env?.MSG_RETENTION_DAYS != null ? Number(env.MSG_RETENTION_DAYS) : 90;
+  const days = env?.MSG_RETENTION_DAYS != null ? Number(env.MSG_RETENTION_DAYS) : 365;
   if (!Number.isFinite(days) || days <= 0) return { deleted: 0, days: 0 };  // deaktiviert
   const cutoff = Date.now() - days * 86400_000;
 

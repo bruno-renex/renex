@@ -755,6 +755,20 @@ export const chatStore = {
 // Wenn cmk_unavailable empfangen → komplett aufgeben.
 const DECRYPT_RETRY_DELAYS_MS = [3000, 8000, 25000, 60000];
 
+// v4-Double-Ratchet-Fehlschläge sind TRANSIENT (Session etabliert/primt in <1s,
+// Reconcile-Ordering während des History-Sweeps) — KEIN Netz-Round-Trip wie beim
+// Legacy-cmk_req. Der 3s-Erststart des CMK-Ladders war die „erst nach einiger Zeit
+// lesbar"-Ursache. Darum ein schneller Start (250ms) mit großzügigem Tail: was
+// vorher erst nach 3–25s zurückkam, kommt jetzt in <1s — ohne die Erfolgsrate zu
+// senken (späte Attempts decken denselben Zeitraum ab).
+const DECRYPT_RETRY_DELAYS_V4_MS = [250, 700, 1800, 4000, 10000, 25000];
+
+// Erkennt eine v4-Nachricht (single: top-level header_b64; multi: payloads[].header_b64).
+function _isV4Msg(m) {
+  return !!(m && (m.header_b64 ||
+    (Array.isArray(m.payloads) && m.payloads.some(p => p && p.header_b64))));
+}
+
 // Concurrency-Cap für initial Sweep (Performance QW1, 2026-05-02).
 // Verhindert dass bei 1000-Message-Chats 1000 parallele crypto.subtle-Tasks
 // IDB + Crypto-Worker thrashen. 8 ist heuristisch gut für Browser
@@ -878,13 +892,16 @@ async function _decryptOne(rawMsg, myHandle, peerHandle, attempt = 0) {
     }
     console.warn(`🔒 decrypt FAIL id=${rawMsg.id?.slice(0,8)} from=${rawMsg.from} attempt=${attempt} sid=${rawMsg.sid} epoch=${rawMsg.epoch} ivLen=${(rawMsg.ivB64 || rawMsg.iv_b64 || "").length}`);
 
-    if (attempt >= DECRYPT_RETRY_DELAYS_MS.length) return;  // aufgeben
+    // v4 (Double-Ratchet) → schneller Ladder (transiente Fehlschläge).
+    // Legacy (CMK) → grober Ladder, weil auf eine cmk_req-Netzantwort gewartet wird.
+    const isV4 = _isV4Msg(rawMsg);
+    const ladder = isV4 ? DECRYPT_RETRY_DELAYS_V4_MS : DECRYPT_RETRY_DELAYS_MS;
+    if (attempt >= ladder.length) return;  // aufgeben
 
-    // Wenn cmk_req pending: Retry verzögern bis Antwort kommt (Pause-on-pending).
-    // Sonst: Backoff-Delay verwenden.
-    const baseDelay = DECRYPT_RETRY_DELAYS_MS[attempt];
-    const delay = isPendingCmkReq(peerHandle)
-      ? Math.max(baseDelay, 5000)   // mindestens 5s wenn wir auf cmk_response warten
+    // Pause-on-pending gilt nur für Legacy (v4 wartet auf keine cmk_response).
+    const baseDelay = ladder[attempt];
+    const delay = (!isV4 && isPendingCmkReq(peerHandle))
+      ? Math.max(baseDelay, 5000)   // mindestens 5s wenn wir auf cmk_response warten (Legacy)
       : baseDelay;
 
     setTimeout(() => {
@@ -951,10 +968,29 @@ async function _decryptAllE2E(peerHandle, myHandle) {
   // (würde IDB + Crypto-Worker thrashen), sondern max DECRYPT_CONCURRENCY
   // gleichzeitig. UI-Updates kommen früh (erste 8 Messages decrypten sofort,
   // dann incremental).
+  // Legacy-CMK (symmetrisch, ordnungsunabhängig) → Concurrency-Pool wie bisher.
+  // v4 (Double-Ratchet) → SERIELL in chronologischer Reihenfolge (snapshot ist
+  // ts-sortiert): alle v4-Nachrichten eines Sender-Geräts teilen ein FIFO-Lock
+  // (sess:peer:dev). Serielles Dispatch stellt sicher, dass die init-tragende
+  // (ältere) Nachricht die Session ETABLIERT, bevor abhängige (neuere) kommen.
+  // Out-of-order (Pool) setzt sonst den Rezenz-Anker durch eine neuere Nachricht
+  // hoch → ältere init-Nachricht gilt als „stale" → reconcile_stale_init → 🔐 →
+  // Retry. Per-Message-Timeout verhindert, dass eine langsame (Netz-)Nachricht die
+  // Kette blockiert; ihr eigener Backoff-Retry fängt sie später.
+  const v4Msgs = [];
   for (const m of snapshot) {
     const raw = m._raw || m;
-    void _decryptSlot(() => _decryptOne(raw, myHandle, peerHandle));
+    if (_isV4Msg(raw)) v4Msgs.push(raw);
+    else void _decryptSlot(() => _decryptOne(raw, myHandle, peerHandle));
   }
+  void (async () => {
+    for (const raw of v4Msgs) {
+      await Promise.race([
+        _decryptOne(raw, myHandle, peerHandle).catch(() => {}),
+        new Promise(r => setTimeout(r, 4000)),
+      ]);
+    }
+  })();
 
   // Proactive CMK-Acquisition: wenn beim Chat-Öffnen lokal keine CMK existiert,
   // ABER e2e-Messages zu decrypten sind, sofort einen cmk_req triggern.

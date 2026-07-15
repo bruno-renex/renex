@@ -506,6 +506,15 @@
       document.getElementById("chatName").textContent = data.displayName || "Chat";
       document.getElementById("invitedByText").innerHTML = lang.invitedByText(data.createdBy || "?");
 
+      // Quota-Zeile ehrlich machen (eGov 1.2): 0 = unbegrenzt (Org-Kanal),
+      // endliches Limit dynamisch statt statischer "20"-Text.
+      if (typeof data.msgLimit === "number") {
+        document.getElementById("info-messages").innerHTML =
+          data.msgLimit === 0
+            ? (lang.unlimitedMessages || "Nachrichten unbegrenzt")
+            : (lang.maxMessagesN ? lang.maxMessagesN(data.msgLimit) : lang.maxMessages);
+      }
+
       // Verified-Sender (eGov 1.1): Badge + Prüf-Details + Org-Info-Rows.
       if (data.verifiedSender) {
         window.__applyVerifiedSender(data.verifiedSender, data.expiresAt);

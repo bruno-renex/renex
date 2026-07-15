@@ -61,7 +61,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { convoId, expiresInDays } = body;
+    const { convoId, expiresInDays, msgLimit } = body;
 
     // convoId optional: wenn nicht angegeben → DM-Einladung (1:1 mit dem Einladenden)
     let finalConvoId = "";
@@ -91,36 +91,52 @@ export async function handleInviteRoutes(request, env, path, params) {
     }
     // kein convoId: DM-Einladung → convo_id wird erst beim Join erstellt
 
-    // eGov 1.2: Langlebige Invites NUR für verifizierte Orgs — die Landing-Page
-    // zeigt dann deren Registernamen + Badge (kein unverifizierter Org-Kanal).
+    // eGov 1.2: Langlebige Invites + Quota-Steuerung NUR für verifizierte Orgs —
+    // die Landing-Page zeigt dann deren Registernamen + Badge (kein
+    // unverifizierter Org-Kanal). Consumer-Invites bleiben 24h/20 (Scope-Freeze).
+    const wantsOrgParams = (expiresInDays !== undefined && expiresInDays !== null)
+                        || (msgLimit !== undefined && msgLimit !== null);
     let customExpiryMs = null;
-    if (expiresInDays !== undefined && expiresInDays !== null) {
-      if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > MAX_ORG_INVITE_DAYS) {
-        return json(request, { error: `expiresInDays must be an integer between 1 and ${MAX_ORG_INVITE_DAYS}` }, 400);
-      }
+    let customMsgLimit = null;
+    if (wantsOrgParams) {
       const org = await getVerifiedOrg(env, me);
       if (!org) {
-        return json(request, { error: "Verified organization required for custom expiry", code: "org_required" }, 403);
+        return json(request, { error: "Verified organization required for custom expiry or quota", code: "org_required" }, 403);
       }
-      customExpiryMs = expiresInDays * 86400_000;
+      if (expiresInDays !== undefined && expiresInDays !== null) {
+        if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > MAX_ORG_INVITE_DAYS) {
+          return json(request, { error: `expiresInDays must be an integer between 1 and ${MAX_ORG_INVITE_DAYS}` }, 400);
+        }
+        customExpiryMs = expiresInDays * 86400_000;
+      }
+      if (msgLimit !== undefined && msgLimit !== null) {
+        // 0 = unbegrenzt (Org-Kanal-Default); endliches Limit optional.
+        if (!Number.isInteger(msgLimit) || msgLimit < 0 || msgLimit > 100_000) {
+          return json(request, { error: "msgLimit must be an integer between 0 (unlimited) and 100000" }, 400);
+        }
+        customMsgLimit = msgLimit;
+      }
     }
 
     const now       = Date.now();
     const token     = generateGuestToken();
     const expiresAt = now + (customExpiryMs ?? (convoType === "group" ? GROUP_INVITE_EXPIRY_MS : GUEST_EXPIRY_MS));
+    // Quota: explizit gesetzt > Org-Langzeit-Invite (unbegrenzt, Org steuert via
+    // kill-session; Gast kann eh nur in seinen einen Kanal schreiben) > Consumer 20.
+    const msgLimitFinal = customMsgLimit ?? (customExpiryMs !== null ? 0 : GUEST_MSG_LIMIT);
 
     await env.RENEX_DB.prepare(
       `INSERT INTO guest_sessions
          (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
        VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', NULL)`
-    ).bind(token, finalConvoId, convoType, me, now, expiresAt, GUEST_MSG_LIMIT).run();
+    ).bind(token, finalConvoId, convoType, me, now, expiresAt, msgLimitFinal).run();
 
     return json(request, {
       ok: true,
       token,
       inviteUrl: `https://renex.id/join?token=${token}`,
       expiresAt,
-      msgLimit: GUEST_MSG_LIMIT,
+      msgLimit: msgLimitFinal,
     });
   }
 
@@ -263,7 +279,7 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     // Invite-Template-Row laden (unbenutzt ODER als benutzt markiert)
     const row = await env.RENEX_DB.prepare(
-      "SELECT convo_id, convo_type, created_by, created_at, expires_at, guest_handle FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
+      "SELECT convo_id, convo_type, created_by, created_at, expires_at, guest_handle, msg_limit FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
     ).bind(token).first();
 
     if (!row)                         return json(request, { valid: false, reason: "not_found" }, 404);
@@ -282,7 +298,7 @@ export async function handleInviteRoutes(request, env, path, params) {
       const guestToken = getGuestToken(request);
       if (guestToken) {
         const sess = await env.RENEX_DB.prepare(
-          "SELECT guest_handle, convo_id, convo_type, created_by, expires_at, converted_to FROM guest_sessions WHERE token = ?"
+          "SELECT guest_handle, convo_id, convo_type, created_by, expires_at, converted_to, msg_limit FROM guest_sessions WHERE token = ?"
         ).bind(guestToken).first();
         if (
           sess &&
@@ -303,7 +319,7 @@ export async function handleInviteRoutes(request, env, path, params) {
             createdBy:     sess.created_by,
             displayName:   resumedOrg ? resumedOrg.name : sess.created_by + "'s Chat",
             expiresAt:     sess.expires_at,
-            msgLimit:      GUEST_MSG_LIMIT,
+            msgLimit:      sess.msg_limit ?? GUEST_MSG_LIMIT,
             sessionToken:  guestToken,
             msgCount:      0,
             verifiedSender: resumedOrg,
@@ -346,7 +362,7 @@ export async function handleInviteRoutes(request, env, path, params) {
       displayName,
       createdBy:   row.created_by,
       expiresAt:   row.expires_at,
-      msgLimit:    GUEST_MSG_LIMIT,
+      msgLimit:    row.msg_limit ?? GUEST_MSG_LIMIT,   // 0 = unbegrenzt (Org-Kanal)
       verifiedSender: org,
     });
   }
@@ -962,7 +978,9 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     const now       = Date.now();
     const remaining = Math.max(0, row.expires_at - now);
-    const msgsLeft  = Math.max(0, row.msg_limit - row.msg_count);
+    // msg_limit 0 = unbegrenzt (Org-Kanal) → msgsLeft null, Banner blendet Zähler aus
+    const unlimited = !(row.msg_limit > 0);
+    const msgsLeft  = unlimited ? null : Math.max(0, row.msg_limit - row.msg_count);
     const expired   = remaining === 0;
 
     return json(request, {

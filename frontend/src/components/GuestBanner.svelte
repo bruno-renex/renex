@@ -82,7 +82,8 @@
   // ── Derived UI-Strings ──────────────────────────────────────
   let remainingMs = $derived(expiresAt ? Math.max(0, expiresAt - _now) : null);
   let isExpired = $derived(remainingMs !== null && remainingMs === 0);
-  let msgsLeft = $derived(msgLimit !== null ? Math.max(0, msgLimit - msgCount) : null);
+  // msgLimit 0 = unbegrenzt (Org-Kanal, eGov 1.2) → kein Zähler, kein Limit-Zustand
+  let msgsLeft = $derived(typeof msgLimit === 'number' && msgLimit > 0 ? Math.max(0, msgLimit - msgCount) : null);
   let isMsgLimitReached = $derived(msgsLeft === 0);
 
   // Format remaining time: "89 Tage" (langlebige Org-Sessions) / "1h 23min" / "45min" / "30s"

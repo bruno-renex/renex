@@ -86,7 +86,8 @@ export async function handleChatSend(request, env, ctx) {
       if (!guestRow)             return json(request, { error: "Not authenticated" }, 401);
       if (guestRow.converted_to) return json(request, { error: "Not authorized" }, 403);
       if (Date.now() > guestRow.expires_at) return json(request, { error: "Session expired" }, 410);
-      if (guestRow.msg_count >= guestRow.msg_limit) {
+      // msg_limit 0 = unbegrenzt (Org-Kanal, eGov 1.2); msg_count zählt weiter (Telemetrie)
+      if (guestRow.msg_limit > 0 && guestRow.msg_count >= guestRow.msg_limit) {
         return json(request, {
           error:    "Message limit reached",
           msgCount: guestRow.msg_count,

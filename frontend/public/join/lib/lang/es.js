@@ -277,6 +277,8 @@ export default {
   invitedByText:           (by) => `Fuiste invitado por <strong>${by}</strong>`,
   accessFor24h:            "Acceso por <strong>24 horas</strong> — luego guarda con Passkey",
   maxMessages:             "Hasta <strong>20 mensajes</strong> como invitado",
+  maxMessagesN:            (n) => `Hasta <strong>${n} mensajes</strong> como invitado`,
+  unlimitedMessages:       "Mensajes <strong>ilimitados</strong>",
   e2eEncrypted:            "Cifrado de extremo a extremo",
   verifiedOrgBadge:        "Organización verificada",
   verifiedCertLine:        (date, method) => `Identidad verificada el <strong>${date}</strong> mediante ${method}`,

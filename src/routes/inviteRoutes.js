@@ -15,6 +15,10 @@ const GUEST_EXPIRY_MS         = 24 * 60 * 60 * 1000;       // DM-Invite: 24h
 const GROUP_INVITE_EXPIRY_MS  = 24 * 60 * 60 * 1000;       // Gruppen-Invite: 24h (vorher 7d, vereinheitlicht)
 const GUEST_SESSION_MS        = 24 * 60 * 60 * 1000;
 const GUEST_MSG_LIMIT         = 20;
+// eGov 1.2: Verifizierte Orgs dürfen langlebige Invites ausstellen (P0 fürs
+// Brief-Szenario — B-Post läuft 3 Tage, ein 24h-Token ist bei Ankunft tot).
+// Consumer-Invites bleiben unverändert 24h (Scope-Freeze). Cap = Retention-Default.
+const MAX_ORG_INVITE_DAYS     = 365;
 
 // Helper: prüft ob ein User noch Mitglied der Konversation ist (DM oder Gruppe).
 // Bei Gruppen: conversation_members-Tabelle. Bei DMs: handle muss in convo_id stehen.
@@ -27,6 +31,16 @@ async function _isStillMember(env, convoId, convoType, handle) {
     "SELECT 1 FROM conversation_members WHERE convo_id = ? AND member_handle = ? LIMIT 1"
   ).bind(convoId, handle).first();
   return !!m;
+}
+
+// Org-Gate für langlebige Invites: eine Template-Dauer > 24h kann nur eine
+// verifizierte Org ausgestellt haben (Gate in /invite/create). Wird die Org
+// später suspendiert/entfernt, sterben ihre langlebigen Invites mit ihr —
+// Konsumenten-Invites (≤24h) bleiben davon unberührt.
+async function _orgInviteStillAuthorized(env, row) {
+  const durationMs = Math.max(0, (row.expires_at ?? 0) - (row.created_at ?? 0));
+  if (durationMs <= GUEST_EXPIRY_MS) return true;
+  return !!(await getVerifiedOrg(env, row.created_by));
 }
 
 export async function handleInviteRoutes(request, env, path, params) {
@@ -47,7 +61,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { convoId } = body;
+    const { convoId, expiresInDays } = body;
 
     // convoId optional: wenn nicht angegeben → DM-Einladung (1:1 mit dem Einladenden)
     let finalConvoId = "";
@@ -77,10 +91,23 @@ export async function handleInviteRoutes(request, env, path, params) {
     }
     // kein convoId: DM-Einladung → convo_id wird erst beim Join erstellt
 
+    // eGov 1.2: Langlebige Invites NUR für verifizierte Orgs — die Landing-Page
+    // zeigt dann deren Registernamen + Badge (kein unverifizierter Org-Kanal).
+    let customExpiryMs = null;
+    if (expiresInDays !== undefined && expiresInDays !== null) {
+      if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > MAX_ORG_INVITE_DAYS) {
+        return json(request, { error: `expiresInDays must be an integer between 1 and ${MAX_ORG_INVITE_DAYS}` }, 400);
+      }
+      const org = await getVerifiedOrg(env, me);
+      if (!org) {
+        return json(request, { error: "Verified organization required for custom expiry", code: "org_required" }, 403);
+      }
+      customExpiryMs = expiresInDays * 86400_000;
+    }
+
     const now       = Date.now();
     const token     = generateGuestToken();
-    // Gruppen-Invites laufen länger — Mass-Onboarding braucht mehr Zeit als 48h.
-    const expiresAt = now + (convoType === "group" ? GROUP_INVITE_EXPIRY_MS : GUEST_EXPIRY_MS);
+    const expiresAt = now + (customExpiryMs ?? (convoType === "group" ? GROUP_INVITE_EXPIRY_MS : GUEST_EXPIRY_MS));
 
     await env.RENEX_DB.prepare(
       `INSERT INTO guest_sessions
@@ -155,7 +182,7 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     // Invite-Template-Row laden (unbenutzt ODER als benutzt markiert)
     const row = await env.RENEX_DB.prepare(
-      "SELECT convo_id, convo_type, created_by, expires_at, guest_handle FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
+      "SELECT convo_id, convo_type, created_by, created_at, expires_at, guest_handle FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
     ).bind(token).first();
 
     if (!row)                         return json(request, { valid: false, reason: "not_found" }, 404);
@@ -205,6 +232,11 @@ export async function handleInviteRoutes(request, env, path, params) {
       return json(request, { valid: false, reason: "already_used" }, 410);
     }
     if (Date.now() > row.expires_at)  return json(request, { valid: false, reason: "expired" }, 410);
+
+    // Langlebige Org-Invites sterben mit der Org (suspendiert/entfernt → 410).
+    if (!(await _orgInviteStillAuthorized(env, row))) {
+      return json(request, { valid: false, reason: "inviter_suspended" }, 410);
+    }
 
     // Inviter-Membership-Check: wenn created_by die Gruppe/DM verlassen hat,
     // soll der Link nicht mehr funktionieren — auch wenn das Token-Template noch frisch ist.
@@ -301,10 +333,22 @@ export async function handleInviteRoutes(request, env, path, params) {
       return json(request, { error: "Inviter is no longer a member", code: "inviter_left" }, 410);
     }
 
+    // Langlebige Org-Invites sterben mit der Org (suspendiert/entfernt → 410).
+    if (!(await _orgInviteStillAuthorized(env, inviteRow))) {
+      return json(request, { error: "Inviter organization is suspended", code: "inviter_suspended" }, 410);
+    }
+
     // ── Neue unabhängige Session erzeugen (Option B: jeder Join = eigene Session) ─
-    const now            = Date.now();
-    const sessionToken   = generateGuestToken();                       // neuer einzigartiger Session-Token
-    const sessionExpires = now + GUEST_SESSION_MS;                     // 24h ab jetzt
+    // eGov 1.2 TTL-Konsistenz: Die Gast-Session lebt so lange, wie der Invite
+    // KONFIGURIERT war (Template-Dauer = expires_at − created_at), min. 24h.
+    // Sonst zerfiele der „persistente Kanal" nach einem Tag, obwohl der Token
+    // 90 Tage galt. e2e-Key-TTL, KV-Session-TTL und Cookie-Max-Age leiten sich
+    // unten aus sessionExpires ab und wachsen damit automatisch mit.
+    const now               = Date.now();
+    const sessionToken      = generateGuestToken();                    // neuer einzigartiger Session-Token
+    const inviteDurationMs  = Math.max(0, (inviteRow.expires_at ?? 0) - (inviteRow.created_at ?? 0));
+    const sessionDurationMs = Math.min(Math.max(inviteDurationMs, GUEST_SESSION_MS), MAX_ORG_INVITE_DAYS * 86400_000);
+    const sessionExpires    = now + sessionDurationMs;
 
     // Kollisionsfreien Handle sicherstellen
     let guestHandle;
@@ -476,6 +520,10 @@ export async function handleInviteRoutes(request, env, path, params) {
     // Inviter-Membership-Check: created_by darf die Convo nicht verlassen haben.
     if (!(await _isStillMember(env, inviteRow.convo_id, inviteRow.convo_type, inviteRow.created_by))) {
       return json(request, { error: "Inviter is no longer a member", code: "inviter_left" }, 410);
+    }
+    // Langlebige Org-Invites sterben mit der Org (suspendiert/entfernt → 410).
+    if (!(await _orgInviteStillAuthorized(env, inviteRow))) {
+      return json(request, { error: "Inviter organization is suspended", code: "inviter_suspended" }, 410);
     }
 
     const acceptTs = Date.now();
@@ -871,6 +919,10 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     if (!row)               return json(request, { error: "Invite not found" }, 404);
     if (Date.now() > row.expires_at) return json(request, { error: "Invite expired" }, 410);
+    // Langlebige Org-Invites sterben mit der Org (suspendiert/entfernt → 410).
+    if (!(await _orgInviteStillAuthorized(env, row))) {
+      return json(request, { error: "Inviter organization is suspended", code: "inviter_suspended" }, 410);
+    }
 
     let convoId     = row.convo_id;
     const convoType = row.convo_type;

@@ -85,9 +85,11 @@ describe('getVerifiedOrg', () => {
 describe('/invite/info — verifiedSender-Wiring', () => {
   const TOKEN = 'guest_' + 'a'.repeat(32);
 
+  // created_at ist im Schema NOT NULL — Fixtures spiegeln das (Häppchen 2
+  // leitet die Session-Dauer aus expires_at − created_at ab).
   const inviteRow = (createdBy) => ({
     convo_id: '', convo_type: 'dm', created_by: createdBy,
-    expires_at: Date.now() + 60_000, guest_handle: '',
+    created_at: Date.now() - 1000, expires_at: Date.now() + 60_000, guest_handle: '',
   });
 
   function buildRequest() {

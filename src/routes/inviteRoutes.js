@@ -61,7 +61,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { convoId, expiresInDays, msgLimit } = body;
+    const { convoId, expiresInDays, msgLimit, label } = body;
 
     // convoId optional: wenn nicht angegeben → DM-Einladung (1:1 mit dem Einladenden)
     let finalConvoId = "";
@@ -95,13 +95,15 @@ export async function handleInviteRoutes(request, env, path, params) {
     // die Landing-Page zeigt dann deren Registernamen + Badge (kein
     // unverifizierter Org-Kanal). Consumer-Invites bleiben 24h/20 (Scope-Freeze).
     const wantsOrgParams = (expiresInDays !== undefined && expiresInDays !== null)
-                        || (msgLimit !== undefined && msgLimit !== null);
+                        || (msgLimit !== undefined && msgLimit !== null)
+                        || (label !== undefined && label !== null);
     let customExpiryMs = null;
     let customMsgLimit = null;
+    let cleanLabel     = null;
     if (wantsOrgParams) {
       const org = await getVerifiedOrg(env, me);
       if (!org) {
-        return json(request, { error: "Verified organization required for custom expiry or quota", code: "org_required" }, 403);
+        return json(request, { error: "Verified organization required for custom expiry, quota or label", code: "org_required" }, 403);
       }
       if (expiresInDays !== undefined && expiresInDays !== null) {
         if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > MAX_ORG_INVITE_DAYS) {
@@ -116,6 +118,13 @@ export async function handleInviteRoutes(request, env, path, params) {
         }
         customMsgLimit = msgLimit;
       }
+      if (label !== undefined && label !== null) {
+        // Personalisierte Referenz („Mitglied Müller") — Serienbrief↔Handle-Brücke
+        if (typeof label !== "string" || label.trim().length === 0 || label.trim().length > 120) {
+          return json(request, { error: "label must be a non-empty string (max 120 chars)" }, 400);
+        }
+        cleanLabel = label.trim();
+      }
     }
 
     const now       = Date.now();
@@ -125,11 +134,21 @@ export async function handleInviteRoutes(request, env, path, params) {
     // kill-session; Gast kann eh nur in seinen einen Kanal schreiben) > Consumer 20.
     const msgLimitFinal = customMsgLimit ?? (customExpiryMs !== null ? 0 : GUEST_MSG_LIMIT);
 
-    await env.RENEX_DB.prepare(
-      `INSERT INTO guest_sessions
-         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', NULL)`
-    ).bind(token, finalConvoId, convoType, me, now, expiresAt, msgLimitFinal).run();
+    // Dynamischer INSERT: label-Spalte NUR anfassen, wenn ein Label gesetzt ist —
+    // der Consumer-Pfad bleibt damit auch vor der label-Migration funktionsfähig.
+    if (cleanLabel !== null) {
+      await env.RENEX_DB.prepare(
+        `INSERT INTO guest_sessions
+           (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, label)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', NULL, ?)`
+      ).bind(token, finalConvoId, convoType, me, now, expiresAt, msgLimitFinal, cleanLabel).run();
+    } else {
+      await env.RENEX_DB.prepare(
+        `INSERT INTO guest_sessions
+           (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', NULL)`
+      ).bind(token, finalConvoId, convoType, me, now, expiresAt, msgLimitFinal).run();
+    }
 
     return json(request, {
       ok: true,
@@ -137,6 +156,7 @@ export async function handleInviteRoutes(request, env, path, params) {
       inviteUrl: `https://renex.id/join?token=${token}`,
       expiresAt,
       msgLimit: msgLimitFinal,
+      label: cleanLabel,
     });
   }
 
@@ -257,6 +277,144 @@ export async function handleInviteRoutes(request, env, path, params) {
     }).catch(() => {});
 
     return json(request, { ok: true, guestHandle });
+  }
+
+  // ────────────────────────────────────────────────────
+  // POST /invite/bulk  (eGov 1.2, Häppchen 6 — nur verifizierte Orgs)
+  // Serienbrief-Issuance: N DM-Invites in einem Call, optional personalisiert.
+  // Body: { expiresInDays (Pflicht, 1..365), count? (1..500), msgLimit? (0=unbegrenzt, Default),
+  //         labels?: string[] (eine Referenz pro Empfänger; wenn gesetzt → N = labels.length) }
+  // Response: { ok, count, invites: [{token, inviteUrl, label, expiresAt, msgLimit}] }
+  // ────────────────────────────────────────────────────
+  if (path === "/invite/bulk" && request.method === "POST") {
+    const session = await requireSession(request, env);
+    if (!session || session.isGuest) return json(request, { error: "Not authenticated" }, 401);
+    const me = session.handle;
+
+    const rlOk = await rateLimit(env, `invite_bulk:${me}`, 600_000, 5);
+    if (!rlOk) return json(request, { error: "Rate limit exceeded" }, 429);
+
+    const org = await getVerifiedOrg(env, me);
+    if (!org) return json(request, { error: "Verified organization required", code: "org_required" }, 403);
+
+    let body;
+    try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
+    const { expiresInDays, count, msgLimit, labels } = body;
+
+    if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > MAX_ORG_INVITE_DAYS) {
+      return json(request, { error: `expiresInDays must be an integer between 1 and ${MAX_ORG_INVITE_DAYS}` }, 400);
+    }
+    let msgLimitFinal = 0;   // Org-Kanal-Default: unbegrenzt
+    if (msgLimit !== undefined && msgLimit !== null) {
+      if (!Number.isInteger(msgLimit) || msgLimit < 0 || msgLimit > 100_000) {
+        return json(request, { error: "msgLimit must be an integer between 0 (unlimited) and 100000" }, 400);
+      }
+      msgLimitFinal = msgLimit;
+    }
+
+    // N bestimmen: labels haben Vorrang (Serienbrief-Liste), sonst count.
+    let cleanLabels = null;
+    if (labels !== undefined && labels !== null) {
+      if (!Array.isArray(labels) || labels.length === 0 || labels.length > 500) {
+        return json(request, { error: "labels must be a non-empty array (max 500)" }, 400);
+      }
+      cleanLabels = [];
+      for (const l of labels) {
+        if (typeof l !== "string" || l.trim().length > 120) {
+          return json(request, { error: "each label must be a string (max 120 chars)" }, 400);
+        }
+        cleanLabels.push(l.trim() || null);   // leere Zeile = Invite ohne Label
+      }
+    }
+    const n = cleanLabels ? cleanLabels.length : count;
+    if (!Number.isInteger(n) || n < 1 || n > 500) {
+      return json(request, { error: "count must be an integer between 1 and 500 (or provide labels)" }, 400);
+    }
+
+    const now       = Date.now();
+    const expiresAt = now + expiresInDays * 86400_000;
+    const stmtPlain = env.RENEX_DB.prepare(
+      `INSERT INTO guest_sessions
+         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
+       VALUES (?, '', 'dm', ?, ?, ?, ?, 0, '', NULL)`
+    );
+    const stmtLabel = env.RENEX_DB.prepare(
+      `INSERT INTO guest_sessions
+         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, label)
+       VALUES (?, '', 'dm', ?, ?, ?, ?, 0, '', NULL, ?)`
+    );
+
+    const invites = [];
+    const stmts   = [];
+    for (let i = 0; i < n; i++) {
+      const token = generateGuestToken();
+      const lbl   = cleanLabels ? cleanLabels[i] : null;
+      stmts.push(lbl !== null
+        ? stmtLabel.bind(token, me, now, expiresAt, msgLimitFinal, lbl)
+        : stmtPlain.bind(token, me, now, expiresAt, msgLimitFinal));
+      invites.push({
+        token,
+        inviteUrl: `https://renex.id/join?token=${token}`,
+        label: lbl,
+        expiresAt,
+        msgLimit: msgLimitFinal,
+      });
+    }
+    // D1-batch in 50er-Chunks (atomar pro Chunk; bei Teilfehler bleiben die
+    // bereits angelegten Templates gültig — Tokens sind unabhängig).
+    for (let i = 0; i < stmts.length; i += 50) {
+      await env.RENEX_DB.batch(stmts.slice(i, i + 50));
+    }
+
+    return json(request, { ok: true, count: n, invites });
+  }
+
+  // ────────────────────────────────────────────────────
+  // GET /invite/list  (eGov 1.2, Häppchen 6 — nur verifizierte Orgs)
+  // Übersicht der eigenen Invites/Gast-Kanäle fürs Org-UI: Label↔Gast-Brücke,
+  // Status, Aktivität. SICHERHEIT: Session-Tokens (= Bearer-Secrets aktiver
+  // Gäste) werden NIE zurückgegeben — nur Template-Tokens (fürs QR-Re-Print).
+  // ────────────────────────────────────────────────────
+  if (path === "/invite/list" && request.method === "GET") {
+    const session = await requireSession(request, env);
+    if (!session || session.isGuest) return json(request, { error: "Not authenticated" }, 401);
+    const me = session.handle;
+
+    const org = await getVerifiedOrg(env, me);
+    if (!org) return json(request, { error: "Verified organization required", code: "org_required" }, 403);
+
+    const rlOk = await rateLimit(env, `invite_list:${me}`, 60_000, 30);
+    if (!rlOk) return json(request, { error: "Rate limit exceeded" }, 429);
+
+    // SELECT * = tolerant gegenüber (noch) fehlender label-Spalte
+    const rows = await env.RENEX_DB.prepare(
+      "SELECT * FROM guest_sessions WHERE created_by = ? ORDER BY created_at DESC LIMIT 500"
+    ).bind(me).all();
+
+    const nowTs = Date.now();
+    const invites = (rows.results ?? []).map((r) => {
+      const isTemplate = !r.guest_handle || r.guest_handle === "" || r.guest_handle === "__used__";
+      let status;
+      if (r.converted_to)                       status = "converted";
+      else if (r.guest_handle === "__used__")   status = "consumed";
+      else if (nowTs > r.expires_at)            status = "expired";
+      else if (isTemplate)                      status = "open";
+      else                                      status = "active";
+      return {
+        label:      r.label ?? null,
+        status,
+        createdAt:  r.created_at,
+        expiresAt:  r.expires_at,
+        msgLimit:   r.msg_limit,
+        msgCount:   isTemplate ? null : r.msg_count,
+        guestHandle: isTemplate ? null : r.guest_handle,
+        // Nur offene Templates: Token/URL fürs Re-Print — nie Session-Tokens!
+        token:      status === "open" ? r.token : null,
+        inviteUrl:  status === "open" ? `https://renex.id/join?token=${r.token}` : null,
+      };
+    });
+
+    return json(request, { ok: true, invites });
   }
 
   // ────────────────────────────────────────────────────
@@ -525,11 +683,21 @@ export async function handleInviteRoutes(request, env, path, params) {
     }
 
     // ── Session-Row in D1 anlegen (inkl. Terms-Nachweis) ──────────────────
-    await env.RENEX_DB.prepare(
-      `INSERT INTO guest_sessions
-         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, terms_accepted_at, terms_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?)`
-    ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle, joinTs, termsVersion).run();
+    // Label wandert vom Template auf die Session (Serienbrief↔Handle-Brücke
+    // für GET /invite/list); dynamisch = migrations-sicher für Consumer.
+    if (inviteRow.label != null) {
+      await env.RENEX_DB.prepare(
+        `INSERT INTO guest_sessions
+           (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, terms_accepted_at, terms_version, label)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, ?)`
+      ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle, joinTs, termsVersion, inviteRow.label).run();
+    } else {
+      await env.RENEX_DB.prepare(
+        `INSERT INTO guest_sessions
+           (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, terms_accepted_at, terms_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?)`
+      ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle, joinTs, termsVersion).run();
+    }
 
     // ── DM-Invite: Template-Row invalidieren (einmalig verwendbar) ─────
     if (inviteRow.convo_type === "dm") {

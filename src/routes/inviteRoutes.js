@@ -1,5 +1,6 @@
 import { json, param, corsHeaders, dmConvoId, isUUID, validateConvoId, generateGuestToken, generateGuestHandle } from '../utils.js';
 import { requireSession, requireGuestSession, getGuestToken, rateLimit, GUEST_TOKEN_RE, GUEST_HANDLE_RE, pushToGroupMembers, pushToUserDO } from '../auth.js';
+import { getVerifiedOrg } from '../lib/orgs.js';
 
 // ======================================================
 // INVITE ROUTES — Gastzugang ohne Passkey
@@ -183,6 +184,7 @@ export async function handleInviteRoutes(request, env, path, params) {
           sess.convo_type === row.convo_type &&
           sess.guest_handle && GUEST_HANDLE_RE.test(sess.guest_handle)
         ) {
+          const resumedOrg = await getVerifiedOrg(env, sess.created_by);
           return json(request, {
             valid:         true,
             resumed:       true,
@@ -191,11 +193,12 @@ export async function handleInviteRoutes(request, env, path, params) {
             guestHandle:   sess.guest_handle,
             inviterHandle: sess.created_by,
             createdBy:     sess.created_by,
-            displayName:   sess.created_by + "'s Chat",
+            displayName:   resumedOrg ? resumedOrg.name : sess.created_by + "'s Chat",
             expiresAt:     sess.expires_at,
             msgLimit:      GUEST_MSG_LIMIT,
             sessionToken:  guestToken,
             msgCount:      0,
+            verifiedSender: resumedOrg,
           });
         }
       }
@@ -218,6 +221,12 @@ export async function handleInviteRoutes(request, env, path, params) {
       if (convo?.name) displayName = convo.name;
     }
 
+    // Verified-Sender (eGov 1.1): Landing-Page zeigt den REGISTERNAMEN der Org
+    // statt "<handle>'s Chat" + Badge-Daten ("Identität geprüft am … via …").
+    // Quishing-Anker: Das Badge existiert nur hier (nach dem Scan), nie im Brief.
+    const org = await getVerifiedOrg(env, row.created_by);
+    if (org && row.convo_type === "dm") displayName = org.name;
+
     return json(request, {
       valid: true,
       convoType:   row.convo_type,
@@ -225,6 +234,7 @@ export async function handleInviteRoutes(request, env, path, params) {
       createdBy:   row.created_by,
       expiresAt:   row.expires_at,
       msgLimit:    GUEST_MSG_LIMIT,
+      verifiedSender: org,
     });
   }
 

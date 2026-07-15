@@ -2,6 +2,7 @@ import { json, readJson, base64url, base64urlToString, base64urlToArrayBuffer, d
 import { requireSession, requireAnySession, rateLimit, getToken, registerSessionToken, unregisterSessionToken, revokeAllSessions, verifyTurnstile, pushToGroupMembers, getUserTier } from '../auth.js';
 import { handleLoginFinish } from '../helpers/loginFinish.js';
 import { readCredentials, writeCredentials, MAX_PASSKEYS } from '../helpers/credentials.js';
+import { getVerifiedOrg } from '../lib/orgs.js';
 
 // ======================================================
 // AUTH ROUTES: /auth/register/*, /auth/login/*,
@@ -53,7 +54,10 @@ export async function handleAuthRoutes(request, env, path, params) {
     if (!rlLookup) return json(request, { error: "Too many requests" }, 429);
     const targetHandle = profileMatch[1];
     const profile = await readProfile(env, targetHandle);
-    return json(request, profile);
+    // Verified-Sender (eGov 1.1): Badge-Daten fürs Chat-Header-UI.
+    // null für normale User; Semantik: "Identität geprüft am … via …".
+    const org = await getVerifiedOrg(env, targetHandle);
+    return json(request, { ...profile, org });
   }
 
   switch (path) {

@@ -195,6 +195,36 @@
       opacity: 1;
     }
 
+    /* ── Verified-Sender-Badge (eGov 1.1) ────────────────
+       Quishing-Anker: existiert NUR hier nach dem Scan, nie im Brief.
+       Semantik unveränderlich: "Identität geprüft am DATUM via METHODE". */
+    .verified-badge {
+      display: none;              /* sichtbar nur bei data.verifiedSender */
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin: 8px auto 0;
+      padding: 5px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(60, 228, 122, 0.4);
+      background: rgba(60, 228, 122, 0.1);
+      color: var(--status-speaking, #3CE47A);
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .verified-badge:hover { background: rgba(60, 228, 122, 0.18); }
+
+    .verified-cert {
+      display: none;
+      border-left: 2px solid var(--status-speaking, #3CE47A);
+      padding: 8px 0 8px 14px;
+      font-size: 12.5px;
+      color: var(--text-secondary, #9A9AA3);
+      text-align: left;
+      line-height: 1.6;
+    }
+
     .status {
       font-size: 13px;
       color: var(--text-secondary, #9A9AA3);
@@ -246,12 +276,22 @@
   <div>
     <div class="invite-title" id="chatName">Chat</div>
     <div class="invite-sub" id="invitedByText" style="margin-top:6px"></div>
+    <!-- Verified-Sender-Badge (eGov 1.1): nur bei verifizierter Org sichtbar;
+         antippbar → Prüf-Details. KEIN Pendant im Brief (dort nur Klartext-URL). -->
+    <button type="button" class="verified-badge" id="verifiedBadge" onclick="window.__toggleVerifiedCert()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      <span id="verifiedBadgeText">Verifizierte Organisation</span>
+    </button>
+    <div class="verified-cert" id="verifiedCert"></div>
   </div>
 
   <div style="display:flex; flex-direction:column; gap:14px">
     <div class="info-row"><span id="info-access"></span></div>
     <div class="info-row"><span id="info-messages"></span></div>
     <div class="info-row"><span id="info-e2e"></span></div>
+    <!-- Nur bei verifizierter Org eingeblendet (eGov 1.1): -->
+    <div class="info-row" id="row-emergency" style="display:none"><span id="info-emergency"></span></div>
+    <div class="info-row" id="row-payment" style="display:none"><span id="info-payment"></span></div>
   </div>
 
   <!-- Turnstile Widget -->
@@ -466,6 +506,11 @@
       document.getElementById("chatName").textContent = data.displayName || "Chat";
       document.getElementById("invitedByText").innerHTML = lang.invitedByText(data.createdBy || "?");
 
+      // Verified-Sender (eGov 1.1): Badge + Prüf-Details + Org-Info-Rows.
+      if (data.verifiedSender) {
+        window.__applyVerifiedSender(data.verifiedSender, data.expiresAt);
+      }
+
       // Eingeloggter User (ECHTER Account, kein Gast)? → sofort beitreten
       // Guest-Handles (guest_xyz) werden von chat.js auch in my_user gesetzt,
       // sind aber KEINE echten Logins → sonst würde joinAsLoggedInUser mit
@@ -637,6 +682,45 @@
     } catch (e) {
       showError(lang.connectionError, lang.checkConnection);
     }
+  }
+
+  // ── Verified-Sender-UI (eGov 1.1) ─────────────────────
+  // Global exponiert (window.__applyVerifiedSender), damit die Darstellung
+  // im Dev-Preview mit Fixture-Daten verifizierbar ist, ohne einen echten
+  // Org-Invite zu brauchen. Produktion ruft sie nur aus dem Startup-Pfad.
+  window.__applyVerifiedSender = function(vs, expiresAt) {
+    if (!vs || !vs.name) return;
+    const badge = document.getElementById("verifiedBadge");
+    document.getElementById("verifiedBadgeText").textContent = lang.verifiedOrgBadge;
+    badge.style.display = "inline-flex";
+
+    // Prüf-Details: "Identität geprüft am DATUM via METHODE" + Handle
+    const methodLabel = (lang.verifiedMethods && lang.verifiedMethods[vs.verificationMethod]) || vs.verificationMethod || "?";
+    const dateStr = vs.verifiedAt ? new Date(vs.verifiedAt).toLocaleDateString() : "?";
+    document.getElementById("verifiedCert").innerHTML =
+      `<strong>${escapeHtml(vs.name)}</strong> · @${escapeHtml(vs.handle || "?")}<br />` +
+      lang.verifiedCertLine(escapeHtml(dateStr), methodLabel);
+
+    // Org-Invites: ehrliche Zugangs-Zeile (statt "24 Stunden") + Org-Hinweise
+    if (typeof expiresAt === "number" && expiresAt > Date.now()) {
+      document.getElementById("info-access").innerHTML =
+        lang.accessUntilDate(escapeHtml(new Date(expiresAt).toLocaleDateString()));
+    }
+    document.getElementById("info-emergency").innerHTML = lang.noEmergencyChannel;
+    document.getElementById("info-payment").textContent = lang.neverAsksPayment;
+    document.getElementById("row-emergency").style.display = "flex";
+    document.getElementById("row-payment").style.display = "flex";
+  };
+
+  window.__toggleVerifiedCert = function() {
+    const cert = document.getElementById("verifiedCert");
+    cert.style.display = cert.style.display === "block" ? "none" : "block";
+  };
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
   }
 
   // ── Helpers ───────────────────────────────────────────

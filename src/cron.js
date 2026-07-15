@@ -180,6 +180,14 @@ export async function scheduled(event, env) {
     console.error("❌ Guest-Session-Retention fehlgeschlagen:", e);
   }
 
+  // ── Gast-Ablauf-Vorwarnung (eGov 1.2) ────────────────────────────────
+  try {
+    const warned = await runGuestExpiryWarnings(env);
+    if (warned > 0) console.log(`⏳ Gast-Ablauf-Vorwarnung: ${warned} System-Message(s) gesetzt`);
+  } catch (e) {
+    console.error("❌ Gast-Ablauf-Vorwarnung fehlgeschlagen:", e);
+  }
+
   // ======================================================
   // Multi-Device Cron-Sweeps (Phase 1B.1)
   // Spec: docs/MULTI_DEVICE.md §3, §6, §7.4 (Δ6)
@@ -441,4 +449,54 @@ async function _revokedRetention(env) {
   } catch (e) {
     console.error("❌ Revoked-Retention fehlgeschlagen:", e);
   }
+}
+
+// ======================================================
+// Gast-Ablauf-Vorwarnung (eGov 1.2, Häppchen 3b)
+//
+// Langlebige Org-Gast-Sessions (Brief-Szenario, 30–365d) laufen sonst STILL
+// ab → Key-/History-Verlust ohne jede Warnung. Der Sweep setzt bei ≤30d und
+// ≤7d Restlaufzeit je EINE System-Message in die Konversation:
+//   __guest_expiry_30d__ / __guest_expiry_7d__  (Frontend lokalisiert, mit
+//   Konto-erstellen-Hinweis = O8-Konvertierungs-Funnel; die ORG sieht die
+//   Message ebenfalls und kann reagieren — sie ist der verlässlichste Kanal,
+//   denn Gäste können keine Push-Notifications empfangen).
+//
+// Gates: Nur Sessions, deren GESAMTDAUER die Schwelle deutlich übersteigt
+// (24h-Consumer-Gäste bekommen nie eine "läuft in 30 Tagen ab"-Warnung).
+// Fenster sind disjunkt ((7d,30d] bzw. (0,7d]) — fällt der Cron länger aus,
+// gibt es trotzdem höchstens die dringlichere Warnung, nie beide in einer
+// Stunde. Idempotenz per KV-Marker mit TTL bis nach Ablauf.
+//
+// Exportiert für Unit-Tests. @returns {Promise<number>} gesetzte Warnungen
+// ======================================================
+export async function runGuestExpiryWarnings(env) {
+  const WARN_STEPS = [
+    { key: '30d', lowerMs: 7 * 86400_000, upperMs: 30 * 86400_000, minDurationMs: 31 * 86400_000 },
+    { key: '7d',  lowerMs: 0,             upperMs: 7 * 86400_000,  minDurationMs: 8 * 86400_000 },
+  ];
+  let warned = 0;
+  for (const step of WARN_STEPS) {
+    const nowTs = Date.now();
+    const rows = await env.RENEX_DB.prepare(
+      `SELECT token, convo_id, guest_handle, created_at, expires_at FROM guest_sessions
+       WHERE converted_to IS NULL AND guest_handle != '' AND guest_handle != '__used__'
+         AND convo_id != ''
+         AND expires_at > ? AND expires_at <= ?
+         AND (expires_at - created_at) >= ?`
+    ).bind(nowTs + step.lowerMs, nowTs + step.upperMs, step.minDurationMs).all();
+
+    for (const g of (rows.results ?? [])) {
+      const marker = `guest_expiry_warned:${step.key}:${g.token}`;
+      if (await env.RENEX_KV.get(marker)) continue;
+      await env.RENEX_DB.prepare(
+        `INSERT INTO messages (id, convo_id, from_user, to_user, ts, type, message, e2e)
+         VALUES (?, ?, ?, NULL, ?, 'system', ?, 0)`
+      ).bind(crypto.randomUUID(), g.convo_id, g.guest_handle, nowTs, `__guest_expiry_${step.key}__`).run();
+      const ttlSec = Math.max(60, Math.floor((g.expires_at - nowTs) / 1000) + 86400);
+      await env.RENEX_KV.put(marker, '1', { expirationTtl: ttlSec });
+      warned++;
+    }
+  }
+  return warned;
 }

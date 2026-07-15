@@ -178,6 +178,7 @@ export default {
   convertSuccess:        "Cuenta de invitado reclamada ✓",
   guestConvertedToast:   "👤 {old} ahora es {new}",
   sysGuestConvertNotice: "Un invitado se registró. Los mensajes cifrados anteriores siguen siendo ilegibles para los demás participantes.",
+  sysGuestExpiryWarn: "Este acceso de invitado caduca en {n} días. Crea una cuenta para conservar el chat y las claves.",
   sysGuestNowReal:       "👤 {old} ahora es @{new}",
   sysNowAdmin:           "👑 {user} ahora es Admin",
   guestJoinedToast:      "👤 {handle} se unió",
@@ -569,6 +570,7 @@ export default {
   // GuestBanner (info de sesión sobre el chat)
   guestSessionExpiresIn:   "La sesión caduca en",
   guestSessionExpired:     "Sesión de invitado caducada",
+  guestDaysLeft:           "{n} días",
   guestMessagesLeft:       "Mensajes restantes",
   guestMsgLimitReached:    "Límite de mensajes alcanzado",
   guestCreateAccount:      "Crear cuenta",

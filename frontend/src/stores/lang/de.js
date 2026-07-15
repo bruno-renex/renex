@@ -178,6 +178,7 @@ export default {
   convertSuccess:        "Gast-Konto übernommen ✓",
   guestConvertedToast:   "👤 {old} ist jetzt {new}",
   sysGuestConvertNotice: "Ein Gast hat sich registriert. Frühere verschlüsselte Nachrichten bleiben für die anderen Teilnehmer unlesbar.",
+  sysGuestExpiryWarn: "Dieser Gast-Zugang läuft in {n} Tagen ab. Mit einem Konto bleiben Chat und Schlüssel erhalten.",
   sysGuestNowReal:       "👤 {old} ist jetzt @{new}",
   sysNowAdmin:           "👑 {user} ist jetzt Admin",
   guestJoinedToast:      "👤 {handle} ist beigetreten",
@@ -569,6 +570,7 @@ export default {
   // GuestBanner (Session-Info im Chat-Header)
   guestSessionExpiresIn:   "Session läuft ab in",
   guestSessionExpired:     "Gast-Session abgelaufen",
+  guestDaysLeft:           "{n} Tage",
   guestMessagesLeft:       "Verbleibende Nachrichten",
   guestMsgLimitReached:    "Nachrichten-Limit erreicht",
   guestCreateAccount:      "Account erstellen",

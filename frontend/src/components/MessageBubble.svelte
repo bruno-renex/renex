@@ -139,6 +139,14 @@
       return lng.sysGuestConvertNotice
         || 'Ein Gast hat sich registriert. Frühere Nachrichten bleiben verschlüsselt.';
     }
+    // eGov 1.2: Cron-Vorwarnung (runGuestExpiryWarnings) für ablaufende
+    // langlebige Gast-Sessions — sichtbar für Gast UND Org (= deren Alarmpfad).
+    const expiry = raw.match(/^__guest_expiry_(30|7)d__$/);
+    if (expiry) {
+      const tmpl = lng.sysGuestExpiryWarn
+        || 'Dieser Gast-Zugang läuft in {n} Tagen ab. Mit einem Konto bleiben Chat und Schlüssel erhalten.';
+      return tmpl.replace('{n}', expiry[1]);
+    }
     // Pattern: "<guest_xxxx> is now <realHandle>" (DM + Gruppe nach Convert)
     const conv = raw.match(/^(guest_[a-z0-9]+) is now ([a-z0-9_]+)$/i);
     if (conv) {

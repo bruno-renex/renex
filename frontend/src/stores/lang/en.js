@@ -178,6 +178,7 @@ export default {
   convertSuccess:        "Guest account claimed ✓",
   guestConvertedToast:   "👤 {old} is now {new}",
   sysGuestConvertNotice: "A guest registered an account. Previous encrypted messages remain unreadable for the other participants.",
+  sysGuestExpiryWarn: "This guest access expires in {n} days. Create an account to keep your chat and keys.",
   sysGuestNowReal:       "👤 {old} is now @{new}",
   sysNowAdmin:           "👑 {user} is now Admin",
   guestJoinedToast:      "👤 {handle} joined",
@@ -569,6 +570,7 @@ export default {
   // GuestBanner (Session-Info im Chat-Header)
   guestSessionExpiresIn:   "Session expires in",
   guestSessionExpired:     "Guest session expired",
+  guestDaysLeft:           "{n} days",
   guestMessagesLeft:       "Messages remaining",
   guestMsgLimitReached:    "Message limit reached",
   guestCreateAccount:      "Create account",

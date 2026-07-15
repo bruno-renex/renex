@@ -15,6 +15,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { apiFetch } from '../lib/api.js';
   import { i18nStore } from '../stores/i18n.svelte.js';
+  import { formatGuestRemaining, guestWarnLevel } from '../lib/guestTime.js';
 
   let lang = $derived(i18nStore.lang);
 
@@ -84,18 +85,16 @@
   let msgsLeft = $derived(msgLimit !== null ? Math.max(0, msgLimit - msgCount) : null);
   let isMsgLimitReached = $derived(msgsLeft === 0);
 
-  // Format remaining time: "1h 23min" / "45min" / "30s"
+  // Format remaining time: "89 Tage" (langlebige Org-Sessions) / "1h 23min" / "45min" / "30s"
   let remainingText = $derived.by(() => {
     if (remainingMs === null) return '';
     if (isExpired) return lang.guestSessionExpired || 'abgelaufen';
-    const totalSec = Math.floor(remainingMs / 1000);
-    const h = Math.floor(totalSec / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
-    const s = totalSec % 60;
-    if (h > 0) return `${h}h ${m}min`;
-    if (m > 0) return `${m}min`;
-    return `${s}s`;
+    return formatGuestRemaining(remainingMs, lang.guestDaysLeft || '{n} Tage');
   });
+
+  // 'warn' im Fenster (24h, 7d]: Org-Session nähert sich dem Ende → Banner
+  // färbt amber. Consumer-Sessions (≤24h Gesamt) bleiben unverändert.
+  let warnLevel = $derived(guestWarnLevel(remainingMs));
 
   // ── "Account erstellen"-Flow ────────────────────────────────
   // Setzt pendingGuestConvert (für post-register migration) und redirected
@@ -121,7 +120,7 @@
   }
 </script>
 
-<div class="guest-banner" class:expired={isExpired || isMsgLimitReached}>
+<div class="guest-banner" class:expired={isExpired || isMsgLimitReached} class:warnsoon={warnLevel === 'warn' && !isExpired && !isMsgLimitReached}>
   <div class="info">
     {#if isExpired}
       <span class="warn">⚠️ {lang.guestSessionExpired || 'Gast-Session abgelaufen'}</span>
@@ -160,6 +159,11 @@
 
   .guest-banner.expired {
     background: linear-gradient(90deg, rgba(239, 68, 68, 0.14), rgba(239, 68, 68, 0.04));
+  }
+
+  /* Ablauf-Vorwarnung (24h–7d Restlaufzeit langer Org-Sessions): amber */
+  .guest-banner.warnsoon {
+    background: linear-gradient(90deg, rgba(245, 158, 11, 0.14), rgba(245, 158, 11, 0.04));
   }
 
   .info {

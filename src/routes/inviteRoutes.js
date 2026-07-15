@@ -163,6 +163,87 @@ export async function handleInviteRoutes(request, env, path, params) {
   }
 
   // ────────────────────────────────────────────────────
+  // POST /invite/kill-session  (eGov 1.2, Häppchen 3)
+  // Einlader/Org beendet eine AKTIVE Gast-Session SOFORT — der Alarm-/
+  // Widerrufspfad („Brief nie erhalten", Fehlzustellung, Missbrauchsverdacht,
+  // Offboarding). /invite/revoke deckt nur UNBENUTZTE Template-Rows;
+  // dieser Endpoint ist das Gegenstück für bereits gejointe Gäste.
+  // Body: { guestHandle }
+  // Effekt: expires_at = jetzt (D1) + KV-Session-Purge → nächster Request des
+  // Gasts läuft ins Leere; Membership/Kontakte werden inline entfernt (der
+  // Guest-Cleanup-Cron würde sie sonst erst beim nächsten Lauf räumen).
+  // ────────────────────────────────────────────────────
+  if (path === "/invite/kill-session" && request.method === "POST") {
+    const session = await requireSession(request, env);
+    if (!session || session.isGuest) return json(request, { error: "Not authenticated" }, 401);
+    const me = session.handle;
+
+    const rlOk = await rateLimit(env, `invite_kill:${me}`, 60_000, 20);
+    if (!rlOk) return json(request, { error: "Rate limit exceeded" }, 429);
+
+    let body;
+    try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
+
+    const { guestHandle } = body;
+    if (!guestHandle || !GUEST_HANDLE_RE.test(guestHandle)) {
+      return json(request, { error: "Invalid guestHandle" }, 400);
+    }
+
+    // Aktive (nicht konvertierte) Session-Row zum Handle — Handles sind beim
+    // Join kollisionsgeprüft, LIMIT 1 reicht.
+    const row = await env.RENEX_DB.prepare(
+      "SELECT token, convo_id, created_by, converted_to FROM guest_sessions WHERE guest_handle = ? LIMIT 1"
+    ).bind(guestHandle).first();
+    if (!row || row.converted_to) return json(request, { error: "Guest session not found" }, 404);
+    // Ownership: nur der Einlader darf killen
+    if (row.created_by !== me) return json(request, { error: "Not authorized" }, 403);
+
+    const killTs = Date.now();
+
+    // 1) D1: Session sofort abgelaufen (requireGuestSession-D1-Fallback greift)
+    await env.RENEX_DB.prepare(
+      "UPDATE guest_sessions SET expires_at = ? WHERE token = ?"
+    ).bind(killTs, row.token).run();
+
+    // 2) KV: Auth-Cache purgen (requireGuestSession-Fast-Path greift)
+    await env.RENEX_KV.delete(`guest_session:${row.token}`);
+
+    // 3) Ephemere E2E-Inbox-Keys des Gasts räumen (best-effort)
+    try {
+      const idxRaw = await env.RENEX_KV.get(`e2e:inbox:index:${guestHandle}`);
+      if (idxRaw) {
+        let ids = [];
+        try { ids = JSON.parse(idxRaw); } catch {}
+        for (const d of (Array.isArray(ids) ? ids : [])) {
+          await env.RENEX_KV.delete(`e2e:inbox:${guestHandle}:${d}`);
+        }
+      }
+      await env.RENEX_KV.delete(`e2e:inbox:index:${guestHandle}`);
+    } catch {}
+
+    // 4) Membership + Kontakte sofort entfernen (Cron-Logik inline, idempotent)
+    if (row.convo_id) {
+      await env.RENEX_DB.prepare(
+        "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ? AND role = 'guest'"
+      ).bind(row.convo_id, guestHandle).run();
+    }
+    await env.RENEX_DB.prepare(
+      "UPDATE contacts SET status = 'removed', updated_at = ? WHERE contact_handle = ? AND status = 'accepted'"
+    ).bind(killTs, guestHandle).run();
+    await env.RENEX_DB.prepare(
+      "UPDATE contacts SET status = 'removed', updated_at = ? WHERE user_handle = ? AND status = 'accepted'"
+    ).bind(killTs, guestHandle).run();
+    await env.RENEX_KV.put(`contacts_v:${me}`, String(killTs));
+
+    // 5) Gast live informieren, falls WS offen (best-effort; AWAIT wg. CF-Runtime)
+    await pushToUserDO(env, guestHandle, {
+      id: crypto.randomUUID(), type: "GUEST_SESSION_KILLED", ts: killTs,
+    }).catch(() => {});
+
+    return json(request, { ok: true, guestHandle });
+  }
+
+  // ────────────────────────────────────────────────────
   // GET /invite/info?token=...
   // Öffentlich — gibt Konvo-Info für die Join-Landing-Page zurück
   // ────────────────────────────────────────────────────

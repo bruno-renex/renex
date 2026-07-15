@@ -13,7 +13,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['20', '22']
+        # Node 20 ist EOL (04/2026) und kennt node:sqlite nicht (cronRetentionCap-Test).
+        node: ['22', '24']
 
     steps:
       - name: Checkout
@@ -59,8 +60,9 @@ jobs:
 
       - name: Verify required spec docs exist
         run: |
+          # MULTI_DEVICE/GROUPS_MULTIDEVICE: seit Doku-Archivierung 2026-07-12 unter docs/archive/
           for f in docs/MANIFESTO.md docs/VISION.md docs/PROTOCOL.md \
-                   docs/MULTI_DEVICE.md docs/RECOVERY.md docs/GROUPS_MULTIDEVICE.md \
+                   docs/archive/MULTI_DEVICE.md docs/RECOVERY.md docs/archive/GROUPS_MULTIDEVICE.md \
                    docs/THREAT_MODEL.md \
                    docs/CONTRIBUTING.md docs/CHANGELOG.md \
                    LICENSE LICENSE-MIT LICENSE-APACHE LICENSE-AGPL \

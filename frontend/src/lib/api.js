@@ -21,6 +21,10 @@ const API = "https://api.renex.id";
  * geblockt wird oder verloren geht. Das Backend liest beide Quellen
  * (Cookie + Header) — Header gewinnt wenn beide vorhanden.
  */
+// Exportiert für Nicht-JSON-Fetches (uploadHelper: rohe Bytes), die den
+// Safari-ITP-Fallback-Header X-Guest-Token selbst setzen müssen.
+export function readGuestToken() { return _readGuestToken(); }
+
 function _readGuestToken() {
   try {
     if (typeof localStorage === "undefined") return null;

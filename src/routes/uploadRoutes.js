@@ -47,13 +47,21 @@ export async function handleUploadRoutes(request, env, path, params) {
   // Header: X-Mime-Type, X-File-Name, X-File-Size, X-Attachment-Type, X-Convo-Id
   // =========================
   if (path === "/upload/file" && request.method === "POST") {
-    const session = await requireSession(request, env);
+    // eGov 1.2: Gäste dürfen hochladen (Bürger reicht Dokument/Foto ein) —
+    // aber nur in ihre zugewiesene Konversation (Gate unten, nach convoId-Parse)
+    // und mit zusätzlicher Tages-Quota gegen R2-Storage-Abuse.
+    const session = await requireAnySession(request, env);
     if (!session) return json(request, { error: "Not authenticated" }, 401);
     const me = session.handle;
+    const isGuest = session.isGuest === true;
 
     // Rate limit: 20 Uploads pro Minute
     const ok = await rateLimit(env, `upload_file:${me}`, 60_000, 20);
     if (!ok) return json(request, { error: "Upload rate limit exceeded", retryAfterMs: 60000 }, 429);
+    if (isGuest) {
+      const okDay = await rateLimit(env, `upload_guest_day:${me}`, 86_400_000, 100);
+      if (!okDay) return json(request, { error: "Daily upload limit reached" }, 429);
+    }
 
     // Metadaten aus Headers lesen
     const mimeType      = request.headers.get("X-Mime-Type")      || "application/octet-stream";
@@ -87,6 +95,11 @@ export async function handleUploadRoutes(request, env, path, params) {
     const isDmConvo    = /^[a-z0-9_]{1,30}:[a-z0-9_]{1,30}$/.test(convoId);
     if (!isGroupConvo && !isDmConvo) {
       return json(request, { error: "Invalid convoId format" }, 400);
+    }
+    // Gäste: ausschließlich die eigene zugewiesene Konversation (wie beim
+    // Download, uploadRoutes GET; deckt DM UND Gruppen-Gäste ab).
+    if (isGuest && convoId !== session.convoId) {
+      return json(request, { error: "Not authorized for this conversation" }, 403);
     }
     if (isDmConvo) {
       // DM: Uploader muss einer der beiden Handles sein

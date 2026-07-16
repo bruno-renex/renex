@@ -15,7 +15,7 @@
 //   #5 Gamer-First UX: Resize spart Latenz + Cost
 // ======================================================
 
-import { apiFetch } from './api.js';
+import { apiFetch, readGuestToken } from './api.js';
 import {
   generateAttachmentKey, encryptAttachment, attachmentMetaToJson,
 } from './attachmentCrypto.js';
@@ -147,6 +147,9 @@ export async function uploadAttachment(file, attachmentType, convoId) {
     credentials: 'include',
     headers: {
       'Content-Type':       'application/octet-stream',
+      // Gast-Fallback wie in apiFetch: Safari/ITP kann das Session-Cookie
+      // dropen, während localStorage noch lebt — Header deckt beide Fälle.
+      ...(readGuestToken() ? { 'X-Guest-Token': readGuestToken() } : {}),
       'X-Mime-Type':        finalMime,
       'X-File-Name':        finalName.slice(0, 200),
       'X-File-Size':        String(prepared.size),

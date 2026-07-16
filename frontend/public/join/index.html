@@ -292,6 +292,8 @@
     <!-- Nur bei verifizierter Org eingeblendet (eGov 1.1): -->
     <div class="info-row" id="row-emergency" style="display:none"><span id="info-emergency"></span></div>
     <div class="info-row" id="row-payment" style="display:none"><span id="info-payment"></span></div>
+    <!-- Re-Entry (eGov 1.4-light): Karte wurde schon aktiviert, wird neu aktiviert -->
+    <div class="info-row" id="row-reentry" style="display:none; border-left-color:#f59e0b"><span id="info-reentry"></span></div>
   </div>
 
   <!-- Turnstile Widget -->
@@ -518,6 +520,12 @@
       // Verified-Sender (eGov 1.1): Badge + Prüf-Details + Org-Info-Rows.
       if (data.verifiedSender) {
         window.__applyVerifiedSender(data.verifiedSender, data.expiresAt);
+      }
+      // Re-Entry (eGov 1.4-light): Karte wurde bereits aktiviert — Hinweis,
+      // dass der bisherige Zugriff beim Beitreten beendet wird.
+      if (data.reEntry) {
+        document.getElementById("info-reentry").innerHTML = lang.reEntryHint;
+        document.getElementById("row-reentry").style.display = "flex";
       }
 
       // Eingeloggter User (ECHTER Account, kein Gast)? → sofort beitreten

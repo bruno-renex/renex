@@ -136,7 +136,9 @@ describe('Label am /invite/create + Join-Mitnahme', () => {
     expect(res.status).toBe(200);
     const sessionInsert = env._inserts.find(i => /terms_version/.test(i.sql));
     expect(sessionInsert.sql).toContain('label');
-    expect(sessionInsert.args[sessionInsert.args.length - 1]).toBe('Mitglied Müller');
+    expect(sessionInsert.sql).toContain('origin_token');   // H8: Org-Invites tragen Karten-Token
+    expect(sessionInsert.args[sessionInsert.args.length - 2]).toBe('Mitglied Müller');
+    expect(sessionInsert.args[sessionInsert.args.length - 1]).toBe('guest_' + 'a'.repeat(32));
     vi.unstubAllGlobals();
   });
 });

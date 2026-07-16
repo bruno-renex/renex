@@ -43,6 +43,62 @@ async function _orgInviteStillAuthorized(env, row) {
   return !!(await getVerifiedOrg(env, row.created_by));
 }
 
+// Re-Entry (eGov 1.4-light): Darf eine VERBRAUCHTE Karte neu aktiviert werden?
+// Nur langlebige Org-Templates (>24h), innerhalb der Kartenlaufzeit, Org aktiv,
+// und NICHT nachdem der Karteninhaber zum Konto konvertiert hat (dann ist die
+// Karte tot — sonst könnte ein Karten-Dieb den konvertierten Nutzer doppeln).
+// Sicherheitsmodell: Besitz der physischen Karte bleibt der Auth-Anker (O2/O3);
+// beim Re-Entry stirbt die alte Session SOFORT → Missbrauch wird sichtbar
+// (der echte Inhaber fliegt raus und meldet sich), nie still.
+async function _orgReEntryEligible(env, templateToken, row) {
+  const durationMs = Math.max(0, (row.expires_at ?? 0) - (row.created_at ?? 0));
+  if (durationMs <= GUEST_EXPIRY_MS) return false;
+  if (Date.now() > row.expires_at) return false;
+  if (!(await getVerifiedOrg(env, row.created_by))) return false;
+  try {
+    const converted = await env.RENEX_DB.prepare(
+      "SELECT 1 FROM guest_sessions WHERE origin_token = ? AND converted_to IS NOT NULL LIMIT 1"
+    ).bind(templateToken).first();
+    if (converted) return false;
+  } catch { /* origin_token-Spalte fehlt noch → keine Konvertierten auffindbar */ }
+  return true;
+}
+
+// Gemeinsame Kill-Kette (POST /invite/kill-session + Re-Entry-Ablösung):
+// D1-Expiry + KV-Auth-Purge + e2e-Inbox-Cleanup + Membership/Kontakte + Push.
+async function _killGuestSessionRow(env, { token, convo_id, guest_handle }, bumpHandle, killTs) {
+  await env.RENEX_DB.prepare(
+    "UPDATE guest_sessions SET expires_at = ? WHERE token = ?"
+  ).bind(killTs, token).run();
+  await env.RENEX_KV.delete(`guest_session:${token}`);
+  try {
+    const idxRaw = await env.RENEX_KV.get(`e2e:inbox:index:${guest_handle}`);
+    if (idxRaw) {
+      let ids = [];
+      try { ids = JSON.parse(idxRaw); } catch {}
+      for (const d of (Array.isArray(ids) ? ids : [])) {
+        await env.RENEX_KV.delete(`e2e:inbox:${guest_handle}:${d}`);
+      }
+    }
+    await env.RENEX_KV.delete(`e2e:inbox:index:${guest_handle}`);
+  } catch {}
+  if (convo_id) {
+    await env.RENEX_DB.prepare(
+      "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ? AND role = 'guest'"
+    ).bind(convo_id, guest_handle).run();
+  }
+  await env.RENEX_DB.prepare(
+    "UPDATE contacts SET status = 'removed', updated_at = ? WHERE contact_handle = ? AND status = 'accepted'"
+  ).bind(killTs, guest_handle).run();
+  await env.RENEX_DB.prepare(
+    "UPDATE contacts SET status = 'removed', updated_at = ? WHERE user_handle = ? AND status = 'accepted'"
+  ).bind(killTs, guest_handle).run();
+  if (bumpHandle) await env.RENEX_KV.put(`contacts_v:${bumpHandle}`, String(killTs));
+  await pushToUserDO(env, guest_handle, {
+    id: crypto.randomUUID(), type: "GUEST_SESSION_KILLED", ts: killTs,
+  }).catch(() => {});
+}
+
 export async function handleInviteRoutes(request, env, path, params) {
 
   // ────────────────────────────────────────────────────
@@ -191,9 +247,11 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     // Sofort als verbraucht markieren — /invite/info + /invite/join + /invite/accept
     // werden ab jetzt 410 zurückgeben.
+    // expires_at = jetzt sperrt die KARTE endgültig — auch gegen Re-Entry
+    // (eGov 1.4-light): eine widerrufene Org-Karte kann nie neu aktiviert werden.
     await env.RENEX_DB.prepare(
-      "UPDATE guest_sessions SET guest_handle = '__used__' WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
-    ).bind(token).run();
+      "UPDATE guest_sessions SET guest_handle = '__used__', expires_at = ? WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
+    ).bind(Date.now(), token).run();
 
     return json(request, { ok: true });
   }
@@ -235,46 +293,9 @@ export async function handleInviteRoutes(request, env, path, params) {
     if (row.created_by !== me) return json(request, { error: "Not authorized" }, 403);
 
     const killTs = Date.now();
-
-    // 1) D1: Session sofort abgelaufen (requireGuestSession-D1-Fallback greift)
-    await env.RENEX_DB.prepare(
-      "UPDATE guest_sessions SET expires_at = ? WHERE token = ?"
-    ).bind(killTs, row.token).run();
-
-    // 2) KV: Auth-Cache purgen (requireGuestSession-Fast-Path greift)
-    await env.RENEX_KV.delete(`guest_session:${row.token}`);
-
-    // 3) Ephemere E2E-Inbox-Keys des Gasts räumen (best-effort)
-    try {
-      const idxRaw = await env.RENEX_KV.get(`e2e:inbox:index:${guestHandle}`);
-      if (idxRaw) {
-        let ids = [];
-        try { ids = JSON.parse(idxRaw); } catch {}
-        for (const d of (Array.isArray(ids) ? ids : [])) {
-          await env.RENEX_KV.delete(`e2e:inbox:${guestHandle}:${d}`);
-        }
-      }
-      await env.RENEX_KV.delete(`e2e:inbox:index:${guestHandle}`);
-    } catch {}
-
-    // 4) Membership + Kontakte sofort entfernen (Cron-Logik inline, idempotent)
-    if (row.convo_id) {
-      await env.RENEX_DB.prepare(
-        "DELETE FROM conversation_members WHERE convo_id = ? AND member_handle = ? AND role = 'guest'"
-      ).bind(row.convo_id, guestHandle).run();
-    }
-    await env.RENEX_DB.prepare(
-      "UPDATE contacts SET status = 'removed', updated_at = ? WHERE contact_handle = ? AND status = 'accepted'"
-    ).bind(killTs, guestHandle).run();
-    await env.RENEX_DB.prepare(
-      "UPDATE contacts SET status = 'removed', updated_at = ? WHERE user_handle = ? AND status = 'accepted'"
-    ).bind(killTs, guestHandle).run();
-    await env.RENEX_KV.put(`contacts_v:${me}`, String(killTs));
-
-    // 5) Gast live informieren, falls WS offen (best-effort; AWAIT wg. CF-Runtime)
-    await pushToUserDO(env, guestHandle, {
-      id: crypto.randomUUID(), type: "GUEST_SESSION_KILLED", ts: killTs,
-    }).catch(() => {});
+    // Gemeinsame Kill-Kette (auch vom Re-Entry genutzt): D1-Expiry, KV-Purge,
+    // e2e-Inbox-Cleanup, Membership/Kontakte, GUEST_SESSION_KILLED-Push.
+    await _killGuestSessionRow(env, { token: row.token, convo_id: row.convo_id, guest_handle: guestHandle }, me, killTs);
 
     return json(request, { ok: true, guestHandle });
   }
@@ -484,6 +505,23 @@ export async function handleInviteRoutes(request, env, path, params) {
           });
         }
       }
+      // Re-Entry (eGov 1.4-light): verbrauchte LANGLEBIGE Org-Karte ohne
+      // Session-Beweis → Neu-Aktivierung anbieten statt totem "already_used".
+      // Die Landing-Page zeigt dann den Hinweis „bisheriger Zugriff wird
+      // beendet"; der eigentliche Ablösungs-Kill passiert in /invite/join.
+      if (await _orgReEntryEligible(env, token, row)) {
+        const reOrg = await getVerifiedOrg(env, row.created_by);
+        return json(request, {
+          valid:     true,
+          reEntry:   true,
+          convoType: row.convo_type,
+          displayName: (reOrg && row.convo_type === "dm") ? reOrg.name : row.created_by + "'s Chat",
+          createdBy:  row.created_by,
+          expiresAt:  row.expires_at,
+          msgLimit:   row.msg_limit ?? GUEST_MSG_LIMIT,
+          verifiedSender: reOrg,
+        });
+      }
       return json(request, { valid: false, reason: "already_used" }, 410);
     }
     if (Date.now() > row.expires_at)  return json(request, { valid: false, reason: "expired" }, 410);
@@ -575,12 +613,35 @@ export async function handleInviteRoutes(request, env, path, params) {
     }
 
     // ── Invite-Template-Row laden (guest_handle leer = unbenutzte Vorlage) ─
-    const inviteRow = await env.RENEX_DB.prepare(
+    let inviteRow = await env.RENEX_DB.prepare(
       "SELECT * FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '')"
     ).bind(token).first();
 
+    // Re-Entry (eGov 1.4-light): verbrauchte LANGLEBIGE Org-Karte darf neu
+    // aktiviert werden (iOS-Eviction-Rettung). Die alte Session wird unten
+    // nach erfolgreichem Join abgelöst (_killGuestSessionRow) — nie zwei
+    // lebende Sessions pro Karte. Consumer-Invites bleiben strikt einmalig.
+    let isReEntry = false;
+    if (!inviteRow) {
+      const usedRow = await env.RENEX_DB.prepare(
+        "SELECT * FROM guest_sessions WHERE token = ? AND guest_handle = '__used__'"
+      ).bind(token).first();
+      if (usedRow && (await _orgReEntryEligible(env, token, usedRow))) {
+        inviteRow = usedRow;
+        isReEntry = true;
+      }
+    }
+
     if (!inviteRow)                        return json(request, { error: "Invite not found" }, 404);
     if (Date.now() > inviteRow.expires_at) return json(request, { error: "Invite expired" }, 410);
+
+    // Re-Entry-Bremse: 3 Neu-Aktivierungen pro Karte und Tag (strict = DO-atomar).
+    // Begrenzt das Kick-Ping-Pong, falls eine Karte abfotografiert wurde —
+    // der eigentliche Schutz ist die SICHTBARKEIT der Ablösung beim Inhaber.
+    if (isReEntry) {
+      const okRe = await rateLimit(env, `invite_reentry:${token}`, 86_400_000, 3, { strict: true });
+      if (!okRe) return json(request, { error: "Re-entry limit reached — contact the organization", code: "reentry_limit" }, 429);
+    }
 
     // Inviter-Membership-Check: hat created_by die Gruppe verlassen oder den DM-Kontakt
     // entfernt → Link soll nicht mehr nutzbar sein. Verhindert Hintertür für Ex-Member.
@@ -683,27 +744,46 @@ export async function handleInviteRoutes(request, env, path, params) {
     }
 
     // ── Session-Row in D1 anlegen (inkl. Terms-Nachweis) ──────────────────
-    // Label wandert vom Template auf die Session (Serienbrief↔Handle-Brücke
-    // für GET /invite/list); dynamisch = migrations-sicher für Consumer.
+    // Optionale Spalten dynamisch = migrations-sicher für Consumer:
+    // label (Serienbrief↔Handle-Brücke, H6) nur wenn Template eins trägt;
+    // origin_token (Karte↔Session-Verknüpfung für Re-Entry/Konvertierungs-
+    // Sperre, H8) nur für langlebige Org-Invites.
+    let extraCols = "", extraQs = "";
+    const extraVals = [];
     if (inviteRow.label != null) {
-      await env.RENEX_DB.prepare(
-        `INSERT INTO guest_sessions
-           (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, terms_accepted_at, terms_version, label)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, ?)`
-      ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle, joinTs, termsVersion, inviteRow.label).run();
-    } else {
-      await env.RENEX_DB.prepare(
-        `INSERT INTO guest_sessions
-           (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, terms_accepted_at, terms_version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?)`
-      ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle, joinTs, termsVersion).run();
+      extraCols += ", label"; extraQs += ", ?"; extraVals.push(inviteRow.label);
     }
+    if (inviteDurationMs > GUEST_EXPIRY_MS) {
+      extraCols += ", origin_token"; extraQs += ", ?"; extraVals.push(token);
+    }
+    await env.RENEX_DB.prepare(
+      `INSERT INTO guest_sessions
+         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, terms_accepted_at, terms_version${extraCols})
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?${extraQs})`
+    ).bind(sessionToken, convoId, inviteRow.convo_type, inviteRow.created_by, joinTs, sessionExpires, inviteRow.msg_limit, guestHandle, joinTs, termsVersion, ...extraVals).run();
 
     // ── DM-Invite: Template-Row invalidieren (einmalig verwendbar) ─────
     if (inviteRow.convo_type === "dm") {
       await env.RENEX_DB.prepare(
         "UPDATE guest_sessions SET guest_handle = '__used__' WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '')"
       ).bind(token).run();
+    }
+
+    // ── Re-Entry: alte Session(s) dieser Karte SOFORT ablösen ─────────────
+    // Nie zwei lebende Sessions pro Karte: der bisherige Zugriff stirbt
+    // (D1-Expiry + KV-Purge + Membership/Kontakte + GUEST_SESSION_KILLED-Push).
+    if (isReEntry) {
+      try {
+        const oldRows = await env.RENEX_DB.prepare(
+          "SELECT token, convo_id, guest_handle FROM guest_sessions WHERE origin_token = ? AND converted_to IS NULL AND guest_handle != '' AND guest_handle != '__used__' AND token != ?"
+        ).bind(token, sessionToken).all();
+        for (const r of (oldRows.results ?? [])) {
+          if (r.guest_handle === guestHandle) continue;
+          await _killGuestSessionRow(env, r, inviteRow.created_by, joinTs);
+        }
+      } catch (e) {
+        console.warn("⚠️ Re-Entry: Ablösung alter Session fehlgeschlagen (non-fatal):", e);
+      }
     }
 
     // ── KV-Session-Cache (schneller Auth-Lookup) ──────────────────────────
@@ -728,6 +808,7 @@ export async function handleInviteRoutes(request, env, path, params) {
       msgCount:      0,
       deviceId:      guestDeviceId || null,
       sessionToken,  // für X-Guest-Token Header Fallback (Safari ITP)
+      reEntry:       isReEntry,
     }), {
       status: 200,
       headers: {

@@ -294,6 +294,7 @@ export default {
   accessUntilDate:         (date) => `Access at least until <strong>${date}</strong> — keep it forever with a Passkey`,
   noEmergencyChannel:      "Not an emergency channel. In an emergency: <strong>144</strong> (ambulance) · <strong>143</strong> (helpline)",
   neverAsksPayment:        "RENEX will never ask for card, bank or password details.",
+  reEntryHint:             "This card has already been activated. Joining will <strong>re-activate the channel on this device</strong> — previous access will be ended. Earlier messages remain encrypted.",
   joinAsGuestBtn:          "Join as guest",
   loginAndJoinBtn:         "Sign in & join",
   invalidInviteTitle:      "Invalid invitation",

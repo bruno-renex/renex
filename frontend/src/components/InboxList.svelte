@@ -80,6 +80,15 @@
     inviteGroupName = null;
     showInviteLink = true;
   }
+
+  // Cross-component Öffnung (eGov 1.1): IconStrip-Bottom-Icon (A) +
+  // AddContactModal-Fehler-Brücke (B) dispatchen 'renex:open-invite'.
+  // InboxList ist im Nicht-Gast-Layout immer gemountet → sicherer Empfänger.
+  $effect(() => {
+    const onOpenInvite = () => openInvite1to1();
+    window.addEventListener('renex:open-invite', onOpenInvite);
+    return () => window.removeEventListener('renex:open-invite', onOpenInvite);
+  });
   function openInviteToGroup(groupId, groupName) {
     inviteConvoId = groupId;
     inviteGroupName = groupName;

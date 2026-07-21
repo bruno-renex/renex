@@ -8,6 +8,7 @@
   import { apiFetch } from '../lib/api.js';
   import { validateHandle } from '../lib/passkey.js';
   import { captureException } from '../lib/sentry.js';
+  import { orgStore, requestOpenInvite } from '../stores/org.svelte.js';
 
   let { isOpen = $bindable(false) } = $props();
 
@@ -17,6 +18,9 @@
   let isSubmitting = $state(false);
   let statusMessage = $state("");
   let statusType = $state(""); // "" | "info" | "error" | "success"
+  let showInviteBridge = $state(false);   // eGov 1.1: Org + Handle-Suche ins Leere → Einladen anbieten
+
+  $effect(() => { void orgStore.ensureProbed(); });
 
   let validation = $derived(validateHandle(handleInput));
   let canSubmit = $derived(validation.ok && !isSubmitting);
@@ -26,6 +30,7 @@
       handleInput = "";
       statusMessage = "";
       statusType = "";
+      showInviteBridge = false;
       // Auto-focus
       setTimeout(() => {
         document.getElementById("ac-input")?.focus();
@@ -68,6 +73,9 @@
       } else if (r.status === 404) {
         statusMessage = lang.userNotFound || "User nicht gefunden";
         statusType = "error";
+        // eGov 1.1: Bürger haben kein RENEX-Konto → für Orgs die Sackgasse in
+        // eine Brücke zum Einladungs-Panel verwandeln (rein additiv, ＋ bleibt).
+        if (orgStore.isOrg) showInviteBridge = true;
       } else if (r.status === 410) {
         statusMessage = lang.accountDeleted || "Account gelöscht";
         statusType = "error";
@@ -102,6 +110,12 @@
 
   function onBackdropClick(e) {
     if (e.target.classList.contains("ac-overlay")) close();
+  }
+
+  // Brücke: Dialog schließen + Org-Invite-Panel öffnen (via Event, InboxList hört).
+  function goToInvite() {
+    isOpen = false;
+    requestOpenInvite();
   }
 </script>
 
@@ -138,6 +152,15 @@
 
       {#if statusMessage}
         <div class="status status-{statusType}">{statusMessage}</div>
+      {/if}
+
+      {#if showInviteBridge}
+        <div class="invite-bridge">
+          <span>{lang.orgBridgeHint || 'Bürger:innen haben kein RENEX-Konto — sie brauchen keinen Handle.'}</span>
+          <button class="bridge-btn" onclick={goToInvite} type="button">
+            📨 {lang.orgBridgeBtn || 'Einladung erstellen'}
+          </button>
+        </div>
       {/if}
 
       <div class="buttons">
@@ -180,6 +203,34 @@
     animation: slideUp 0.2s ease-out;
   }
   @keyframes slideUp { from { transform: translateY(8px); opacity: 0; } }
+
+  /* eGov 1.1: Org-Brücke bei erfolgloser Handle-Suche */
+  .invite-bridge {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--accent-voice-dim, rgba(56, 189, 248, 0.25));
+    border-radius: 10px;
+    background: var(--accent-voice-dim, rgba(56, 189, 248, 0.08));
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .bridge-btn {
+    align-self: flex-start;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--accent-voice);
+    background: transparent;
+    color: var(--accent-voice);
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .bridge-btn:hover { background: var(--accent-voice); color: #07070a; }
 
   .ac-header {
     display: flex;

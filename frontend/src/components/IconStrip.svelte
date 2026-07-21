@@ -6,8 +6,16 @@
   import { inboxStore } from '../stores/inbox.svelte.js';
   import ProfileDropdown from './ProfileDropdown.svelte';
   import { serverStore } from '../stores/serverStore.svelte.js';
+  import { i18nStore } from '../stores/i18n.svelte.js';
+  import { orgStore, requestOpenInvite } from '../stores/org.svelte.js';
 
+  let lang = $derived(i18nStore.lang);
   let activeSection = $derived(inboxStore.activeSection);
+
+  // eGov 1.1: verifizierte Org? → globaler "Bürger einladen"-Einstieg unten.
+  // Einmal-Probe beim Mount; für Consumer bleibt isOrg false (Icon versteckt).
+  $effect(() => { void orgStore.ensureProbed(); });
+  let isOrg = $derived(orgStore.isOrg);
   let unreadDms = $derived(inboxStore.totalUnreadDms);
   let unreadGroups = $derived(inboxStore.totalUnreadGroups);
   let missedVoice = $derived(inboxStore.missedUnseenVoice);
@@ -104,6 +112,22 @@
   </div>
 
   <div class="strip-icons-bottom">
+    {#if isOrg}
+      <!-- eGov 1.1: Aktion (kein Tab!) — Modal öffnen via Event, nicht selectSection.
+           Bewusst im Bottom-Cluster (Aktions-Zone neben Profil), NICHT zwischen
+           den Ansichts-Tabs, und nur für verifizierte Orgs sichtbar. -->
+      <button
+        class="strip-icon strip-invite"
+        onclick={() => requestOpenInvite()}
+        title={lang.inviteCitizenTitle || 'Bürger einladen'}
+        aria-label={lang.inviteCitizenTitle || 'Bürger einladen'}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/>
+          <polyline points="22 6 12 13 2 6"/>
+        </svg>
+      </button>
+    {/if}
     <ProfileDropdown />
   </div>
 </nav>
@@ -170,6 +194,18 @@
 
   .strip-icon.active {
     background: var(--accent-voice-dim);
+    color: var(--accent-voice);
+  }
+
+  /* Invite = Aktion, kein Tab: dezent akzentuiert, nie Active-State.
+     Optisch von den Ansichts-Tabs abgesetzt (Accent-Farbe + Rahmen). */
+  .strip-invite {
+    color: var(--accent-voice);
+    border: 1px solid var(--accent-voice-dim, rgba(56, 189, 248, 0.25));
+    margin-bottom: 6px;
+  }
+  .strip-invite:hover {
+    background: var(--accent-voice-dim, rgba(56, 189, 248, 0.15));
     color: var(--accent-voice);
   }
 

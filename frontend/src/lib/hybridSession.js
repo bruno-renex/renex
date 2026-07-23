@@ -25,7 +25,7 @@
 // ======================================================
 import { apiFetch } from './api.js';
 import { bytesToB64, b64ToBytes } from './bytes.js';
-import { idbGet, idbSet } from './idb.js';
+import { idbGet, idbSet, idbListKeys, idbDelete } from './idb.js';
 import { deriveStorageKey, sealJson, openJson } from './deviceStore.js';
 import { x25519Keygen } from './pqCrypto.js';
 import { initiatorRoot, responderRoot, signInitHdr, verifyInitHdr } from './pqxdh.js';
@@ -45,6 +45,29 @@ const _archiveKey = (peer, dev) => `hybridsession:archive:g2:${peer}:${dev}`;
 // Single-flight: dedupliziert nebenläufige ensure-Aufrufe pro (peer,dev), sonst
 // würden zwei Aufrufe zwei OPKs des Peers verbrauchen.
 const _inflight = new Map();
+
+// Löscht die PQXDH-Handshake-Records eines Peers (alle Geräte) + Archiv.
+// KRITISCH für einen sauberen Session-Reset: ensureHybridSession ist idempotent
+// (existierender Initiator-Record → ORIGINAL-rk0 ohne neuen OPK). Bliebe der
+// Record beim Reset stehen, würde die neu geprimte Ratchet-Session denselben rk0
+// mit auf Position 0 zurückgesetzter Send-Chain benutzen → Desync statt Heilung.
+// Nur nach diesem Löschen erzeugt der nächste Prime einen ECHT frischen Handshake
+// (neuer rk0 + frische OPK). @returns {Promise<number>} gelöschte Records.
+export async function resetHybridSession(peerHandle) {
+  const peer = String(peerHandle || '').toLowerCase();
+  if (!peer) return 0;
+  let n = 0;
+  for (const pfx of [`hybridsession:g2:${peer}:`, `hybridsession:archive:g2:${peer}:`]) {
+    const keys = (await idbListKeys(pfx).catch(() => [])) || [];
+    for (const k of keys) { await idbDelete(k).catch(() => {}); n++; }
+  }
+  // Offene single-flight-Promises für diesen Peer verwerfen (sonst könnte ein
+  // in-flight ensure den gerade gelöschten Record neu schreiben).
+  for (const fk of [..._inflight.keys()]) {
+    if (fk.startsWith(`${peer}:`)) _inflight.delete(fk);
+  }
+  return n;
+}
 
 // ── Tie-Break-Helfer (D4) — pure, testbar ──────────────
 /** Lexikografischer Byte-Vergleich (NICHT b64-String-Vergleich). */

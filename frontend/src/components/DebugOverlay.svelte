@@ -10,9 +10,30 @@
   import { userStore } from '../stores/user.svelte.js';
   import { apiFetch, API } from '../lib/api.js';
   import { isStandalone } from '../lib/push.js';
-  import { ratchetSendEnabled, pqRekeyEnabled } from '../lib/ratchetSession.js';
+  import { ratchetSendEnabled, pqRekeyEnabled, resetV4Session } from '../lib/ratchetSession.js';
 
   let { isOpen = $bindable(false) } = $props();
+
+  // v4-Session-Reset (Deadlock-Heilung): feststeckende Session zu einem Peer
+  // orphanen → frischer Handshake. Peer-Handle manuell (kein Zugriff auf den
+  // offenen Chat hier; das Debug-Overlay ist chat-unabhängig).
+  let resetPeer = $state("");
+  let resetBusy = $state(false);
+  let resetResult = $state("");
+  async function doResetV4() {
+    const peer = String(resetPeer || "").trim().toLowerCase();
+    if (!peer || resetBusy) return;
+    resetBusy = true;
+    resetResult = "…";
+    try {
+      const r = await resetV4Session(peer, { myHandle: userStore.myUser || "" });
+      resetResult = `✓ ${peer}: ${r.ratchet} ratchet + ${r.hybrid} hybrid Records gelöscht → frischer Handshake. Jetzt eine Nachricht senden.`;
+    } catch (e) {
+      resetResult = "✗ " + (e?.message || "Fehler");
+    } finally {
+      resetBusy = false;
+    }
+  }
 
   let lang = $derived(i18nStore.lang);
 
@@ -402,6 +423,27 @@
           entscheidet. Wirkt sofort ohne Reload — die 1. Nachricht pro Peer primt
           (Legacy), ab der 2. läuft v4.
         </div>
+        <!-- v4-Session-Reset: feststeckende Session heilen (reconcile_stale_init hoch,
+             Nachrichten bleiben 🔐). Orphant Ratchet + PQXDH-Handshake → frisch. -->
+        <div class="section-title" style="margin-top:12px">Feststeckende v4-Session zurücksetzen</div>
+        <div class="actions" style="gap:6px; flex-wrap:wrap">
+          <input
+            class="reset-input"
+            type="text"
+            placeholder="Peer-Handle (z.B. xyz)"
+            bind:value={resetPeer}
+            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+          />
+          <button class="btn" onclick={doResetV4} disabled={resetBusy || !resetPeer.trim()}>
+            🩹 Session zurücksetzen
+          </button>
+        </div>
+        {#if resetResult}<div class="output">{resetResult}</div>{/if}
+        <div class="hint">
+          Heilt den Kanal ab der nächsten Nachricht (frischer Handshake). Bereits
+          verschlüsselt-unlesbare Alt-Nachrichten bleiben 🔐 (Schlüssel einmalig).
+          Danach eine Nachricht an den Peer senden.
+        </div>
       </div>
 
       <!-- Re-Subscribe Result -->
@@ -571,6 +613,19 @@
     font-weight: 600;
     cursor: pointer;
     transition: all 0.15s;
+  }
+
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .reset-input {
+    flex: 1 1 100%;
+    padding: 9px 12px;
+    background: var(--bg-panel-alt);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    font-size: 12px;
+    font-family: inherit;
   }
 
   .btn:hover:not(:disabled) {

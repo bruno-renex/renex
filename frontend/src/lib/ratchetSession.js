@@ -21,7 +21,7 @@
 // harte Gesamtgrenze hier. Wirft NIE unkontrolliert; null = „nicht möglich,
 // nutze Legacy".
 // ======================================================
-import { idbGet, idbSet, idbListKeys } from './idb.js';
+import { idbGet, idbSet, idbListKeys, idbDelete } from './idb.js';
 import { deriveStorageKey, sealJson, openJson } from './deviceStore.js';
 import { b64ToBytes, bytesToB64 } from './bytes.js';
 import { x25519PublicKey } from './pqCrypto.js';
@@ -36,7 +36,7 @@ import {
 } from './pqRatchet.js';
 import { e2eEncrypt, e2eDecrypt } from './chatCrypto.js';
 import { signMessageV4, verifyMessageSigV4 } from './messageSig.js';
-import { ensureHybridSession, acceptHybridSession, myInitWins } from './hybridSession.js';
+import { ensureHybridSession, acceptHybridSession, myInitWins, resetHybridSession } from './hybridSession.js';
 import { getOrCreateIdentity } from './pqxdhKeys.js';
 import { getRecipientDevices } from './sesame.js';
 import { getKemEkForDevice } from './cmk.js';
@@ -240,6 +240,46 @@ export function primeRatchetSession(peerHandle, { myHandle = '' } = {}) {
       return null;
     }
   });
+}
+
+/**
+ * Nutzer-getriggerter Reset einer feststeckenden v4-Session zu EINEM Peer
+ * (alle Geräte). Orphant die Ratchet-Records + Archiv + PQXDH-Handshake-Records
+ * + Deadlock-/Reinit-Ledger und primt danach frisch — manueller, sicherer Analog
+ * zum globalen :g2:-Generation-Bump, aber peer-scoped und ohne die Auto-Heal-
+ * Fehlalarm-Risiken (die Stale-Init nicht von einem gesunden Glare-Gewinner
+ * unterscheiden kann). Der v4-Klartext-Store (v4msg:, per msgId) bleibt UNBERÜHRT
+ * → bereits entschlüsselte History bleibt lesbar. Heilt den KANAL going-forward
+ * (nächster Send trägt frisches init → Peer adoptiert → konvergiert); bereits 🔐
+ * Alt-Nachrichten bleiben 🔐 (Ratchet-MK einmalig).
+ * @param {string} peerHandle
+ * @param {{myHandle?:string}} [opts]
+ * @returns {Promise<{ratchet:number, hybrid:number}>}
+ */
+export async function resetV4Session(peerHandle, { myHandle = '' } = {}) {
+  const peer = String(peerHandle || '').toLowerCase();
+  if (!peer) return { ratchet: 0, hybrid: 0 };
+  let ratchet = 0;
+  // 1) Ratchet-Session-Records + archivierte Verlierer-Records (alle Geräte).
+  for (const pfx of [`${IDB_PREFIX}${peer}:`, `${ARCH_PREFIX}${peer}:`]) {
+    const keys = (await idbListKeys(pfx).catch(() => [])) || [];
+    for (const k of keys) { await idbDelete(k).catch(() => {}); ratchet++; }
+  }
+  // 2) PQXDH-Handshake-Records — SONST liefert ensureHybridSession den alten rk0
+  //    (idempotent) → Send-Chain-Rewind → Desync statt Heilung.
+  const hybrid = await resetHybridSession(peer).catch(() => 0);
+  // 3) Deadlock-/Reinit-Ledger dieses Peers (falls je gesetzt).
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith(`renex_staleinit:${peer}:`) || k.startsWith(`renex_reinit:${peer}:`)) {
+        localStorage.removeItem(k);
+      }
+    }
+  } catch {}
+  // 4) Frisch primen (Netz, Hintergrund) → nächster Send trägt frisches init.
+  void primeRatchetSession(peer, { myHandle });
+  console.warn(`🔗 v4-Session-Reset ${peer}: ${ratchet} ratchet + ${hybrid} hybrid Records orphaned → frischer Handshake`);
+  return { ratchet, hybrid };
 }
 
 /**

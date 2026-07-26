@@ -1,5 +1,13 @@
 # RENEX — Vision & Strategy
 
+> ⚠️ **VERALTET (Stand 2026-07).** Dieses Dokument beschreibt die ursprüngliche
+> Ausrichtung („Gamer-First", Discord-Alternative) von Anfang 2026. Der aktuelle
+> Fokus ist der **Organisation-→-Bürger-Kanal** (verschlüsselter, dauerhafter
+> Chat per QR-Code, ohne Konto für die Empfänger:innen) — siehe
+> [`../README.md`](../README.md). Server/Channels sind eingefroren.
+> Die Überarbeitung dieses Dokuments steht aus; bis dahin ist der README die
+> verbindliche Quelle.
+
 > **BUILT TO RESIST AUTOMATION. PASSKEY-ONLY. HUMAN-FIRST.**
 
 **Status:** Living document

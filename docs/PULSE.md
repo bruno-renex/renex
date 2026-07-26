@@ -862,7 +862,7 @@ Wenn neue offene Punkte beim Phase-6.5-Sprint auftauchen, hier dokumentieren —
 - [`PROTOCOL.md`](./PROTOCOL.md) §3.4 (Message-Types, Pulse fügt neuen Type hinzu ohne Bruch)
 - [`MANIFESTO.md`](./MANIFESTO.md) — Anti-AI-Brand-Story wird in Phase 6 mit Pulse-Pitch erweitert
 - [`THREAT_MODEL.md`](./THREAT_MODEL.md) v0.1 — Threat-Model wird mit §8.2 Pulse-Adversaries ergänzt
-- [`VISION.md`](./VISION.md) Roadmap — Phase 6.5 Spec konkretisiert
+- Roadmap (intern) — Phase 6.5 Spec konkretisiert
 - [Memory: feedback-cf-workers-await-subrequest](../...memory/feedback_cf_workers_await_subrequest.md) — Backend-Forward von Pulse-Frames muss awaited werden
 
 ---

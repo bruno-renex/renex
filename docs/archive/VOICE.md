@@ -3,7 +3,7 @@
 > **Phase 8 Architecture Sketch** (post-Beta, ~6-8 Wochen)
 > Voice 1:1 + Voice-Channels als „v2.0-Update" gemeinsam mit Signal Protocol.
 > Setzt auf bestehender Multi-Device-Krypto auf ([`MULTI_DEVICE.md`](./MULTI_DEVICE.md), [`GROUPS_MULTIDEVICE.md`](./GROUPS_MULTIDEVICE.md)).
-> Decision-Begründung warum self-hosted statt CF Realtime: [`VISION.md`](./VISION.md) Decision Log 2026-05-15.
+> Decision-Begründung warum self-hosted statt CF Realtime: internes Decision Log 2026-05-15.
 
 **Status:** Sketch v0.1 — Architektur-Skizze, NICHT implementation-ready
 **Version:** 0.1
@@ -501,7 +501,7 @@ Folgende Items werden zu Phase-8-Start in der finalen `VOICE.md`-Spec geklärt:
 
 | Datum | Entscheidung | Alt | Neu | Begründung |
 |---|---|---|---|---|
-| 2026-05-15 | **Voice-Provider** | CF Realtime SFU für alles | **Hybrid: coturn (1:1) + LiveKit (Channels), beides self-hosted** | Privacy (zero-knowledge Server möglich), Open-Standard (LiveKit Apache-2.0, nicht CF-Lock-in), Kosten (10-100× günstiger), Praxis (CF Realtime TURN failt in Mobile-Carrier-NAT-Setups). Full Rationale: [`VISION.md`](./VISION.md) Decision Log 2026-05-15. |
+| 2026-05-15 | **Voice-Provider** | CF Realtime SFU für alles | **Hybrid: coturn (1:1) + LiveKit (Channels), beides self-hosted** | Privacy (zero-knowledge Server möglich), Open-Standard (LiveKit Apache-2.0, nicht CF-Lock-in), Kosten (10-100× günstiger), Praxis (CF Realtime TURN failt in Mobile-Carrier-NAT-Setups). Full Rationale: internes Decision Log 2026-05-15. |
 | 2026-05-15 | **Frame-Encryption-Key-Material** | neue Krypto-Schicht entwerfen | **HKDF-Derivation aus bestehendem GSK** | Wiederverwendung der etablierten Group-Sender-Key-Pipeline aus Phase 1C. Kein neues Key-Distribution-Problem, automatische Rotation bei Member-Leave über existierenden Pfad. |
 | 2026-05-15 | **Phase-8a-Split** | komplettes Voice-Paket in Phase 8 | **8a (coturn-1:1) sofort, 8b-8d (LiveKit-Channels) später** | 8a löst akutes CF-TURN-Problem während Beta — kann unabhängig von Channels deployt werden, niedrigstes Risiko, klarer Win für Beta-User. |
 | 2026-05-15 | **DTLS-SRTP-Verzicht für Channels?** | nur Frame-Encryption ohne DTLS | **Frame-Encryption ZUSÄTZLICH zu DTLS-SRTP** | DTLS-SRTP von LiveKit-Stack mitgegeben, Defense-in-Depth gegen Frame-Layer-Bugs, kostet nichts extra. |
@@ -510,7 +510,7 @@ Folgende Items werden zu Phase-8-Start in der finalen `VOICE.md`-Spec geklärt:
 
 ## Anhang: Beziehung zu anderen Specs
 
-- **[`VISION.md`](./VISION.md) §7 + §10 + Decision Log 2026-05-15**: strategische Entscheidung
+- **Internes Decision Log 2026-05-15**: strategische Entscheidung
 - **[`SERVERS.md`](./SERVERS.md) §4**: Channel-Modell `conversations.kind` Erweiterung um `'voice'`
 - **[`GROUPS_MULTIDEVICE.md`](./GROUPS_MULTIDEVICE.md)**: GSK-System als Frame-Key-Material-Quelle
 - **[`PROTOCOL.md`](./PROTOCOL.md)**: Voice-Channel-Frame-Format wird als Wire-Spec Teil des RENEX Open Standards (Phase 2 Public)

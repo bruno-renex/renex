@@ -219,7 +219,7 @@ Bruno Hochstrasser ist Gründer und Entwickler von RENEX sowie professioneller M
 - **Website:** https://renex.id · App: https://app.renex.id
 - **Source:** https://github.com/bruno-renex/renex
 - **Manifesto:** https://renex.id/manifesto (EN) · https://renex.id/manifest-de (DE)
-- **Specs:** [`PROTOCOL.md`](./PROTOCOL.md) · [`VISION.md`](./VISION.md) · [`THREAT_MODEL.md`](./THREAT_MODEL.md)
+- **Specs:** [`PROTOCOL.md`](./PROTOCOL.md) · [`THREAT_MODEL.md`](./THREAT_MODEL.md)
 - **Security policy:** [`SECURITY.md`](../SECURITY.md) (vulnerabilities **not** via public issues)
 
 <!-- internal:start -->

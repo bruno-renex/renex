@@ -61,7 +61,8 @@ jobs:
       - name: Verify required spec docs exist
         run: |
           # MULTI_DEVICE/GROUPS_MULTIDEVICE: seit Doku-Archivierung 2026-07-12 unter docs/archive/
-          for f in docs/MANIFESTO.md docs/VISION.md docs/PROTOCOL.md \
+          # VISION.md bewusst NICHT gelistet: seit 2026-07-26 intern (gitignored)
+          for f in docs/MANIFESTO.md docs/PROTOCOL.md \
                    docs/archive/MULTI_DEVICE.md docs/RECOVERY.md docs/archive/GROUPS_MULTIDEVICE.md \
                    docs/THREAT_MODEL.md \
                    docs/CONTRIBUTING.md docs/CHANGELOG.md \

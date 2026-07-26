@@ -31,7 +31,7 @@
 Read these three documents — in this order:
 
 1. [`MANIFESTO.md`](./MANIFESTO.md) — what we're building for.
-2. [`VISION.md`](./VISION.md) — how we're building (strategy, roadmap, decision logs).
+2. [`../README.md`](../README.md) — scope, current status and acknowledged limitations.
 3. [`PROTOCOL.md`](./PROTOCOL.md) — what we're building (wire format, Protocol v1).
 
 If after reading you think "this project is not for me" — fair. Save yourself and us the time.
@@ -110,7 +110,6 @@ External contributors do not deploy directly to production infra. PRs are tested
 ```
 app.renex/
 ├── docs/                      # Specs (normative, see §5)
-│   ├── VISION.md
 │   ├── MANIFESTO.md
 │   ├── PROTOCOL.md
 │   ├── MULTI_DEVICE.md
@@ -248,7 +247,7 @@ You may challenge the spec. Decision-log entry with the better option, PR with t
 
 ## 7. Tests
 
-> **"Crypto without tests = suicide."** ([`VISION.md`](./VISION.md) §12 decision log, 2026-04-27)
+> **"Crypto without tests = suicide."** (internal decision log, 2026-04-27)
 
 ### 7.1 What Vitest covers today
 
@@ -362,7 +361,7 @@ These are run manually before phase cuts — maintainer responsibility.
 Before opening one, ask yourself:
 
 - Does it violate one of the 5 principles from [`MANIFESTO.md`](./MANIFESTO.md)?
-- Is it already in [`VISION.md`](./VISION.md) §10 roadmap? Then comment there instead of opening a new issue.
+- Is it already covered by the roadmap in [`../README.md`](../README.md)? Then comment there instead of opening a new issue.
 - Is there a [`PROTOCOL.md`](./PROTOCOL.md) §17 / [`MULTI_DEVICE.md`](./MULTI_DEVICE.md) §13 / [`RECOVERY.md`](./RECOVERY.md) §13 open-item line for it? Then comment there.
 
 Features that violate a principle are **closed directly**. We don't argue.
@@ -391,7 +390,7 @@ Instead — see [`SECURITY.md`](../SECURITY.md):
 
 - Public disclosure without a 90-day embargo.
 - "Security audits" that found nothing but demand advertising.
-- Creative interpretations of our bug-bounty budget (which doesn't exist today — see Year 2 in [`VISION.md`](./VISION.md) §10).
+- Creative interpretations of our bug-bounty budget (which doesn't exist today).
 
 ### 10.4 What's definitely a bug
 

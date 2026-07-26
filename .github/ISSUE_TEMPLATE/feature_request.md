@@ -6,7 +6,7 @@ labels: ["enhancement", "triage"]
 assignees: []
 ---
 
-**Before you submit:** Please check [VISION.md](docs/VISION.md) and [MANIFESTO.md](docs/MANIFESTO.md) to see whether your idea fits RENEX' design principles (privacy-first, AI-free, end-to-end encrypted, passkey-only).
+**Before you submit:** Please check the [README](../../README.md) and [MANIFESTO.md](docs/MANIFESTO.md) to see whether your idea fits RENEX' design principles (privacy-first, AI-free, end-to-end encrypted, passkey-only).
 
 ---
 

@@ -144,5 +144,5 @@ finalen Einbettungs-Hinweise:
 
 - [`MANIFESTO.md`](./MANIFESTO.md) — Anti-AI Brand-Statement, ausführlicher und passion-getriebener Version
 - [`THREAT_MODEL.md`](./THREAT_MODEL.md) — technische Adversary-Liste
-- [`VISION.md`](./VISION.md) §6 Monetization-Plan + §10 Phase-Roadmap (Phase 9 für HW-Attestation)
+- Roadmap + Monetarisierung: siehe [`../README.md`](../README.md) (Detail-Planung intern)
 - [`PULSE.md`](./PULSE.md) §8 — Pulse als zusätzlicher Belief-Layer (nicht Auth-Authority)

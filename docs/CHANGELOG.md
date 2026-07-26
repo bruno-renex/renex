@@ -652,7 +652,7 @@ komplette Beta-Roadmap um weitere ~3 Wochen vorgezogen (Beta jetzt Ende Juni 202
   Phase 3A 3 Wo vor Plan, Phase 2 (Open Standard) parallel mitgeshipped, Phase
   3A.5 in 1 Tag teil-shipped, Tempo hält. Phase 5-Light Wo 5 → Wo 2, Phase 6
   Wo 7 → Wo 4, Phase 8 Aug-Nov → Juli-Okt, Phase 9 Q4-Q1 → Q3-Q4. Detail:
-  [`VISION.md`](./VISION.md) Decision Log 2026-05-28.
+  `VISION.md` (intern) Decision Log 2026-05-28.
 
 ### 🚧 Phase 3A.5 — noch offen (Tag 2+)
 Server-Icon-Edit (`icon_r2_key` PATCH), Ban-System (`server_bans`-Tabelle +

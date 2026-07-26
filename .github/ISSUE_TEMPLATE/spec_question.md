@@ -10,7 +10,7 @@ assignees: []
 - [PROTOCOL.md](docs/PROTOCOL.md) — wire protocol, encryption, sender keys
 - [MULTI_DEVICE.md](docs/MULTI_DEVICE.md) — multi-device key sync
 - [RECOVERY.md](docs/RECOVERY.md) — phrase recovery + CMK
-- [VISION.md](docs/VISION.md) — non-goals and roadmap
+- [README](../../README.md) — scope, status and acknowledged limitations
 
 ---
 

@@ -22,7 +22,7 @@
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@vitest/ui": "^4.1.7",
     "fake-indexeddb": "^6.2.5",
-    "marked": "^18.0.4",
+    "marked": "^18.0.5",
     "svelte": "^5.55.5",
     "vite": "^8.0.16",
     "vitest": "^4.1.7"

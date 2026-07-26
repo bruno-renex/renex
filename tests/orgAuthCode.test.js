@@ -59,7 +59,7 @@ function buildEnv(scn = {}) {
       // Re-Entry-Suche (NUR __used__) → hier nie relevant; muss VOR dem
       // allgemeinen Token-Select stehen, aber der /invite/info-Select enthält
       // '__used__' ebenfalls (als OR-Zweig) → präzise auf die Re-Entry-Form prüfen.
-      if (/WHERE token = \? AND guest_handle = '__used__'/.test(sql)) return Promise.resolve(null);
+      if (/WHERE token = \? AND guest_handle = '__used__'/.test(sql)) return Promise.resolve(scn.reEntryRow ?? null);
       if (/FROM guest_sessions WHERE token/i.test(sql)) return Promise.resolve(scn.inviteRow ?? null);
       if (/FROM conversations/i.test(sql)) return Promise.resolve({ name: null });
       return Promise.resolve(null);
@@ -139,6 +139,20 @@ describe('/invite/info — Salt öffentlich, Hash NIE', () => {
     const env = buildEnv({ orgRow: ORG_ROW, inviteRow: codeRow({ code_attempts: 5 }) });
     const body = await (await call(env, 'GET', null, `/invite/info?token=${TOKEN}`, new URLSearchParams({ token: TOKEN }))).json();
     expect(body.codeLocked).toBe(true);
+  });
+
+  it('RE-ENTRY-Zweig liefert requiresCode + codeSalt (sonst Sackgasse: Server verlangt Code, Landing zeigt kein Feld)', async () => {
+    // Verbrauchte Org-Karte MIT Code → /invite/info bietet Re-Entry an.
+    // Der Server prüft beim Re-Entry-Join den Code erneut (Kartendieb-Schutz),
+    // also MUSS die Landing das Eingabefeld auch hier anbieten.
+    const used = codeRow({ guest_handle: '__used__' });
+    const env = buildEnv({ orgRow: ORG_ROW, inviteRow: used, reEntryRow: used });
+    const res = await call(env, 'GET', null, `/invite/info?token=${TOKEN}`, new URLSearchParams({ token: TOKEN }));
+    const body = await res.json();
+    expect(body.reEntry).toBe(true);
+    expect(body.requiresCode).toBe(true);
+    expect(body.codeSalt).toBe(SALT);
+    expect(JSON.stringify(body)).not.toContain(HASH);     // Hash auch hier NIE
   });
 
   it('Invite ohne Code → requiresCode false, codeSalt null', async () => {

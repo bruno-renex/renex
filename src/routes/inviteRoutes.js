@@ -616,6 +616,12 @@ export async function handleInviteRoutes(request, env, path, params) {
           expiresAt:  row.expires_at,
           msgLimit:   row.msg_limit ?? GUEST_MSG_LIMIT,
           verifiedSender: reOrg,
+          // eGov 1.3: Beim Re-Entry verlangt der Server den Code ERNEUT (sonst
+          // umginge ein Kartendieb die Empfänger-Auth per Neu-Aktivierung) →
+          // die Landing MUSS das Feld auch hier anbieten, sonst Sackgasse.
+          requiresCode: row.auth_level === "code" && !!row.code_hash,
+          codeSalt:     row.auth_level === "code" ? (row.code_salt || null) : null,
+          codeLocked:   (row.code_attempts || 0) >= MAX_CODE_ATTEMPTS,
         });
       }
       return json(request, { valid: false, reason: "already_used" }, 410);

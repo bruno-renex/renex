@@ -33,6 +33,60 @@ async function _isStillMember(env, convoId, convoType, handle) {
   return !!m;
 }
 
+// ── eGov 1.3: Empfänger-Auth per Aktivierungscode ──────────────────────
+// Der Zweitfaktor gehört der ORG und dem PAPIER (Entscheid 2026-07-15): kein
+// SMS/keine Telefonnummer bei RENEX. Die Org erzeugt Code+Salt, hasht im
+// eigenen Browser und übergibt den Klartext-Code out-of-band (zweiter Brief,
+// eigenes Praxis-SMS, Telefonat, persönlich). RENEX speichert nur salt+hash.
+const MAX_CODE_ATTEMPTS = 5;             // danach ist DIESE Karte gesperrt (Re-Issue nötig)
+const _B64_RE = /^[A-Za-z0-9+/]{16,128}={0,2}$/;
+
+// salt (öffentlich via /invite/info) + hash (NIE ausgeliefert) validieren.
+function _validateCodePair(salt, hash) {
+  if (typeof salt !== "string" || !_B64_RE.test(salt)) return { error: "codeSalt must be base64 (16-128 chars)" };
+  if (typeof hash !== "string" || !_B64_RE.test(hash)) return { error: "codeHash must be base64 (16-128 chars)" };
+  return { value: { salt, hash } };
+}
+
+// Constant-time-Vergleich (Länge fließt ab; Inhalt nicht) — beide Seiten sind
+// b64-Strings gleicher Länge, wenn der Client korrekt rechnet.
+function _timingSafeEqual(a, b) {
+  const x = String(a || ""), y = String(b || "");
+  if (x.length !== y.length) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return diff === 0;
+}
+
+// Prüft den vom Bürger gesendeten codeHash gegen die Template-Row.
+// Rückgabe: null = ok/kein Code nötig, sonst fertige Fehler-Response.
+// Zählt Fehlversuche in D1 (eigener Lock-State, NICHT __used__ — sonst
+// kollidiert es mit der Resume-/Re-Entry-Semantik).
+async function _verifyAuthCode(request, env, inviteRow, providedHash) {
+  if (!inviteRow || inviteRow.auth_level !== "code" || !inviteRow.code_hash) return null;   // kein Code gefordert
+  if ((inviteRow.code_attempts || 0) >= MAX_CODE_ATTEMPTS) {
+    return json(request, { error: "Too many wrong codes — contact the organization", code: "code_locked" }, 403);
+  }
+  // Online-Brute-Force bremsen (DO-atomar, pro Token): der Code ist kurz, die
+  // Sicherheit liegt in diesem Limit + im Attempts-Zähler, nicht im Hash.
+  const rlOk = await rateLimit(env, `invite_code:${inviteRow.token}`, 600_000, 10, { strict: true });
+  if (!rlOk) return json(request, { error: "Rate limit exceeded", code: "code_rate_limit" }, 429);
+
+  if (typeof providedHash !== "string" || !_timingSafeEqual(providedHash, inviteRow.code_hash)) {
+    const attempts = (inviteRow.code_attempts || 0) + 1;
+    await env.RENEX_DB.prepare(
+      "UPDATE guest_sessions SET code_attempts = ? WHERE token = ?"
+    ).bind(attempts, inviteRow.token).run();
+    const left = Math.max(0, MAX_CODE_ATTEMPTS - attempts);
+    return json(request, {
+      error: "Invalid activation code",
+      code: left > 0 ? "code_invalid" : "code_locked",
+      attemptsLeft: left,
+    }, 403);
+  }
+  return null;   // Code korrekt
+}
+
 // Org-Gate für langlebige Invites: eine Template-Dauer > 24h kann nur eine
 // verifizierte Org ausgestellt haben (Gate in /invite/create). Wird die Org
 // später suspendiert/entfernt, sterben ihre langlebigen Invites mit ihr —
@@ -117,7 +171,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { convoId, expiresInDays, msgLimit, label } = body;
+    const { convoId, expiresInDays, msgLimit, label, codeSalt, codeHash } = body;
 
     // convoId optional: wenn nicht angegeben → DM-Einladung (1:1 mit dem Einladenden)
     let finalConvoId = "";
@@ -152,10 +206,13 @@ export async function handleInviteRoutes(request, env, path, params) {
     // unverifizierter Org-Kanal). Consumer-Invites bleiben 24h/20 (Scope-Freeze).
     const wantsOrgParams = (expiresInDays !== undefined && expiresInDays !== null)
                         || (msgLimit !== undefined && msgLimit !== null)
-                        || (label !== undefined && label !== null);
+                        || (label !== undefined && label !== null)
+                        || (codeSalt !== undefined && codeSalt !== null)
+                        || (codeHash !== undefined && codeHash !== null);
     let customExpiryMs = null;
     let customMsgLimit = null;
     let cleanLabel     = null;
+    let cleanCode      = null;   // { salt, hash } — eGov 1.3 Empfänger-Auth
     if (wantsOrgParams) {
       const org = await getVerifiedOrg(env, me);
       if (!org) {
@@ -181,6 +238,15 @@ export async function handleInviteRoutes(request, env, path, params) {
         }
         cleanLabel = label.trim();
       }
+      // eGov 1.3: Aktivierungscode. Hash+Salt kommen FERTIG aus dem Org-Browser —
+      // RENEX sieht den Klartext nie. Beide Felder nur gemeinsam sinnvoll.
+      if (codeSalt !== undefined && codeSalt !== null) {
+        const v = _validateCodePair(codeSalt, codeHash);
+        if (v.error) return json(request, { error: v.error }, 400);
+        cleanCode = v.value;
+      } else if (codeHash !== undefined && codeHash !== null) {
+        return json(request, { error: "codeHash requires codeSalt" }, 400);
+      }
     }
 
     const now       = Date.now();
@@ -190,21 +256,21 @@ export async function handleInviteRoutes(request, env, path, params) {
     // kill-session; Gast kann eh nur in seinen einen Kanal schreiben) > Consumer 20.
     const msgLimitFinal = customMsgLimit ?? (customExpiryMs !== null ? 0 : GUEST_MSG_LIMIT);
 
-    // Dynamischer INSERT: label-Spalte NUR anfassen, wenn ein Label gesetzt ist —
-    // der Consumer-Pfad bleibt damit auch vor der label-Migration funktionsfähig.
-    if (cleanLabel !== null) {
-      await env.RENEX_DB.prepare(
-        `INSERT INTO guest_sessions
-           (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, label)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', NULL, ?)`
-      ).bind(token, finalConvoId, convoType, me, now, expiresAt, msgLimitFinal, cleanLabel).run();
-    } else {
-      await env.RENEX_DB.prepare(
-        `INSERT INTO guest_sessions
-           (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', NULL)`
-      ).bind(token, finalConvoId, convoType, me, now, expiresAt, msgLimitFinal).run();
+    // Dynamischer INSERT: optionale Spalten NUR anfassen, wenn gesetzt — der
+    // Consumer-Pfad bleibt damit auch vor den additiven Migrationen (label,
+    // auth_level/code_*) funktionsfähig.
+    let cCols = "", cQs = "";
+    const cVals = [];
+    if (cleanLabel !== null) { cCols += ", label"; cQs += ", ?"; cVals.push(cleanLabel); }
+    if (cleanCode !== null) {
+      cCols += ", auth_level, code_salt, code_hash"; cQs += ", ?, ?, ?";
+      cVals.push("code", cleanCode.salt, cleanCode.hash);
     }
+    await env.RENEX_DB.prepare(
+      `INSERT INTO guest_sessions
+         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to${cCols})
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', NULL${cQs})`
+    ).bind(token, finalConvoId, convoType, me, now, expiresAt, msgLimitFinal, ...cVals).run();
 
     return json(request, {
       ok: true,
@@ -213,6 +279,7 @@ export async function handleInviteRoutes(request, env, path, params) {
       expiresAt,
       msgLimit: msgLimitFinal,
       label: cleanLabel,
+      authLevel: cleanCode ? "code" : null,
     });
   }
 
@@ -320,7 +387,7 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
-    const { expiresInDays, count, msgLimit, labels } = body;
+    const { expiresInDays, count, msgLimit, labels, codes } = body;
 
     if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > MAX_ORG_INVITE_DAYS) {
       return json(request, { error: `expiresInDays must be an integer between 1 and ${MAX_ORG_INVITE_DAYS}` }, 400);
@@ -352,33 +419,59 @@ export async function handleInviteRoutes(request, env, path, params) {
       return json(request, { error: "count must be an integer between 1 and 500 (or provide labels)" }, 400);
     }
 
+    // eGov 1.3: pro Empfänger EIN eigener Aktivierungscode (Hash+Salt fertig aus
+    // dem Org-Browser — RENEX sieht nie Klartext). Länge muss zu N passen.
+    let cleanCodes = null;
+    if (codes !== undefined && codes !== null) {
+      if (!Array.isArray(codes) || codes.length !== n) {
+        return json(request, { error: "codes must be an array with exactly one entry per invite" }, 400);
+      }
+      cleanCodes = [];
+      for (const c of codes) {
+        if (c === null || c === undefined) { cleanCodes.push(null); continue; }   // dieser Invite ohne Code
+        const v = _validateCodePair(c?.salt, c?.hash);
+        if (v.error) return json(request, { error: v.error }, 400);
+        cleanCodes.push(v.value);
+      }
+    }
+
     const now       = Date.now();
     const expiresAt = now + expiresInDays * 86400_000;
-    const stmtPlain = env.RENEX_DB.prepare(
-      `INSERT INTO guest_sessions
-         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to)
-       VALUES (?, '', 'dm', ?, ?, ?, ?, 0, '', NULL)`
-    );
-    const stmtLabel = env.RENEX_DB.prepare(
-      `INSERT INTO guest_sessions
-         (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to, label)
-       VALUES (?, '', 'dm', ?, ?, ?, ?, 0, '', NULL, ?)`
-    );
+    // Vier INSERT-Varianten (label × code) — D1-Statements sind vorbereitet und
+    // werden pro Zeile gebunden; dynamische Spalten wie in /invite/create.
+    const stmtFor = (hasLabel, hasCode) => {
+      let cols = "", qs = "";
+      if (hasLabel) { cols += ", label"; qs += ", ?"; }
+      if (hasCode)  { cols += ", auth_level, code_salt, code_hash"; qs += ", ?, ?, ?"; }
+      return env.RENEX_DB.prepare(
+        `INSERT INTO guest_sessions
+           (token, convo_id, convo_type, created_by, created_at, expires_at, msg_limit, msg_count, guest_handle, converted_to${cols})
+         VALUES (?, '', 'dm', ?, ?, ?, ?, 0, '', NULL${qs})`
+      );
+    };
+    const stmts4 = {
+      '00': stmtFor(false, false), '10': stmtFor(true, false),
+      '01': stmtFor(false, true),  '11': stmtFor(true, true),
+    };
 
     const invites = [];
     const stmts   = [];
     for (let i = 0; i < n; i++) {
       const token = generateGuestToken();
       const lbl   = cleanLabels ? cleanLabels[i] : null;
-      stmts.push(lbl !== null
-        ? stmtLabel.bind(token, me, now, expiresAt, msgLimitFinal, lbl)
-        : stmtPlain.bind(token, me, now, expiresAt, msgLimitFinal));
+      const code  = cleanCodes ? cleanCodes[i] : null;
+      const extra = [];
+      if (lbl !== null) extra.push(lbl);
+      if (code) extra.push("code", code.salt, code.hash);
+      stmts.push(stmts4[`${lbl !== null ? 1 : 0}${code ? 1 : 0}`]
+        .bind(token, me, now, expiresAt, msgLimitFinal, ...extra));
       invites.push({
         token,
         inviteUrl: `https://renex.id/join?token=${token}`,
         label: lbl,
         expiresAt,
         msgLimit: msgLimitFinal,
+        authLevel: code ? "code" : null,
       });
     }
     // D1-batch in 50er-Chunks (atomar pro Chunk; bei Teilfehler bleiben die
@@ -424,6 +517,8 @@ export async function handleInviteRoutes(request, env, path, params) {
       return {
         label:      r.label ?? null,
         status,
+        authLevel:  r.auth_level ?? null,                                   // eGov 1.3
+        codeLocked: (r.code_attempts || 0) >= MAX_CODE_ATTEMPTS,
         createdAt:  r.created_at,
         expiresAt:  r.expires_at,
         msgLimit:   r.msg_limit,
@@ -458,7 +553,8 @@ export async function handleInviteRoutes(request, env, path, params) {
 
     // Invite-Template-Row laden (unbenutzt ODER als benutzt markiert)
     const row = await env.RENEX_DB.prepare(
-      "SELECT convo_id, convo_type, created_by, created_at, expires_at, guest_handle, msg_limit FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
+      // SELECT * = tolerant gegenüber (noch) fehlenden additiven Spalten
+      "SELECT * FROM guest_sessions WHERE token = ? AND (guest_handle IS NULL OR guest_handle = '' OR guest_handle = '__used__')"
     ).bind(token).first();
 
     if (!row)                         return json(request, { valid: false, reason: "not_found" }, 404);
@@ -560,6 +656,11 @@ export async function handleInviteRoutes(request, env, path, params) {
       expiresAt:   row.expires_at,
       msgLimit:    row.msg_limit ?? GUEST_MSG_LIMIT,   // 0 = unbegrenzt (Org-Kanal)
       verifiedSender: org,
+      // eGov 1.3: Aktivierungscode gefordert? Das SALT ist öffentlich (der
+      // Bürger-Browser braucht es zum Hashen) — der HASH wird NIE ausgeliefert.
+      requiresCode: row.auth_level === "code" && !!row.code_hash,
+      codeSalt:     row.auth_level === "code" ? (row.code_salt || null) : null,
+      codeLocked:   (row.code_attempts || 0) >= MAX_CODE_ATTEMPTS,
     });
   }
 
@@ -577,7 +678,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { token, publicKeyJwk, guestDeviceId, cfTurnstileToken, termsVersion } = body;
+    const { token, publicKeyJwk, guestDeviceId, cfTurnstileToken, termsVersion, codeHash } = body;
     if (!token || !GUEST_TOKEN_RE.test(token)) {
       return json(request, { error: "Invalid token" }, 400);
     }
@@ -642,6 +743,11 @@ export async function handleInviteRoutes(request, env, path, params) {
       const okRe = await rateLimit(env, `invite_reentry:${token}`, 86_400_000, 3, { strict: true });
       if (!okRe) return json(request, { error: "Re-entry limit reached — contact the organization", code: "reentry_limit" }, 429);
     }
+
+    // eGov 1.3: Empfänger-Auth — Aktivierungscode prüfen, BEVOR eine Session
+    // entsteht (kein Handle/keine Membership/kein OPK bei falschem Code).
+    const codeErr = await _verifyAuthCode(request, env, inviteRow, codeHash);
+    if (codeErr) return codeErr;
 
     // Inviter-Membership-Check: hat created_by die Gruppe verlassen oder den DM-Kontakt
     // entfernt → Link soll nicht mehr nutzbar sein. Verhindert Hintertür für Ex-Member.
@@ -841,7 +947,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { token } = body;
+    const { token, codeHash: acceptCodeHash } = body;
     if (!token || !GUEST_TOKEN_RE.test(token)) {
       return json(request, { error: "Invalid token" }, 400);
     }
@@ -871,6 +977,10 @@ export async function handleInviteRoutes(request, env, path, params) {
     if (!(await _orgInviteStillAuthorized(env, inviteRow))) {
       return json(request, { error: "Inviter organization is suspended", code: "inviter_suspended" }, 410);
     }
+    // eGov 1.3: Code-Gate gilt AUCH für eingeloggte Einlöser — sonst umginge
+    // ein Konto-Inhaber die Empfänger-Auth des Briefs.
+    const acceptCodeErr = await _verifyAuthCode(request, env, inviteRow, acceptCodeHash);
+    if (acceptCodeErr) return acceptCodeErr;
 
     const acceptTs = Date.now();
     const inviter  = inviteRow.created_by;
@@ -1256,7 +1366,7 @@ export async function handleInviteRoutes(request, env, path, params) {
     let body;
     try { body = await request.json(); } catch { return json(request, { error: "Invalid JSON" }, 400); }
 
-    const { token } = body;
+    const { token, codeHash: authCodeHash } = body;
     if (!token || !GUEST_TOKEN_RE.test(token)) {
       return json(request, { error: "Invalid token" }, 400);
     }
@@ -1271,6 +1381,9 @@ export async function handleInviteRoutes(request, env, path, params) {
     if (!(await _orgInviteStillAuthorized(env, row))) {
       return json(request, { error: "Inviter organization is suspended", code: "inviter_suspended" }, 410);
     }
+    // eGov 1.3: Code-Gate gilt auch hier (eingeloggter Direkt-Beitritt).
+    const authCodeErr = await _verifyAuthCode(request, env, row, authCodeHash);
+    if (authCodeErr) return authCodeErr;
 
     let convoId     = row.convo_id;
     const convoType = row.convo_type;

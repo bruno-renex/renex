@@ -14,6 +14,7 @@
   import { toastStore } from '../stores/toast.svelte.js';
   import { apiFetch } from '../lib/api.js';
   import { captureException } from '../lib/sentry.js';
+  import { createAuthCode } from '../lib/authCode.js';
 
   /** @type {{ isOpen: boolean, convoId?: string|null, groupName?: string|null }} */
   let { isOpen = $bindable(false), convoId = null, groupName = null } = $props();
@@ -40,6 +41,10 @@
   let orgCreating = $state(false);
   let orgResults  = $state(null);    // frisch erstellte Invites (Bulk-Antwort)
   let orgCopiedIdx = $state(-1);
+  // eGov 1.3: Empfänger-Auth per Aktivierungscode. Der Klartext entsteht NUR
+  // hier im Org-Browser und wird EINMAL angezeigt (danach nur noch der Hash
+  // auf dem Server) — die Org übergibt ihn out-of-band an den Bürger.
+  let orgWithCode = $state(false);
 
   $effect(() => {
     if (isOpen) {
@@ -85,10 +90,25 @@
     errorMsg = null;
     try {
       const labels = _labelLines();
+      const n = labels.length || orgCount;
       const body = { expiresInDays: orgDays, ...(labels.length ? { labels } : { count: orgCount }) };
+      // Codes client-seitig erzeugen: Klartext bleibt lokal, Server bekommt
+      // nur salt+hash (RENEX sieht den Code nie).
+      let plainCodes = null;
+      if (orgWithCode) {
+        plainCodes = [];
+        const wire = [];
+        for (let i = 0; i < n; i++) {
+          const c = await createAuthCode();
+          plainCodes.push(c.code);
+          wire.push({ salt: c.salt, hash: c.hash });
+        }
+        body.codes = wire;
+      }
       const r = await apiFetch('/invite/bulk', { method: 'POST', body });
       if (r.ok && Array.isArray(r.data?.invites)) {
-        orgResults = r.data.invites;
+        // Klartext-Code lokal an die Antwort heften (nur für diese Anzeige/CSV)
+        orgResults = r.data.invites.map((inv, i) => ({ ...inv, plainCode: plainCodes ? plainCodes[i] : null }));
         // Liste auffrischen (neue Templates erscheinen als "open")
         const list = await apiFetch('/invite/list');
         if (list.ok) orgInvites = list.data?.invites || [];
@@ -117,9 +137,13 @@
   function orgDownloadCsv() {
     if (!orgResults?.length) return;
     const esc = (c) => '"' + String(c ?? '').replace(/"/g, '""') + '"';
+    const hasCodes = orgResults.some((i) => i.plainCode);
     const rows = [
-      ['label', 'inviteUrl', 'gueltig_bis'],
-      ...orgResults.map((i) => [i.label || '', i.inviteUrl, new Date(i.expiresAt).toISOString().slice(0, 10)]),
+      hasCodes ? ['label', 'inviteUrl', 'aktivierungscode', 'gueltig_bis']
+               : ['label', 'inviteUrl', 'gueltig_bis'],
+      ...orgResults.map((i) => hasCodes
+        ? [i.label || '', i.inviteUrl, i.plainCode || '', new Date(i.expiresAt).toISOString().slice(0, 10)]
+        : [i.label || '', i.inviteUrl, new Date(i.expiresAt).toISOString().slice(0, 10)]),
     ];
     const csv = '\uFEFF' + rows.map((r) => r.map(esc).join(';')).join('\r\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -291,6 +315,13 @@
             <textarea rows="3" bind:value={orgLabels}
               placeholder={lang.orgLabelsPlaceholder || 'Mitglied Müller\nPatientin 0042\n…'}></textarea>
           </label>
+          <label class="org-field org-field-wide org-check">
+            <input type="checkbox" bind:checked={orgWithCode} />
+            <span>{lang.orgCodeToggle || 'Aktivierungscode verlangen (Empfänger-Auth)'}</span>
+          </label>
+          {#if orgWithCode}
+            <div class="org-code-hint">{lang.orgCodeHint || 'Der Code wird nur EINMAL hier angezeigt — separat übergeben (zweiter Brief, Telefon, persönlich). RENEX speichert ihn nie im Klartext.'}</div>
+          {/if}
           <button class="share-btn" onclick={orgCreate} disabled={orgCreating} type="button">
             {orgCreating ? '…' : '✉️'} {(lang.orgCreateBtn || '{n} Einladung(en) erstellen').replace('{n}', String(orgEffectiveCount))}
           </button>
@@ -306,6 +337,9 @@
               {#each orgResults as inv, idx}
                 <div class="org-row">
                   <span class="org-label">{inv.label || '—'}</span>
+                  {#if inv.plainCode}
+                    <code class="org-code">{inv.plainCode}</code>
+                  {/if}
                   <button class="copy-btn" class:copied={orgCopiedIdx === idx} onclick={() => orgCopy(inv.inviteUrl, idx)} type="button">
                     {orgCopiedIdx === idx ? '✓' : '📋'} {lang.copy || 'Kopieren'}
                   </button>
@@ -653,4 +687,25 @@
   .org-status-expired,
   .org-status-consumed { opacity: 0.7; }
   .org-meta { flex-shrink: 0; color: var(--text-muted); font-size: 11px; }
+
+  /* eGov 1.3: Aktivierungscode */
+  .org-check { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
+  .org-check input { width: 16px; height: 16px; accent-color: var(--accent-voice); flex-shrink: 0; }
+  .org-code-hint {
+    flex: 1 1 100%;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: -4px 0 4px;
+  }
+  .org-code {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: rgba(56, 189, 248, 0.12);
+    color: var(--accent-voice);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+  }
 </style>

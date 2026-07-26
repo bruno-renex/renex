@@ -578,6 +578,8 @@ export default {
   orgLabelsLabel:          "Referencias de destinatarios (opcional, una por línea — determina la cantidad)",
   orgLabelsPlaceholder:    "Socio Müller\nPaciente 0042\n…",
   orgCreateBtn:            "Crear {n} invitación(es)",
+  orgCodeToggle:           "Exigir código de activación (autenticación del destinatario)",
+  orgCodeHint:             "El código se muestra aquí UNA sola vez — entréguelo por separado (segunda carta, teléfono, en persona). RENEX nunca lo guarda en claro.",
   orgCsvBtn:               "CSV",
   orgResultsTitle:         "Recién creadas",
   orgExistingTitle:        "Invitaciones existentes",

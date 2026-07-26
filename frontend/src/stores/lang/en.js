@@ -578,6 +578,8 @@ export default {
   orgLabelsLabel:          "Recipient references (optional, one per line — determines the count)",
   orgLabelsPlaceholder:    "Member Miller\nPatient 0042\n…",
   orgCreateBtn:            "Create {n} invitation(s)",
+  orgCodeToggle:           "Require activation code (recipient auth)",
+  orgCodeHint:             "The code is shown here ONCE — hand it over separately (second letter, phone, in person). RENEX never stores it in clear text.",
   orgCsvBtn:               "CSV",
   orgResultsTitle:         "Just created",
   orgExistingTitle:        "Existing invitations",

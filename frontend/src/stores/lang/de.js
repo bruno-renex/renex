@@ -578,6 +578,8 @@ export default {
   orgLabelsLabel:          "Empfänger-Referenzen (optional, eine pro Zeile — bestimmt die Anzahl)",
   orgLabelsPlaceholder:    "Mitglied Müller\nPatientin 0042\n…",
   orgCreateBtn:            "{n} Einladung(en) erstellen",
+  orgCodeToggle:           "Aktivierungscode verlangen (Empfänger-Auth)",
+  orgCodeHint:             "Der Code wird nur EINMAL hier angezeigt — übergeben Sie ihn separat (zweiter Brief, Telefon, persönlich). RENEX speichert ihn nie im Klartext.",
   orgCsvBtn:               "CSV",
   orgResultsTitle:         "Neu erstellt",
   orgExistingTitle:        "Bestehende Einladungen",

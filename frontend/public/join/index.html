@@ -18,10 +18,13 @@
     window.TERMS_VERSION = "2026-04-15";
 
     // Zentrale Button-Enable-Logik: Turnstile UND Consent müssen erfüllt sein
+    window.__codeRequired = false;   // eGov 1.3: Org verlangt Aktivierungscode?
+    window.__codeOk       = false;
     window.__updateJoinBtn = function() {
       var btn = document.getElementById("joinBtn");
       if (!btn) return;
-      btn.disabled = !(window.__cfToken && window.__consentOk);
+      var codeOk = !window.__codeRequired || window.__codeOk;
+      btn.disabled = !(window.__cfToken && window.__consentOk && codeOk);
     };
 
     window.onTurnstileSolved = function(t) {
@@ -315,6 +318,16 @@
     <span id="captchaBlockedBody">Dein Browser blockt die Cloudflare-Sicherheitsprüfung.</span>
   </div>
 
+  <!-- eGov 1.3: Aktivierungscode (nur wenn die Org einen verlangt) -->
+  <div id="codeBlock" style="display:none; text-align:left">
+    <label for="authCodeInput" id="codeLabel" style="display:block; font-size:13px; color:var(--text-secondary,#9A9AA3); margin-bottom:6px"></label>
+    <input id="authCodeInput" type="text" inputmode="latin" autocomplete="one-time-code"
+           autocorrect="off" autocapitalize="characters" spellcheck="false"
+           placeholder="ABCD-EFGH"
+           style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--border-subtle,#1C1C24); background:var(--bg-body,#07070A); color:var(--text-primary,#E6E6EB); font-size:18px; letter-spacing:0.12em; text-align:center; font-family:ui-monospace,SFMono-Regular,Menlo,monospace" />
+    <div id="codeHint" style="font-size:12px; color:var(--text-muted,#6F6F78); margin-top:6px"></div>
+  </div>
+
   <label class="join-consent" for="join-consent">
     <input type="checkbox" id="join-consent" />
     <span>
@@ -353,6 +366,7 @@
   // bleibt die Invite-Page self-contained und vom Vanilla-Cleanup unabhängig.
   import lang from "/join/lib/i18n.js";
   import { setGuestSession, getGuestSession } from "/join/lib/guestStorage.js";
+  import { hashAuthCode } from "/join/lib/authCode.js";
 
   const API = "https://api.renex.id";
   const token = new URLSearchParams(location.search).get("token");
@@ -521,6 +535,25 @@
       if (data.verifiedSender) {
         window.__applyVerifiedSender(data.verifiedSender, data.expiresAt);
       }
+      // eGov 1.3: Aktivierungscode gefordert? Feld einblenden + Join-Gate erweitern.
+      if (data.requiresCode) {
+        window.__codeSalt = data.codeSalt || null;
+        document.getElementById("codeLabel").textContent = lang.authCodeLabel;
+        document.getElementById("codeHint").textContent =
+          data.codeLocked ? lang.authCodeLocked : lang.authCodeHint;
+        document.getElementById("codeBlock").style.display = "block";
+        const ci = document.getElementById("authCodeInput");
+        ci.disabled = !!data.codeLocked;
+        // Button erst freigeben, wenn auch ein Code eingetippt ist.
+        window.__codeRequired = true;
+        window.__codeOk = false;
+        ci.addEventListener("input", () => {
+          window.__codeOk = ci.value.replace(/[\s-]/g, "").length >= 6;
+          if (window.__updateJoinBtn) window.__updateJoinBtn();
+        });
+        if (window.__updateJoinBtn) window.__updateJoinBtn();
+      }
+
       // Re-Entry (eGov 1.4-light): Karte wurde bereits aktiviert — Hinweis,
       // dass der bisherige Zugriff beim Beitreten beendet wird.
       if (data.reEntry) {
@@ -597,13 +630,38 @@
     }
 
     try {
+      // eGov 1.3: Aktivierungscode client-seitig hashen — der Klartext verlässt
+      // das Gerät NIE (RENEX speichert nur salt+hash).
+      let codeHash;
+      if (window.__codeRequired && window.__codeSalt) {
+        try {
+          codeHash = await hashAuthCode(window.__codeSalt, document.getElementById("authCodeInput").value);
+        } catch (e) {
+          status.className = "status error";
+          status.textContent = lang.authCodeInvalid;
+          btn.disabled = false;
+          return;
+        }
+      }
+
       const res  = await fetch(`${API}/invite/join`, {
         method:      "POST",
         credentials: "include",
         headers:     { "Content-Type": "application/json" },
-        body:        JSON.stringify({ token, publicKeyJwk, guestDeviceId, cfTurnstileToken: cfToken, termsVersion: window.TERMS_VERSION }),
+        body:        JSON.stringify({ token, publicKeyJwk, guestDeviceId, cfTurnstileToken: cfToken, termsVersion: window.TERMS_VERSION, ...(codeHash ? { codeHash } : {}) }),
       });
       const data = await res.json();
+
+      // Code falsch/gesperrt → gezielte Meldung statt generischem Fehler
+      if (res.status === 403 && (data.code === "code_invalid" || data.code === "code_locked")) {
+        status.className = "status error";
+        status.textContent = data.code === "code_locked"
+          ? lang.authCodeLocked
+          : lang.authCodeWrong.replace("{n}", String(data.attemptsLeft ?? 0));
+        btn.disabled = data.code === "code_locked";
+        if (data.code === "code_locked") document.getElementById("authCodeInput").disabled = true;
+        return;
+      }
 
       if (res.status === 403 || (!res.ok && data.error === "Human verification failed")) {
         status.className = "status error";

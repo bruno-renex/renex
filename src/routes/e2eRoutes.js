@@ -641,12 +641,20 @@ export async function handleE2eRoutes(request, env, path, params) {
       if (request.method === "GET") {
         const session = await requireAnySession(request, env);
         if (!session) return json(request, { error: "Not authenticated" }, 401);
-        let flags = { ratchetSend: false, pqRekey: false };
+        let flags = { ratchetSend: false, pqRekey: false, voice: false };
         try {
           const raw = await env.RENEX_KV.get("rollout:flags");
           if (raw) {
             const p = JSON.parse(raw);
-            flags = { ratchetSend: p.ratchetSend === true, pqRekey: p.pqRekey === true };
+            flags = {
+              ratchetSend: p.ratchetSend === true,
+              pqRekey: p.pqRekey === true,
+              // `voice` (2026-07-27): 1:1-Voice braucht den self-hosted coturn-
+              // Relay. Wird der Server abgebaut, schaltet dieses Flag Voice
+              // GLOBAL aus — ohne Redeploy, ohne Code-Löschung. Fail-safe AUS:
+              // fehlt der Key, ist Voice aus (genau der Zustand ohne Relay).
+              voice: p.voice === true,
+            };
           }
         } catch { /* fail-safe: Defaults (alles AUS) */ }
         return json(request, flags);

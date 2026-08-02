@@ -170,6 +170,33 @@ export async function handleVoiceRoutes(request, env, path, params, ctx) {
     return json(request, { error: "Voice rooms not enabled" }, 410);
   }
 
+  // ────────────────────────────────────────────────────
+  // GLOBALER VOICE-KILL-SWITCH (2026-07-27)
+  // ────────────────────────────────────────────────────
+  // 1:1-Voice hängt am self-hosted coturn-Relay (turn.renex.id). Ohne Relay
+  // scheitern Calls nach dem Klingeln im ICE-Timeout — schlechter als gar kein
+  // Angebot. KV `rollout:flags` {"voice":true} schaltet Voice global ein/aus,
+  // OHNE Redeploy und OHNE Code zu löschen (Voice bleibt eingefroren-lauffähig).
+  // Fail-safe AUS: Key fehlt/kaputt → aus.
+  //
+  // Gegated werden nur die INITIIERENDEN Pfade. Teardown (hangup/decline/cancel)
+  // bleibt IMMER offen, damit in-flight-Zustand eines gecachten alten Clients
+  // sauber abgeräumt werden kann; /voice/history ist reines Lesen der Anrufliste.
+  const VOICE_INITIATING = ["/voice/ring", "/voice/answer", "/voice/ice", "/voice/turn-credentials"];
+  if (VOICE_INITIATING.includes(path)) {
+    let voiceOn = false;
+    try {
+      const raw = await env.RENEX_KV.get("rollout:flags");
+      if (raw) voiceOn = JSON.parse(raw).voice === true;
+    } catch { /* fail-safe: aus */ }
+    if (!voiceOn) {
+      return json(request, {
+        error: "Voice calls are currently unavailable",
+        code: "voice_disabled",
+      }, 503);
+    }
+  }
+
   // Voice-Rooms Phase-5 Code-Pfad (deaktiviert oben). Originaler Code-Block
   // belassen wir nicht — bei Re-Aktivierung neu schreiben mit CMK-Pfad.
   if (false && path.startsWith("/voice/room/")) {

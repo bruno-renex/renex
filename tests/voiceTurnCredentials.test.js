@@ -24,7 +24,14 @@ function req() {
     headers: { get: (k) => (String(k).toLowerCase() === 'origin' ? 'https://app.renex.id' : null) },
   };
 }
-const run = (env) => handleVoiceRoutes(req(), env, '/voice/turn-credentials', new URLSearchParams());
+// Seit dem globalen Voice-Kill-Switch (2026-07-27) gaten die initiierenden
+// /voice-Pfade auf KV `rollout:flags` {"voice":true}. Diese Tests pruefen die
+// Credential-LOGIK, die nur bei aktivem Voice erreichbar ist → Flag im Mock-Env.
+const voiceOn = (env = {}) => ({
+  ...env,
+  RENEX_KV: { get: (k) => Promise.resolve(k === 'rollout:flags' ? '{"voice":true}' : null) },
+});
+const run = (env) => handleVoiceRoutes(req(), voiceOn(env), '/voice/turn-credentials', new URLSearchParams());
 
 describe('V1 — TURN credentials sind handle-frei', () => {
   it('username = "<expiry>:<pseudonym>" und enthält NICHT den Handle', async () => {

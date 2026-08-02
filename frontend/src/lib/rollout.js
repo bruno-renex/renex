@@ -30,10 +30,26 @@ let _flags = null;   // { ratchetSend:boolean, pqRekey:boolean } | null (= unbek
     if (!raw) return;
     const c = JSON.parse(raw);
     if (c && typeof c.ts === 'number' && (Date.now() - c.ts) < CACHE_TTL_MS && c.flags) {
-      _flags = { ratchetSend: c.flags.ratchetSend === true, pqRekey: c.flags.pqRekey === true };
+      _flags = { ratchetSend: c.flags.ratchetSend === true, pqRekey: c.flags.pqRekey === true, voice: c.flags.voice === true };
     }
   } catch { /* fail-safe: _flags bleibt null (AUS) */ }
 })();
+
+/**
+ * Ist 1:1-Voice global aktiv? (KV rollout:flags {"voice":true})
+ * Voice haengt am self-hosted coturn-Relay — ohne Relay scheitern Calls erst
+ * nach dem Klingeln im ICE-Timeout, deshalb wird der Einstieg (Hoerer-Button)
+ * ausgeblendet und der Server weist /voice/ring & Co. mit 503 ab.
+ * Fail-safe AUS. Per-Device-Override zum Testen: localStorage renex_voice='1'/'0'.
+ */
+export function voiceEnabled() {
+  try {
+    const explicit = localStorage.getItem('renex_voice');
+    if (explicit === '1') return true;
+    if (explicit === '0') return false;
+  } catch { /* localStorage kaputt → Rollout entscheidet */ }
+  return rolloutDefault('voice');
+}
 
 /** Rollout-Default für eine Schicht. Unbekannt → false (fail-safe). */
 export function rolloutDefault(key) {
@@ -45,7 +61,7 @@ export async function fetchRolloutFlags() {
   try {
     const r = await apiFetch('/e2e/rollout');
     if (!r || !r.ok || !r.data || typeof r.data !== 'object') return;
-    const flags = { ratchetSend: r.data.ratchetSend === true, pqRekey: r.data.pqRekey === true };
+    const flags = { ratchetSend: r.data.ratchetSend === true, pqRekey: r.data.pqRekey === true, voice: r.data.voice === true };
     _flags = flags;
     try { localStorage.setItem(CACHE_KEY, JSON.stringify({ flags, ts: Date.now() })); } catch {}
   } catch { /* Netzfehler → letzter bekannter Stand bleibt (fail-safe zu AUS wenn nie gefetcht) */ }

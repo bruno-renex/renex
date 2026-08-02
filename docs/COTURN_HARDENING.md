@@ -1,5 +1,11 @@
 # coturn Hardening-Checkliste (Voice V2)
 
+> **STATUS 2026-08-02: Der Server `turn-renex-1` (Hetzner, 178.105.129.107)
+> ist GELÖSCHT und Voice global deaktiviert** (KV `rollout:flags` ohne
+> `"voice":true`). Dieses Dokument bleibt als Wiederaufbau-Anleitung gültig —
+> die Schritt-für-Schritt-Reaktivierung steht im internen Runbook, Abschnitt 6b.
+
+
 Härtung des self-hosted **coturn** auf `turn.renex.id` (Hetzner). Adressiert
 Audit-Finding **V2**: jeder authentifizierte User bekommt 1h gültige TURN-REST-
 Credentials (`/voice/turn-credentials`) — der Missbrauchs-Schutz lebt in der
